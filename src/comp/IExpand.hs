@@ -4371,6 +4371,41 @@ improveIf f t cnd (IAps (ICon i1 c1@(ICTuple {})) ts1 es1)
   -- unambiguous improvement since the ICTuple has propagated out
   return ((IAps (ICon i1 c1) ts1 es'), True)
 
+improveIf f t cnd thn@(IAps concat@(ICon _ (ICPrim _ PrimConcat)) ts1@[ITNum sx, ITNum sy, _] [thn_x, thn_y])
+                  els@(IAps        (ICon _ (ICPrim _ PrimConcat)) ts2                         [els_x, els_y])
+  | ts1 == ts2 = do
+  when doTraceIf $ traceM ("improveIf PrimConcat triggered " ++ ppReadable (cnd,thn,els))
+  (x', _) <- improveIf f (itBitN sx) cnd thn_x els_x
+  (y', _) <- improveIf f (itBitN sy) cnd thn_y els_y
+  let e' = IAps concat ts1 [x', y']
+  errh <- getErrHandle
+  let (e'', improved) = iTransExpr errh $ IAps concat ts1 [x', y']
+  return (if improved then e'' else e', True)
+
+improveIf f t cnd thn@(IAps concat@(ICon _ (ICPrim _ PrimConcat)) ts@[ITNum sx, ITNum sy, _] [thn_x, thn_y])
+                  els@(ICon iu (ICUndet { iuKind = u })) = do
+  when doTraceIf $ traceM ("improveIf PrimConcat/Undet triggered " ++ ppReadable (cnd,thn,els))
+  let ty_x = itBitN sx
+  (x', _) <- improveIf f ty_x cnd thn_x $ ICon iu (ICUndet ty_x u Nothing)
+  let ty_y = itBitN sy
+  (y', _) <- improveIf f ty_y cnd thn_y $ ICon iu (ICUndet ty_y u Nothing)
+  let e' = IAps concat ts [x', y']
+  errh <- getErrHandle
+  let (e'', improved) = iTransExpr errh e'
+  return (if improved then e'' else e', True)
+
+improveIf f t cnd thn@(ICon iu (ICUndet { iuKind = u }))
+                  els@(IAps concat@(ICon _ (ICPrim _ PrimConcat)) ts@[ITNum sx, ITNum sy, _] [els_x, els_y]) = do
+  when doTraceIf $ traceM ("improveIf Undet/PrimConcat triggered " ++ ppReadable (cnd,thn,els))
+  let ty_x = itBitN sx
+  (x', _) <- improveIf f ty_x cnd (ICon iu (ICUndet ty_x u Nothing)) els_x
+  let ty_y = itBitN sy
+  (y', _) <- improveIf f ty_y cnd (ICon iu (ICUndet ty_y u Nothing)) els_y
+  let e' = IAps concat ts [x', y']
+  errh <- getErrHandle
+  let (e'', improved) = iTransExpr errh e'
+  return (if improved then e'' else e', True)
+
 improveIf f t cnd thn@(IAps chr@(ICon _ (ICPrim _ PrimChr)) ts1 [chr_thn])
                   els@(IAps     (ICon _ (ICPrim _ PrimChr)) ts2 [chr_els]) = do
   when doTraceIf $ traceM ("improveIf PrimChr triggered " ++ show (cnd,thn,els))
