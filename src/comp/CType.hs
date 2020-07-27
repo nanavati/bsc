@@ -73,6 +73,7 @@ import ErrorUtil
 import Pragma(IfcPragma)
 import NumType
 import PVPrint(PVPrint(..))
+import FStringCompat
 
 -- Data structures
 
@@ -93,7 +94,7 @@ data TyVar = TyVar { tv_name :: Id    -- ^ name of the type variable
 
 
 -- | Representation of a type constructor
-data TyCon = -- | A constructor for a type of non-numeric kind
+data TyCon = -- | A constructor for a type of value kind
              TyCon { tcon_name :: Id           -- ^ name of the type constructor
                    , tcon_kind :: (Maybe Kind) -- ^ kind of the type constructor
                    , tcon_sort :: TISort       -- ^ purpose of the type constructor
@@ -103,7 +104,7 @@ data TyCon = -- | A constructor for a type of non-numeric kind
                    , tynum_pos   :: Position -- ^ position of introduction
                    }
              -- | A constructor for a type of string kind
-           | TyStr { tystr_value :: String   -- ^ type-level string value
+           | TyStr { tystr_value :: FString  -- ^ type-level string value
                    , tystr_pos   :: Position -- ^ position of introduction
                    }
     deriving (Show, Generic.Data, Generic.Typeable)
@@ -129,7 +130,7 @@ data StructSubType
 type CType = Type
 
 -- | Representation of kinds
-data Kind = KStar           -- ^ kind of a simple non-numeric type
+data Kind = KStar           -- ^ kind of a simple value type
           | KNum            -- ^ kind of a simple numeric type
           | KStr            -- ^ kind of a simple string type
           | Kfun Kind Kind  -- ^ kind of type constructors (type-level function)
@@ -186,6 +187,7 @@ instance Eq TyVar where
 instance Eq TyCon where
     TyCon i k _ == TyCon i' k' _  =  qualEq i i' && k == k'
     TyNum i _   == TyNum i' _     =  i == i'
+    TyStr s _   == TyStr s' _     =  s == s'
     _           == _              =  False
 
 -- Ord instances
@@ -334,6 +336,7 @@ cTVarNum name = cTVarKind name KNum
 
 cTCon :: Id -> CType
 cTCon i | all isDigit s = cTNum (read s) (getIdPosition i)
+        | head s == '"' = cTStr (mkFString $ read s) (getIdPosition i)
   where s = getIdString i
 cTCon i = TCon (TyCon i (Just KStar) TIabstract)
 
@@ -348,14 +351,14 @@ getTNum :: CType -> Integer
 getTNum (TCon (TyNum n _)) = n
 getTNum t = internalError $ "getTNum: not a type-level integer -- " ++ (show t)
 
-cTStr :: String -> Position -> CType
+cTStr :: FString -> Position -> CType
 cTStr s pos = TCon (TyStr s pos)
 
 isTStr :: CType -> Bool
 isTStr (TCon (TyStr _ _)) = True
 isTStr _ = False
 
-getTStr :: CType -> String
+getTStr :: CType -> FString
 getTStr (TCon (TyStr s _)) = s
 getTStr t = internalError $ "getTNum: not a type-level string -- " ++ (show t)
 
