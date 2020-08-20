@@ -59,7 +59,6 @@ import FStringCompat
 
 import qualified Data.Set as S
 
--- import Trace
 -- import Debug.Trace
 
 -- | Derive instances for all types with deriving (...) in a package, and

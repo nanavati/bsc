@@ -38,8 +38,8 @@ import AUses(useDropCond)
 import AVerilogUtil(vNameToTask)
 import Wires(WireProps(..))
 
---import Trace
---import Util(traces,traceM)
+--import Debug.Trace
+--import Util(traces)
 
 
 -- ==============================

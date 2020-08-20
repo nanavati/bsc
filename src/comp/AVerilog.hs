@@ -1,9 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances, PatternGuards #-}
 {-# LANGUAGE FlexibleInstances #-}
-#if !defined(__GLASGOW_HASKELL__) || (__GLASGOW_HASKELL__ < 710)
-{-# LANGUAGE OverlappingInstances #-}
-#endif
 module AVerilog (aVerilog) where
 
 import Data.List(nub,
@@ -18,7 +15,6 @@ import Data.List(nub,
 import Data.Char
 import Data.Maybe
 import System.IO.Unsafe
---import Debug.Trace
 import qualified Data.Set as S
 import qualified Data.Map as M
 
@@ -41,7 +37,8 @@ import BackendNamingConventions(isRegInst, isClockCrossingRegInst, isInoutConnec
 import ForeignFunctions(ForeignFuncMap)
 import qualified GraphWrapper as G
 
---import Util(traces,traceM)
+--import Debug.Trace
+--import Util(traces)
 
 
 -- ==============================
@@ -1750,18 +1747,10 @@ class VUse a where
 instance VUse VId where
     vuses x = [x]
 
-instance
-#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 710)
-  {-# OVERLAPPING #-}
-#endif
-  VUse String where
+instance {-# OVERLAPPING #-} VUse String where
     vuses x = []
 
-instance
-#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 710)
-  {-# OVERLAPPABLE #-}
-#endif
-  (VUse a) => VUse [a] where
+instance {-# OVERLAPPABLE #-} (VUse a) => VUse [a] where
     vuses xs = concatMap vuses xs
 
 instance (VUse a) => VUse (Maybe a) where

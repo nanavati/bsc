@@ -51,9 +51,8 @@ import ForeignFunctions(toAVId)
 import CFreeVars(getFQTyVarsT)
 -------
 
---import Trace
-import Util(traceM)
 import Util(traces)
+import Debug.Trace(traceM)
 import IOUtil(progArgs)
 
 doRTrace :: Bool

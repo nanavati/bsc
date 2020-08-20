@@ -21,8 +21,7 @@ import ASyntaxUtil
 import ForeignFunctions(isAVId, fromAVId)
 -- import AOpt(aOptBoolExpr)
 import SignalNaming
---import Trace
-import Util(traceM)
+import Debug.Trace(traceM)
 
 
 

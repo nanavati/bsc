@@ -5,11 +5,7 @@ module Main_bsc(main, hmain) where
 import Prelude
 import System.Environment(getArgs, getProgName)
 import System.Process(runInteractiveProcess, waitForProcess)
-#if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 703)
 import System.Process(system)
-#else
-import System.Cmd(system)
-#endif
 import System.Exit(ExitCode(ExitFailure, ExitSuccess))
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
 import System.IO(hSetEncoding, latin1)
@@ -166,7 +162,6 @@ import ISplitIf(iSplitIf)
 import VFileName
 
 --import Debug.Trace
---import Util(traceM)
 
 main :: IO ()
 main = do
@@ -1801,7 +1796,9 @@ cxxLink errh flags toplevel names creation_time = do
     -- Write a script to execute bluesim.tcl with the .so file argument
     let bluesim_cmd = "$BLUESPECDIR/tcllib/bluespec/bluesim.tcl"
         (TimeInfo _ (TOD t _)) = creation_time
-        time_str = (show t)
+        time_flags = if (timeStamps flags)
+                     then [ "--creation_time", show t]
+                     else []
     writeFileCatch errh outFile $
                    unlines [ "#!/bin/sh"
                            , ""
@@ -1814,7 +1811,7 @@ cxxLink errh flags toplevel names creation_time = do
                            , "    " ++ (unwords ["exec", bluesim_cmd, "$0.so", toplevel, "--script_name", "`basename $0`", "-h"])
                            , "  fi"
                            , "done"
-                           , unwords ["exec", bluesim_cmd, "$0.so", toplevel, "--script_name", "`basename $0`", "--creation_time", time_str, "\"$@\""]
+                           , unwords $ ["exec", bluesim_cmd, "$0.so", toplevel, "--script_name", "`basename $0`"] ++ time_flags ++ ["\"$@\""]
                            ]
     stat <- getFileStatus outFile
     let mode = fileMode stat

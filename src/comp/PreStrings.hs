@@ -30,7 +30,7 @@ fsLsh              = mkFString "<<"
 fsRsh              = mkFString ">>"
 fsLtEq             = mkFString "<="
 fsGtEq             = mkFString ">="
--- scheduling conflict operator for Classic
+-- | Scheduling conflict operator for Classic
 fsConfOp           = mkFString "><"
 fsPrelude          = mkFString "Prelude"
 fsPreludeBSV       = mkFString "PreludeBSV"
@@ -389,9 +389,9 @@ fsEither           = mkFString "Either"
 fsLeft             = mkFString "Left"
 fsRight            = mkFString "Right"
 fsUninhab          = mkFString "Uninhab"
--- names used for tuple fields internally?
+-- | Names used for tuple fields internally?
 fsTuples = map mkFString ["_"++ itos i | i <- [1..25::Int]]
--- names exposed to the BSV user
+-- | Names exposed to the BSV user
 fsTuple2           = mkFString "Tuple2"
 fsTuple3           = mkFString "Tuple3"
 fsTuple4           = mkFString "Tuple4"
@@ -489,7 +489,7 @@ fsBitsToReal   = mkFString "$bitstoreal"
 fsFile = mkFString "File"
 
 
--- classes hardcoded in the Prelude which were added for ContextErrors
+-- | Classes hardcoded in the Prelude which were added for ContextErrors
 fsBitwise, fsBitReduce, fsBitExtend, fsArith, fsOrd :: FString
 fsBitwise          = mkFString "Bitwise"
 fsBitReduce        = mkFString "BitReduction"
@@ -497,7 +497,7 @@ fsBitExtend        = mkFString "BitExtend"
 fsArith            = mkFString "Arith"
 fsOrd              = mkFString "Ord"
 
--- nice display names for instance hierarchy
+-- | Nice display names for instance hierarchy
 fsLoop, fsBody :: FString
 fsLoop = mkFString "Loop"
 fsBody = mkFString "Body"
