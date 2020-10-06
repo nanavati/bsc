@@ -195,7 +195,7 @@ package Prelude(
         constantWithAllBitsSet, constantWithAllBitsUnset,
 
         -- undefined values
-        PrimMakeUndefined(..), PrimMakeUndefined'(..), PrimMakeUndefined''(..),
+        PrimMakeUndefined(..), --PrimMakeUndefined'(..), PrimMakeUndefined''(..),
         primBuildUndefined,
         primMakeRawUndefined,
 
@@ -2923,6 +2923,15 @@ primitive primModuleReturn :: a -> Module a
 struct PrimUnit = { }
 	deriving (Eq, Bits, Bounded, DefaultValue)
 
+instance PrimMakeUndefined PrimUnit where
+  primMakeUndefined _ _ = ()
+
+instance Generic PrimUnit
+           (Meta (MetaData "PrimUnit" "Prelude" 1)
+	     (Meta (MetaConsNamed "PrimUnit" 0 0) ())) where
+    from _ =  Meta (Meta ())
+    to _ =  ()
+
 --- Integer
 
 primitive primIntegerAdd :: Integer -> Integer -> Integer
@@ -3751,6 +3760,7 @@ instance (PrimMakeUninitialized'' a, PrimMakeUninitialized'' b) =>
 instance PrimMakeUninitialized'' () where
   primMakeUninitialized'' _ _ = ()
 
+
 -- make an undefined value with a position and kind
 -- See the comment on 'PrimMakeUninitialized` about how BSV's sequential
 -- syntax is implemented as nested let-expressions, and how we can optimize
@@ -3838,7 +3848,7 @@ instance PrimMakeUndefined Rules where
 
 instance PrimMakeUndefined (Array a) where
    primMakeUndefined = primMakeRawUndefined
-
+{-
 -- Default generic instance covers data and structs that don't have higher-rank fields
 instance (Generic a r, PrimMakeUndefined' a r) => PrimMakeUndefined a where
   primMakeUndefined pos i = primMakeUndefined' ((error "proxy") :: r) pos i
@@ -3869,6 +3879,7 @@ instance (PrimMakeUndefined'' a, PrimMakeUndefined'' b) =>
 
 instance PrimMakeUndefined'' () where
   primMakeUndefined'' _ _ = ()
+-}
 
 ------------------
 
