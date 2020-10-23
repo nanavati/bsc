@@ -3875,6 +3875,12 @@ instance PrimMakeUndefined Rules where
 instance PrimMakeUndefined (Array a) where
    primMakeUndefined = primMakeRawUndefined
 
+instance PrimMakeUndefined Position__ where
+  primMakeUndefined pos _ = pos
+
+instance PrimMakeUndefined Type where
+  primMakeUndefined _ _ = typeOf ((error "proxy") :: Type)
+
 -- Default generic instance covers data and structs that don't have higher-rank fields
 instance (Generic a r, PrimMakeUndefined' a r) => PrimMakeUndefined a where
   primMakeUndefined pos i = primMakeUndefined' ((error "proxy") :: r) pos i
@@ -3898,7 +3904,7 @@ instance (PrimMakeUndefined a) => PrimMakeUndefined'' (Conc a) where
 
 instance (PrimMakeUndefined a) => PrimMakeUndefined'' (ConcPrim a) where
   primMakeUndefined'' pos _ = primError pos $
-    "Attempt to use undetermined " +++ (printType (typeOf (_ :: a)))
+    "Attempt to use undetermined " +++ (printType (typeOf ((error "proxy") :: a)))
 
 instance (PrimMakeUndefined'' a) => PrimMakeUndefined'' (Meta m a) where
   primMakeUndefined'' pos i = Meta $ primMakeUndefined'' pos i
