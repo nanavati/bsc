@@ -1229,9 +1229,6 @@ replaceBit pos w i b =
 
 -- ----------------------------------------------------------------
 
-instance PrimMakeUndefined Bool where
-  primMakeUndefined _ _ = False
-
 --@ \subsubsection{Bool}
 --@ \index{Bool@\te{Bool} (type)}
 --@ \index{True@\te{True} (\te{Bool} constant)}
