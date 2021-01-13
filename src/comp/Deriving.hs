@@ -105,8 +105,6 @@ doDer flags r packageid xs struct_decl@(Cstruct _ s i ty_var_names fields derivs
 doDer flags r packageid xs prim_decl@(CprimType (IdKind i kind))
     -- "special" typeclasses only need to be derived for ordinary types
     | res_kind /= KStar = [Right [prim_decl]]
-    -- Id__ a will pick up typeclass instances from the type a
-    | qual_name == idId = [Right [prim_decl]]
     | null derivs = [Right [prim_decl]]
     | otherwise = Right [prim_decl] :
                      map (doPrimTypeDer qual_name ty_vars) derivs
