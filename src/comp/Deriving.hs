@@ -35,7 +35,7 @@ import PreIds(
               idFalse, idTrue, idNot, idAnd,
               idPrimOrd, idPrimChr,
               idPrimSplit, idPrimConcat, idPrimTrunc,
-              idFormat
+              idFormat,
               )
 import CSyntax
 import CSyntaxUtil
