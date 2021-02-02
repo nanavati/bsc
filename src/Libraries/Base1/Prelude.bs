@@ -3765,12 +3765,6 @@ instance (Generic a r, PrimMakeUninitialized'' r) =>
 instance PrimMakeUninitialized' a r where
   primMakeUninitialized' _ = primMakeRawUninitialized
 
--- Fall-through for in case a type has simply a different concrete type as its
--- generic representation.
-instance (Generic a (Conc b), PrimMakeUninitialized b) =>
-         PrimMakeUninitialized' a (Conc b) where
-  primMakeUninitialized' _ pos f = to $ Conc $ primMakeUninitialized pos f
-
 class PrimMakeUninitialized'' r where
   primMakeUninitialized'' :: Bool -> Position__ -> String -> r
 
@@ -3915,12 +3909,6 @@ instance (Generic a r, PrimMakeUndefined'' r) =>
 instance (PrimMakeUndefined a) => PrimMakeUndefined' a (ConcPrim a) where
   primMakeUndefined' _ pos _ = primError pos $
     "Attempt to use undetermined " +++ (printType (typeOf ((error "proxy") :: a)))
-
--- Fall-through for in case a type has simply a different concrete type as its
--- generic representation.
-instance (Generic a (Conc b), PrimMakeUndefined b) =>
-         PrimMakeUndefined' a (Conc b) where
-  primMakeUndefined' _ pos f = to $ Conc $ primMakeUndefined pos f
 
 -- The instance for types with multiple constructors just returns
 -- `primMakeRawUndefined` because we don't know any more about the
