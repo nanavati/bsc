@@ -125,6 +125,7 @@ data Flags = Flags {
         showStats :: Bool,
         showUpds :: Bool,
         simplifyCSyntax :: Bool,
+        simplifyLiftCAFs :: Bool,
         strictMethodSched :: Bool,
         suppressWarnings :: MsgListFlag,
         synthesize :: Bool,
@@ -200,6 +201,7 @@ data DumpFlag
         | DFsympostgenwrap
         | DFsympostderiving
         | DFsympostctxreduce
+        | DFsympostliftcafs
         | DFsympostbinary
         | DFgenfuncwrap
         | DFgenwrap
@@ -210,6 +212,7 @@ data DumpFlag
         | DFgenforeign
         | DFgenVPI
         | DFsimplified
+        | DFliftCAFs
         | DFinternal
         | DFbinary
         | DFfixup

@@ -451,6 +451,7 @@ traceflags = [
           "trace-instance-overlap",
           "trace-kind-inference",
           "trace-lift",
+          "trace-lift-cafs",
           "trace-mergesched",
           "trace-mutatormap",
           "trace-ncsets",
@@ -612,6 +613,7 @@ defaultFlags bluespecdir = Flags {
         showStats = False,
         showUpds = True,
         simplifyCSyntax = False,
+        simplifyLiftCAFs = True,
         strictMethodSched = True,
         suppressWarnings = SomeMsgs [],
         synthesize = False,
@@ -1561,6 +1563,10 @@ externalFlags = [
         ("simplify-csyntax",
          (Toggle (\f x -> f {simplifyCSyntax=x}) (showIfTrue simplifyCSyntax),
           "simplify Concrete Syntax", Hidden)),
+
+        ("simplify-lift-cafs",
+         (Toggle (\f x -> f {simplifyLiftCAFs=x}) (showIfTrue simplifyLiftCAFs),
+          "simplify Concrete Syntax by lifting CAFs to top-level definitions", Hidden)),
 
         ("strict-method-scheduling",
          (Toggle (\f x -> f {strictMethodSched=x}) (showIfTrue strictMethodSched),
