@@ -85,6 +85,7 @@ import TypeCheck(cCtxReduceIO, cTypeCheck)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
+import LiftCAFs(liftCAFs)
 import ISyntax(IPackage(..), IModule(..),
                IEFace(..), IDef(..), IExpr(..), fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
@@ -475,11 +476,25 @@ compilePackage
     t <- dump errh flags t DFsimplified dumpnames mod'
     stats flags DFsimplified mod'
 
+    -- Lift CAFs and inline constants
+    start flags DFliftCAFs
+    let (modCAFs, addedDefs) = liftCAFs flags symt mod'
+    t <- dump errh flags t DFliftCAFs dumpnames modCAFs
+    stats flags DFliftCAFs modCAFs
+
+    -- Rebuild the symbol table because LiftCAFs may have added
+    -- top-level definitions
+    start flags DFsympostliftcafs
+    symt' <- if addedDefs
+             then mkSymTab errh modCAFs
+             else return symt
+    t <- dump errh flags t DFsympostliftcafs dumpnames symt
+
     --------------------------------------------
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    imod <- iConvPackage errh flags symt mod'
+    imod <- iConvPackage errh flags symt modCAFs
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
     iPCheck flags symt imod "internal"
