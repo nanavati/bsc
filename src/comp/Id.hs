@@ -51,6 +51,7 @@ module Id(
         isSignedId, setSignedId,
         setInternal,
         isDictId,
+        isCAFId,
         isInternal,
         isSplitRuleId,
         isRuleId,
@@ -522,6 +523,9 @@ isHideAllId idx = hasIdProp idx IdP_hide_all
 
 isDictId :: Id -> Bool
 isDictId i = hasIdProp i IdPDict
+
+isCAFId :: Id -> Bool
+isCAFId i = hasIdProp i IdPCAF
 
 isRuleId :: Id -> Bool
 isRuleId idx = hasIdProp idx IdPRule
