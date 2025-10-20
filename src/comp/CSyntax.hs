@@ -790,6 +790,12 @@ instance HasPosition CExpr where
     getPosition (CCon c _) = getPosition c
     getPosition (Ccase pos _ _) = pos
     getPosition (CStruct _ i _) = getPosition i
+    getPosition (CStructT t fs) =
+      case fs of
+        -- If there are fields, the position of the first field is probably best
+        (i,_):_ -> getPosition i
+        -- If not, fall back to the position of the type
+        _       -> getPosition t
     getPosition (CStructUpd e _) = getPosition e
     getPosition (Cwrite pos _ _) = pos
     getPosition (CAny pos _) = pos
@@ -827,7 +833,6 @@ instance HasPosition CExpr where
     getPosition (CSelectT _ i) = getPosition i
     getPosition (CLitT _ l) = getPosition l
     getPosition (CAnyT pos _ _) = pos
-    getPosition e = internalError ("no match in getPosition: " ++ ppReadable e)
 
 instance HasPosition COp where
     getPosition (CRand e) = getPosition e
