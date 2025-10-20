@@ -611,7 +611,7 @@ tclPackage ("load":args) = do
           CImpSign (getIdString iid) False bo_sig
       cimps' = sortImports ((map mkCImp bininfos) ++ cimps)
       cpack' = CPackage pid exps cimps' cf defs incs
-  symtab <- mkSymTab globalErrHandle cpack'
+  symtab <- fmap fst $ mkSymTab globalErrHandle cpack'
 
   -- write back the new values
   modifyIORef globalVar (\gv -> gv {tp_binmap  = binmap,

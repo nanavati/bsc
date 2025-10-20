@@ -393,15 +393,17 @@ compilePackage
     -- symbols.
     --
     start flags DFsyminitial
-    symt00 <- mkSymTab errh mop
+    -- mopK is mop with recorded kinds
+    (symt00, mopK) <- mkSymTab errh mop
     t <- dump errh flags t DFsyminitial dumpnames symt00
+    t <- dump errh flags t DFsyminitial dumpnames mopK
 
     -- whether we are doing code generation for modules
     let generating = backend flags /= Nothing
 
     -- Turn `noinline' into module definitions
     start flags DFgenfuncwrap
-    (mfwrp, symt0, funcs) <- genFuncWrap errh flags generating mop symt00
+    (mfwrp, symt0, funcs) <- genFuncWrap errh flags generating mopK symt00
     t <- dump errh flags t DFgenfuncwrap dumpnames mfwrp
 
     -- Generate wrapper for Verilog interface.
@@ -412,7 +414,7 @@ compilePackage
     -- Rebuild the symbol table because GenWrap added new types
     -- and typeclass instances for those types
     start flags DFsympostgenwrap
-    symt1 <- mkSymTab errh mwrp
+    symt1 <- fmap fst $ mkSymTab errh mwrp
     t <- dump errh flags t DFsympostgenwrap dumpnames symt1
 
     -- Re-add function definitions for `noinline'
@@ -425,7 +427,7 @@ compilePackage
 
     -- Rebuild the symbol table because Deriving added new instances
     start flags DFsympostderiving
-    symt11 <- mkSymTab errh mder
+    symt11 <- fmap fst $ mkSymTab errh mder
     t <- dump errh flags t DFsympostderiving dumpnames symt11
 
     -- Reduce the contexts as far as possible
@@ -436,7 +438,7 @@ compilePackage
     -- Rebuild the symbol table because CtxReduce has possibly changed
     -- the types of top-level definitions
     start flags DFsympostctxreduce
-    symt <- mkSymTab errh mctx
+    symt <- fmap fst $ mkSymTab errh mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
     -- Turn instance declarations into ordinary definitions
@@ -486,7 +488,7 @@ compilePackage
     -- top-level definitions
     start flags DFsympostliftcafs
     symt' <- if addedDefs
-             then mkSymTab errh modCAFs
+             then fmap fst $ mkSymTab errh modCAFs
              else return symt
     t <- dump errh flags t DFsympostliftcafs dumpnames symt
 
@@ -541,7 +543,7 @@ compilePackage
     -- XXX The way we construct the symtab is to replace the user-visible
     -- XXX imports with the full imports.
     let mint = replaceImports mctx impsigs
-    internalSymt <- mkSymTab errh mint
+    internalSymt <- fmap fst $ mkSymTab errh mint
     t <- dump errh flags t DFsympostbinary dumpnames mint
 
     start flags DFfixup

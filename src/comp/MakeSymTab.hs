@@ -54,8 +54,8 @@ doTraceKI = "-trace-kind-inference" `elem` progArgs
 doTraceOverlap :: Bool
 doTraceOverlap = "-trace-instance-overlap" `elem` progArgs
 
-mkSymTab :: ErrorHandle -> CPackage -> IO SymTab
-mkSymTab errh (CPackage mi _ imps _ ds _) =
+mkSymTab :: ErrorHandle -> CPackage -> IO (SymTab, CPackage)
+mkSymTab errh (CPackage mi exps imps fixs ds includes) =
     let
         mmi = Just mi
 
@@ -189,8 +189,30 @@ mkSymTab errh (CPackage mi _ imps _ ds _) =
             -- report the kind inference error safely
             case miks of
                 Left msg -> bsError errh [msg]
-                Right iks -> final_symT
+                Right iks -> do
+                  let ds' = map (recordKind iks) ds
+                  symT_final <- final_symT
+                  return (symT_final, CPackage mi exps imps fixs ds' includes)
 
+recordKind :: M.Map Id Kind -> CDefn -> CDefn
+recordKind iks (Ctype ik vs ct) = Ctype (updateIK iks ik) vs ct
+recordKind iks d@(Cdata { cd_name = name }) = d { cd_name = updateIK iks name }
+recordKind iks (Cstruct vis ss ik vs ifs fieldNames) = Cstruct vis ss (updateIK iks ik) vs ifs fieldNames
+recordKind iks (Cclass incoh ps ik vs fds ifs) = Cclass incoh ps (updateIK iks ik) vs fds ifs
+-- CItype and CIclass are imported so they always have kind information
+-- CprimType also requires kind information
+recordKind _   d = d
+
+updateIK :: M.Map Id Kind -> IdK -> IdK
+updateIK iks ik =
+  let k = fromJustOrErr ("updateIK (missing kind): " ++ ppReadable (ik, iks)) $ M.lookup (iKName ik) iks
+  in case ik of
+       IdK i -> IdKind i k
+       IdPKind i _ -> IdKind i k
+       IdKind i k' ->
+         if k /= k'
+         then internalError $ "updateIK (kind mismatch): " ++ ppReadable (k, k', ik, iks)
+         else IdKind i k
 
 updTypes :: SymTab -> Type -> Type
 updTypes r (TCon (TyCon i _ _)) =
@@ -630,9 +652,9 @@ chkTopDef r mi isDep (CValueSign (CDef v t _)) = do
             sc <- mkSchemeWithSymTab r t
             let v' = qual mi v
             return [(v', VarInfo VarDefn (v' :>: sc) (isDep v))]
-chkTopDef r mi isDep (CValueSign d@(CDefT {})) =
-            -- we know that typechecking has not happened yet
-            internalError ("getTopVars: " ++ ppReadable d)
+chkTopDef r mi isDep (CValueSign (CDefT v _ t cs)) =
+  -- We now support making the symbol table post-typechecking (to add CAFs).
+  chkTopDef r mi isDep (CValueSign (CDef v t cs))
 chkTopDef _ _ _ _ = return []
 
 mkSchemeWithSymTab :: SymTab -> CQType -> Either EMsg Scheme
