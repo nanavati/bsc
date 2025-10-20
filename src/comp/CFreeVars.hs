@@ -414,13 +414,11 @@ getPVs ps = S.unions (map getPV ps)
 -- To remove them, use "getLDefs".
 getFVDl :: CDefl -> FVSet
 getFVDl (CLValueSign def qs) =
-        -- the "qs" are implicit condition for methods,
-        -- so there is no binding there that can affect "def",
-        -- thus we don't remove the variables bound there
-        getFVQuals qs `unionFVS` getFVD def
+  let bvs = getVQuals qs
+  in getFVQuals qs `unionFVS` (getFVD def `minusVS` bvs)
 getFVDl (CLValue _ cs qs) =
-        -- as above, we don't subtract the vars bound in "qs"
-        unionManyFVS (getFVQuals qs : map getFVC cs)
+  let bvs = getVQuals qs
+  in getFVQuals qs `unionFVS` (unionManyFVS (map getFVC cs) `minusVS` bvs)
 getFVDl (CLMatch p e) =
         -- here, we do want to remove any vars bound in the pattern
         getFVE e `minusVS` getPV p
