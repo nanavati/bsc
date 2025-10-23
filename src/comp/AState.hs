@@ -830,7 +830,7 @@ ratToBlobs mMap omMultMap rat =
       nonTrivial _ = False
 
       -- Create the MethBlobs and partition into expr and action
-      (es, as) = partition fst $ map (mkBlob mMap omMultMap) rat
+      (es, as) = partition fst $ map (mkBlob mMap omMultMap) $ M.toList $ M.map M.toList rat
   in
       -- filter out the expr uses which don't need muxing
       (filter nonTrivial (map snd es), map snd as)

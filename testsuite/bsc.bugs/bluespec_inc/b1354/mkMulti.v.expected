@@ -314,12 +314,6 @@ module mkMulti(CLK,
   // inputs to muxes for submodule ports
   assign MUX_vec_0$write_1__SEL_1 = EN_write2 && write2_addr == 4'd0 ;
   assign MUX_vec_1$write_1__SEL_1 = EN_write2 && write2_addr == 4'd1 ;
-  assign MUX_vec_10$write_1__SEL_1 = EN_write2 && write2_addr == 4'd10 ;
-  assign MUX_vec_11$write_1__SEL_1 = EN_write2 && write2_addr == 4'd11 ;
-  assign MUX_vec_12$write_1__SEL_1 = EN_write2 && write2_addr == 4'd12 ;
-  assign MUX_vec_13$write_1__SEL_1 = EN_write2 && write2_addr == 4'd13 ;
-  assign MUX_vec_14$write_1__SEL_1 = EN_write2 && write2_addr == 4'd14 ;
-  assign MUX_vec_15$write_1__SEL_1 = EN_write2 && write2_addr == 4'd15 ;
   assign MUX_vec_2$write_1__SEL_1 = EN_write2 && write2_addr == 4'd2 ;
   assign MUX_vec_3$write_1__SEL_1 = EN_write2 && write2_addr == 4'd3 ;
   assign MUX_vec_4$write_1__SEL_1 = EN_write2 && write2_addr == 4'd4 ;
@@ -328,6 +322,12 @@ module mkMulti(CLK,
   assign MUX_vec_7$write_1__SEL_1 = EN_write2 && write2_addr == 4'd7 ;
   assign MUX_vec_8$write_1__SEL_1 = EN_write2 && write2_addr == 4'd8 ;
   assign MUX_vec_9$write_1__SEL_1 = EN_write2 && write2_addr == 4'd9 ;
+  assign MUX_vec_10$write_1__SEL_1 = EN_write2 && write2_addr == 4'd10 ;
+  assign MUX_vec_11$write_1__SEL_1 = EN_write2 && write2_addr == 4'd11 ;
+  assign MUX_vec_12$write_1__SEL_1 = EN_write2 && write2_addr == 4'd12 ;
+  assign MUX_vec_13$write_1__SEL_1 = EN_write2 && write2_addr == 4'd13 ;
+  assign MUX_vec_14$write_1__SEL_1 = EN_write2 && write2_addr == 4'd14 ;
+  assign MUX_vec_15$write_1__SEL_1 = EN_write2 && write2_addr == 4'd15 ;
 
   // register vec_0
   assign vec_0$D_IN = MUX_vec_0$write_1__SEL_1 ;
