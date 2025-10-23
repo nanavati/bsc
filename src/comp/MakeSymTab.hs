@@ -767,7 +767,7 @@ doInst r c (QInst mi p@(ps :=> t)) =
             args _ = []
             vs = tv p
             i = setIdPosition (getPosition t) $ mkInstId mi t
-            r = CTApply (CVar i) (map TVar vs)
+            r = cTApply (CVar i) (map TVar vs)
         in  mkInst r (ps :=> IsIn c (args t))
 
 -- The list bss is used for determining whether a predicate is
