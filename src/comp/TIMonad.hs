@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 module TIMonad(
         TI,
-        apSubTI, Bind, mkDefl,
+        apSubTI,
         runTI, err, errs, twarn, handle,
         getAllowIncoherent, maskAllowIncoherent,
         getFlags, setFlags, getSymTab,
@@ -32,7 +32,7 @@ import PFPrint
 import Id
 import IdPrint
 import Position
-import CSyntax(CExpr(..), CDef(..), CDefl(..), CClause(..))
+import CSyntax(CExpr(..))
 import CType
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
@@ -47,7 +47,6 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
-import Data.List(partition)
 import Util(headOrErr)
 
 -------
@@ -405,11 +404,6 @@ getVPredPositions (VPred i p) = getPredPositions p
 instance HasPosition VPred where
   getPosition (VPred i p) = getPosition i
 
--- the CExpr is a dictionary
-type Bind = (Id, Type, CExpr)
-
-mkDefl :: Bind -> CDefl
-mkDefl (i, t, e) = CLValueSign (CDefT i [] (CQType [] t) [CClause [] [] e]) []
 
 nubVPred :: [VPred] -> CExpr -> ([VPred], CExpr)
 nubVPred ps e =
