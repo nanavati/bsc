@@ -713,6 +713,7 @@ instance Bin IdProp where
                                   = do putI 35 ; toBin poss
     writeBytes IdPParserGenerated = putI 36
     writeBytes IdPCAF             = putI 37
+    writeBytes IdPIncoherent      = putI 38
     readBytes = do
         i <- getI
         case i of
