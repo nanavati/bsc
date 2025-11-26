@@ -22,6 +22,7 @@ module TIMonad(
         , tiRecoveringFromError
         , tiRecoveringFromErrorxx
         , accumulateError
+        , tiHasErrors
         , disambiguateStruct
         ) where
 
@@ -235,6 +236,11 @@ tiRecoveringFromError' do_something create_fake_output = do
 -- exists only for debugging
 tiRecoveringFromErrorxx :: TI a -> TI a -> TI a
 tiRecoveringFromErrorxx do_something _ = do_something
+
+tiHasErrors :: TI Bool
+tiHasErrors = do
+  errs <- lift (gets tsRecoveredErrors)
+  return $ not $ null errs
 
 twarn :: WMsg -> TI ()
 twarn w = lift (modify (addWarning w))
