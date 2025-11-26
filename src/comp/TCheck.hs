@@ -2681,7 +2681,8 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
                       -- Generate code: nonrec outside (letseq), rec inside (letrec)
                       body = CClause (map CPVar vs) []
                                  (cLetSeq rem_nonrec'
-                                     (cLetRec (rem_rec' ++ [ldef]) (CVar ii)))
+                                     (cLetRec rem_rec'
+                                       (cLetSeq [ldef] (CVar ii))))
                   --traceM ("tiExpl''' " ++ ppReadable (i, ii, asbs))
                   return (rds, CLValueSign
                                  (CDefT i ngs (CQType [] (qualToType nqt))
@@ -3012,7 +3013,8 @@ tiImpls recursive as ibs = do
                   -- Generate code: nonrec bindings outside (letseq), rec inside (letrec)
                   body = CClause (map CPVar dict_vs) []
                              (cLetSeq rem_nonrec'
-                                 (cLetRec (rem_rec' ++ [ldef]) (CVar inner_i)))
+                                 (cLetRec rem_rec'
+                                   (cLetSeq [ldef] (CVar inner_i))))
               return (CLValueSign
                           (CDefT i vts_bound_here (CQType [] (qualToType nqt))
                                [body]) me')

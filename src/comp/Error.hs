@@ -790,6 +790,8 @@ data ErrMsg =
         | EClassFundepsExtra String [String]
         | EClassFundepsEmpty String
         | WIncoherentMatch String String
+        | EIncoherentDepends String [String]
+        | WIncoherentDepends String [String]
         | WOrphanInst String
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [Doc])]
@@ -2959,6 +2961,15 @@ getErrorText (EConstrFieldsNotNamed c t) =
     (Type 151, empty,
      s2par ("Constructor " ++ quote c ++ " for type " ++ quote t ++
             " does not have named fields."))
+
+getErrorText (EIncoherentDepends match depends) =
+    (Type 152, empty,
+     s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
+            " and this is forbbidden"))
+getErrorText (WIncoherentDepends match depends) =
+    (Type 153, empty,
+     s2par ("Coherent match " ++ match ++ " depends on incoherent matches: " ++ intercalate ", " depends ++
+            " so it is actually incoherent."))
 
 -- Generation Errors
 
