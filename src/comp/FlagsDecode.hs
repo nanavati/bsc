@@ -452,6 +452,7 @@ traceflags = [
           "trace-instance-overlap",
           "trace-kind-inference",
           "trace-lift",
+          "trace-lift-dicts",
           "trace-mergesched",
           "trace-mutatormap",
           "trace-ncsets",
