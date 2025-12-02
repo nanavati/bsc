@@ -746,6 +746,7 @@ instance Bin IdProp where
           35 -> do poss <- fromBin; return (IdPInlinedPositions poss)
           36 -> return IdPParserGenerated
           37 -> return IdPCAF
+          38 -> return IdPIncoherent
           n  -> internalError $ "BinData.Bin(IdProp).readBytes: " ++ show n
 
 
