@@ -186,6 +186,10 @@ handleDictExpr p t e@(CTApply f ts)
       fTy <- handleDictFun [] e
       when (expandSyn t /= expandSyn fTy) $ internalError $ "Dictionary type does not match expectation: " ++ ppReadable (fTy, t, e)
       return (e, True)
+handleDictExpr p t e@(CStructT t' [])
+  | expandSyn t /= expandSyn t' = internalError $ "Dictionary type does not match expectation: " ++ ppReadable (t, t', e)
+  | not $ null $ tv t' = return (e, False)
+  | otherwise = return (e, True)
 handleDictExpr p t e = internalError $ "handleDictExpr unexpected expression: " ++ ppReadable (p, t, e) ++ "\n" ++ show e
 
 -- Returns the type of the dictionary function
@@ -217,6 +221,8 @@ handleDictFun ts (CAnyT _ _ _) = internalError $ "handleDictFun polymorphic CAny
 handleDictFun ts0 (CTApply f ts)
   | null ts0 = handleDictFun ts f
   | otherwise = internalError $ "handleDictFunc stacked CTApply: " ++ ppReadable (ts0, f, ts)
+handleDictFun [] (Cletseq [CLValueSign (CDefT i [] (CQType [] t) _) []] (CVar i'))
+  | i == i' = return t
 handleDictFun ts e = internalError $ "handleDictFun unexpected expression: " ++ ppReadable (ts, e) ++ "\n" ++ show e
 
 -- General inlining map (more than dictionaries):
@@ -284,6 +290,7 @@ isSimple :: CExpr -> Bool
 isSimple (CAnyT _ _ _) = True
 isSimple (CLitT _ _) = True
 isSimple (CConT _ _ []) = True
+isSimple (CConT _ _ [CVar i]) = i == idPrimUnit
 isSimple (CStructT _ []) = True
 isSimple (CApply f []) = isSimple f
 isSimple (CTApply f []) = isSimple f
