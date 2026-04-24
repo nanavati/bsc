@@ -6,6 +6,13 @@ package Array;
 
 import List::*;
 
+function Bool boolOr(Bool x, Bool y);
+  return x || y;
+endfunction
+
+function Bool boolAnd(Bool x, Bool y);
+  return x && y;
+endfunction
 
 // Map starting at the Nth element
 function Array#(res_T) map(function res_T f(any_T x), Array#(any_T) v);
@@ -301,15 +308,7 @@ endfunction
 
 // zip function
 function Array#(Tuple2#(fst_T, snd_T)) zip(Array#(fst_T) v1, Array#(snd_T) v2);
-
-  Integer ln = arrayLength(v1);
-  Array#(Tuple2#(fst_T, snd_T)) resv = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = tuple2(v1[i], v2[i]);
-
-  return resv;
-
+  return primArrayZipWith(tuple2, v1, v2);
 endfunction
 
 // zip 3
@@ -340,19 +339,7 @@ endfunction
 
 // unzip
 function Tuple2#(Array#(fst_T), Array#(snd_T)) unzip(Array#(Tuple2#(fst_T, snd_T)) v);
-
-  Integer ln = arrayLength(v);
-  Array#(fst_T) res1 = primArrayNewU(ln);
-  Array#(snd_T) res2 = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-  begin
-    res1[i] = v[i].fst();
-    res2[i] = v[i].snd();
-  end
-
-  return tuple2(res1, res2);
-
+  return tuple2(primArrayMap(tpl_1, v), primArrayMap(tpl_2, v));
 endfunction
 
 // zip with
@@ -393,38 +380,25 @@ function Bool elem(any_T x, Array#(any_T) v)
   provisos
           (Eq#(any_T));
 
+  function Bool isEq(any_T y);
+    return x == y;
+  endfunction
+
   Integer ln = arrayLength(v);
-  Bool res = False;
-
-  for(Integer i = 0; (i < ln) && (res == False); i = i + 1)
-    res = x == v[i];
-
-  return res;
-
+  if (ln == 0) return False;
+  else return fold(boolOr, map(isEq, v));
 endfunction
 
 function Bool any(function Bool f(any_T x), Array#(any_T) v);
-
   Integer ln = arrayLength(v);
-  Bool res = False;
-
-  for(Integer i = 0; (i < ln) && (res == False); i = i + 1)
-    res = f(v[i]);
-
-  return res;
-
+  if (ln == 0) return False;
+  else return fold(boolOr, primArrayMap(f, v));
 endfunction
 
 function Bool all(function Bool f(any_T x), Array#(any_T) v);
-
   Integer ln = arrayLength(v);
-  Bool res = True;
-
-  for(Integer i = 0; (i < ln) && (res == True); i = i + 1)
-    res = f(v[i]);
-
-  return res;
-
+  if (ln == 0) return True;
+  else return fold(boolAnd, primArrayMap(f, v));
 endfunction
 
 endpackage
