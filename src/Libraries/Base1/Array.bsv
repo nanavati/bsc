@@ -9,28 +9,12 @@ import List::*;
 
 // Map starting at the Nth element
 function Array#(res_T) map(function res_T f(any_T x), Array#(any_T) v);
-
-  Integer ln = arrayLength(v);
-  Array#(res_T) resv = primArrayNewU(ln);
-
-  for(Integer i = (ln - 1); i >= 0; i = i - 1)
-    resv[i] = f(v[i]);
-
-  return resv;
-
+  return primArrayMap(f, v);
 endfunction
 
 // A fold function,  starting at the Nth element
 function res_T foldr(function res_T f(any_T x, res_T y), res_T start, Array#(any_T) v);
-
-  Integer ln = arrayLength(v);
-  res_T temp = start;
-
-  for(Integer i = (ln - 1); i >= 0; i = i - 1)
-    temp = f(v[i], temp);
-
-  return temp;
-
+  return primArrayFoldR(f, start, v);
 endfunction
 
 // A scan operation starting the Nth operation
@@ -49,29 +33,13 @@ endfunction
 
 // a fold 1 function starting at Nth element
 function any_T foldr1(function any_T f(any_T x, any_T y), Array#(any_T) v);
-
   Integer ln = arrayLength(v);
-
-  any_T temp = v[ln - 1];
-
-  for(Integer i = (ln - 2); i >= 0; i = i - 1)
-    temp = f(v[i], temp);
-
-  return temp;
-
+  return primArrayFoldR(f, v[ln - 1], takeAt(v, ln - 2, 0));
 endfunction
 
 // a fold function starting from 0th index
 function res_T foldl(function res_T f(res_T x, any_T y), res_T start, Array#(any_T) v);
-
-  Integer ln = arrayLength(v);
-  res_T temp = start;
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    temp = f(temp, v[i]);
-
-  return temp;
-
+  return primArrayFoldL(f, start, v);
 endfunction
 
 
@@ -129,16 +97,8 @@ endfunction
 
 // a fold 1 functions, starting at
 function any_T foldl1(function any_T f(any_T x, any_T y), Array#(any_T) v);
-
   Integer ln = arrayLength(v);
-
-  any_T temp = v[0];
-
-  for(Integer i = 1; i < ln; i = i + 1)
-    temp = f(temp, v[i]);
-
-  return temp;
-
+  return primArrayFoldL(f, v[0], takeAt(v, ln - 1, 1));
 endfunction
 
 // a scan 1 from the 0th element
@@ -232,14 +192,7 @@ endfunction
 
 
 function Array#(any_T) genWith(Integer n, function any_T initfun(Integer k));
-
-  Array#(any_T) arr = primArrayNewU(n);
-
-  for (Integer x = (n - 1); x >= 0; x = x - 1)
-    arr[x] = initfun(x);
-
-  return arr;
-
+  return primArrayGenWith(n, initfun);
 endfunction
 
 
@@ -404,15 +357,7 @@ endfunction
 
 // zip with
 function Array#(res_T) zipWith(function res_T f(fst_T f, snd_T s), Array#(fst_T) v1, Array#(snd_T) v2);
-
-  Integer ln = arrayLength(v1);
-  Array#(res_T) resv = primArrayNewU(ln);
-
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = f(v1[i], v2[i]);
-
-  return resv;
-
+  return primArrayZipWith(f, v1, v2);
 endfunction
 
 // zip with 3

@@ -215,6 +215,11 @@ package Prelude(
         Array(..),
         primArrayNew,
         primArrayNewU,
+        primArrayMap,
+        primArrayFoldL,
+        primArrayFoldR,
+        primArrayZipWith,
+        primArrayGenWith,
         arrayLength,
         primArrayInitialize,
         primArrayCheck,
@@ -3796,6 +3801,11 @@ primitive primArrayDynSelect :: Array a -> Bit n -> a
 primitive primArrayUpdate :: Array a -> Integer -> a -> Array a
 primitive primArrayDynUpdate :: Array a -> Bit n -> a -> Array a
 primitive primArrayLength :: Array a -> Integer
+primitive primArrayMap :: (a -> b) -> Array a -> Array b
+primitive primArrayFoldL :: (b -> a -> b) -> b -> Array a -> b
+primitive primArrayFoldR :: (a -> b -> b) -> b -> Array a -> b
+primitive primArrayZipWith :: (a -> b -> c) -> Array a -> Array b -> Array c
+primitive primArrayGenWith :: Integer -> (Integer -> a) -> Array a
 
 primitive primMarkArrayInitialized :: Array a -> Array a
 

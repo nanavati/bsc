@@ -313,6 +313,11 @@ data PrimOp =
         | PrimArrayUpdate
         | PrimArrayDynSelect
         | PrimArrayDynUpdate
+        | PrimArrayMap
+        | PrimArrayFoldL
+        | PrimArrayFoldR
+        | PrimArrayZipWith
+        | PrimArrayGenWith
         | PrimBuildArray -- only exists after IExpand and in ASyntax
 
         | PrimSetSelPosition
@@ -560,6 +565,11 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primArrayUpdate" = PrimArrayUpdate
         tp "primArrayDynSelect" = PrimArrayDynSelect
         tp "primArrayDynUpdate" = PrimArrayDynUpdate
+        tp "primArrayMap" = PrimArrayMap
+        tp "primArrayFoldL" = PrimArrayFoldL
+        tp "primArrayFoldR" = PrimArrayFoldR
+        tp "primArrayZipWith" = PrimArrayZipWith
+        tp "primArrayGenWith" = PrimArrayGenWith
         tp "primBuildArray" = PrimBuildArray
 
         tp "primSetSelPosition" = PrimSetSelPosition
@@ -866,6 +876,11 @@ instance NFData PrimOp where
     rnf PrimArrayUpdate = ()
     rnf PrimArrayDynSelect = ()
     rnf PrimArrayDynUpdate = ()
+    rnf PrimArrayMap = ()
+    rnf PrimArrayFoldL = ()
+    rnf PrimArrayFoldR = ()
+    rnf PrimArrayZipWith = ()
+    rnf PrimArrayGenWith = ()
     rnf PrimBuildArray = ()
     rnf PrimSetSelPosition = ()
     rnf PrimGetParamName = ()
