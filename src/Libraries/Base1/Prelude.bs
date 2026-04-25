@@ -220,6 +220,8 @@ package Prelude(
         primArrayFoldR,
         primArrayZipWith,
         primArrayGenWith,
+        primArrayToList,
+        primListToArray,
         arrayLength,
         primArrayInitialize,
         primArrayCheck,
@@ -3806,6 +3808,8 @@ primitive primArrayFoldL :: (b -> a -> b) -> b -> Array a -> b
 primitive primArrayFoldR :: (a -> b -> b) -> b -> Array a -> b
 primitive primArrayZipWith :: (a -> b -> c) -> Array a -> Array b -> Array c
 primitive primArrayGenWith :: Integer -> (Integer -> a) -> Array a
+primitive primArrayToList :: Array a -> List a
+primitive primListToArray :: List a -> Array a
 
 primitive primMarkArrayInitialized :: Array a -> Array a
 

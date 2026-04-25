@@ -203,34 +203,12 @@ function Array#(any_T) genWith(Integer n, function any_T initfun(Integer k));
 endfunction
 
 
-//implicitly reverse list
 function List#(any_T) arrayToList(Array#(any_T) v);
-
-   List#(any_T) res = Nil;
-
-   Integer ln = arrayLength(v);
-
-   for (Integer x = (ln - 1); x >= 0; x = x - 1)
-     res = cons(v[x], res);
-
-   return res;
-
+   return primArrayToList(v);
 endfunction
 
-//implicitly reverse list
 function Array#(any_T) listToArray(List#(any_T) l);
-
-   Integer ln = length(l);
-   Array#(any_T) res = primArrayNewU(ln);
-
-   for (Integer x = 0; x < ln; x = x + 1)
-   begin
-     res[x] = head(l);
-     l = tail(l);
-   end
-
-   return res;
-
+   return primListToArray(l);
 endfunction
 
 

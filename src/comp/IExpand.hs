@@ -4007,6 +4007,14 @@ conAp' i (ICPrim _ PrimArrayGenWith) f as = do
   when doDebug $ traceM ("conAp': PrimArrayGenWith!")
   doArrayGenWith f as
 
+conAp' i (ICPrim _ PrimArrayToList) f as = do
+  when doDebug $ traceM ("conAp': PrimArrayToList!")
+  doArrayToList f as
+
+conAp' i (ICPrim _ PrimListToArray) f as = do
+  when doDebug $ traceM ("conAp': PrimListToArray!")
+  doListToArray f as
+
 conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
            as@(T elem_ty: T sz_t@(ITNum idx_sz): E arr_e: E idx_e: as') = do
   (idx_e', _) <- evalUH idx_e
@@ -4565,6 +4573,59 @@ doArrayGenWith f@(ICon _ (ICPrim {primOp = PrimArrayGenWith}))
       nfError "primArrayGenWith" $ mkAp f [T a_ty, E e', E func]
 
 doArrayGenWith f as = internalError("IExpand.doArrayGenWith : " ++ ppReadable f ++ ppReadable as)
+
+evalListElems :: IType -> HExpr -> G [HExpr]
+evalListElems elem_ty e = do
+  (_, elems) <- evalListElemsP elem_ty e
+  return elems
+
+evalListElemsP :: IType -> HExpr -> G (HPred, [HExpr])
+evalListElemsP elem_ty e = do
+  (_, P p e') <- evalUH e
+  case e' of
+    IAps (ICon i _) _ [a] ->
+      if i == idCons noPosition then do
+        (_, P pa a') <- evalUH a
+        case a' of
+          IAps (ICon _ (ICTuple {})) _ [e_h, e_t] -> do
+            (p_rest, rest) <- evalListElemsP elem_ty e_t
+            return (pConjs [p, pa, p_rest], e_h : rest)
+          _ -> internalError ("evalListElemsP Cons: " ++ showTypeless a')
+      else if i == idPrimChr then return (p, [])
+      else internalError ("evalListElemsP con: " ++ show i)
+    _ -> nfError "evalListElemsP" e'
+
+doArrayToList :: HExpr -> [Arg] -> G PExpr
+doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
+              [T a_ty, E arr_e] = do
+    norm <- getTypeNormalizer
+    let a_ty' = norm a_ty
+        arrType = norm (ITAp itPrimArray a_ty)
+    withNormalizedArray False arr_e arrType $ \p arr_e' ->
+      case arr_e' of
+        ICon _ (ICLazyArray _ arr _) -> do
+          let cellToExpr (ArrayCell ptr ref) =
+                pExprToHExpr (P p (IRefT a_ty' ptr S.empty ref))
+              elems = map cellToExpr (Array.elems arr)
+          return $ pExpr $ iMkList a_ty' elems
+        _ -> nfError "primArrayToList" $ mkAp f [T a_ty, E arr_e']
+
+doArrayToList f as = internalError("IExpand.doArrayToList : " ++ ppReadable f ++ ppReadable as)
+
+doListToArray :: HExpr -> [Arg] -> G PExpr
+doListToArray f@(ICon fi (ICPrim {primOp = PrimListToArray}))
+              [T a_ty, E list_e] = do
+    norm <- getTypeNormalizer
+    let a_ty' = norm a_ty
+        resultType = norm (ITAp itPrimArray a_ty)
+    (p, elems) <- evalListElemsP a_ty' list_e
+    cells <- mapM mkArrayCell elems
+    let n = toInteger (length elems)
+        arr = Array.listArray (0, n-1) cells
+    addPredG p $
+      return $ pExpr $ ICon fi (ICLazyArray resultType arr Nothing)
+
+doListToArray f as = internalError("IExpand.doListToArray : " ++ ppReadable f ++ ppReadable as)
 
 -- if without extra arguments
 doIf :: HExpr -> [Arg] -> G PExpr

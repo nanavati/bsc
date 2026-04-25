@@ -28,6 +28,14 @@ compile_verilog_pass ContextCondZip.bsv sysContextCondZip
 compile_verilog_fail_error ImplCondFail.bsv G0005 10
 compile_verilog_fail_error ImplCondFailClassic.bs G0005 10
 
+# --- List/array conversion primitives ---
+
+# Compile-fail: conditions through list<->array conversions
+compile_verilog_fail_error ImplCondListConvert.bsv G0005 5
+
+# Simulation: round-trip and cross-primitive through conversions
+test_c_veri_bsv ListArrayConvert
+
 # --- Simulation tests: Vec vs SimpleList implicit condition equivalence ---
 # sort_output=1 because rule scheduling order is non-deterministic.
 # SL versions share the Vec expected output file.
