@@ -1,0 +1,81 @@
+DS c=10 i=2 v=24
+DS c=11 i=3 v=38
+DS c=12 i=0 v=1
+DS c=13 i=1 v=13
+DS c=14 i=2 v=25
+DS c=15 i=3 v=39
+DS c=16 i=0 v=3
+DS c=17 i=1 v=1a
+DS c=18 i=2 v=2c
+DS c=19 i=3 v=3c
+DS c=25 i=1 v=1e
+DS c=26 i=2 v=2f
+DS c=27 i=3 v=38
+DS c=28 i=0 v=d
+DS c=29 i=1 v=12
+DS c=30 i=2 v=24
+DS c=31 i=3 v=39
+DS c=32 i=0 v=1
+DS c=9 i=1 v=12
+DU c=10 i=2 v=1
+DU c=11 i=3 v=1
+DU c=12 i=0 v=ff
+DU c=13 i=1 v=3
+DU c=14 i=2 v=3
+DU c=15 i=3 v=3
+DU c=16 i=0 v=ff
+DU c=17 i=1 v=d
+DU c=18 i=2 v=d
+DU c=19 i=3 v=d
+DU c=2 i=2 v=1
+DU c=20 i=0 v=ff
+DU c=21 i=1 v=d
+DU c=22 i=2 v=d
+DU c=23 i=3 v=d
+DU c=24 i=0 v=ff
+DU c=25 i=1 v=d
+DU c=26 i=2 v=d
+DU c=27 i=3 v=d
+DU c=28 i=0 v=ff
+DU c=29 i=1 v=1
+DU c=3 i=3 v=1
+DU c=30 i=2 v=1
+DU c=31 i=3 v=1
+DU c=32 i=0 v=ff
+DU c=4 i=0 v=ff
+DU c=5 i=1 v=1
+DU c=6 i=2 v=1
+DU c=7 i=3 v=1
+DU c=8 i=0 v=ff
+DU c=9 i=1 v=1
+SU c=10 v=1
+SU c=11 v=1
+SU c=12 v=1
+SU c=13 v=3
+SU c=14 v=3
+SU c=15 v=3
+SU c=16 v=3
+SU c=17 v=d
+SU c=18 v=d
+SU c=19 v=d
+SU c=2 v=1
+SU c=20 v=d
+SU c=21 v=d
+SU c=22 v=d
+SU c=23 v=d
+SU c=24 v=d
+SU c=25 v=d
+SU c=26 v=d
+SU c=27 v=d
+SU c=28 v=d
+SU c=29 v=1
+SU c=3 v=1
+SU c=30 v=1
+SU c=31 v=1
+SU c=32 v=1
+SU c=4 v=1
+SU c=5 v=1
+SU c=6 v=1
+SU c=7 v=1
+SU c=8 v=1
+SU c=9 v=1

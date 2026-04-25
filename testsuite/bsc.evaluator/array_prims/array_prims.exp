@@ -1,0 +1,53 @@
+# Tests for array primitive implicit condition propagation.
+#
+# Each test has a Vec version (using Vector / array primitives) and a
+# SimpleList version (pure recursive reference implementation).  Both
+# must produce identical sorted simulation output.
+#
+# SimpleList.bs is a library dependency — compile it first.
+
+compile_pass SimpleList.bs
+
+# --- Compile-pass tests: patterns that should compile ---
+
+compile_verilog_pass ImplCondTest.bsv sysImplCondTest
+compile_verilog_pass ImplCondConcat.bsv sysImplCondConcat
+compile_verilog_pass ImplCondLarge.bsv sysImplCondLarge
+compile_verilog_pass ImplCondUnfunnel.bsv sysImplCondUnfunnel
+compile_verilog_pass ImplCondUnfunnel.bsv sysImplCondUnfunnelTest
+
+# --- Compile-fail: conditions must NOT be dropped by primitives ---
+# One rule per primitive, each with (* no_implicit_conditions *).
+# If any primitive drops the condition, the error count decreases.
+
+compile_verilog_fail_error ImplCondFail.bsv G0005 10
+compile_verilog_fail_error ImplCondFailClassic.bs G0005 10
+
+# --- Simulation tests: Vec vs SimpleList implicit condition equivalence ---
+# sort_output=1 because rule scheduling order is non-deterministic.
+# SL versions share the Vec expected output file.
+# Classic (.bs) versions use pure construction and share expected output.
+
+# Per-element condition propagation through map
+test_c_veri_bsv ImplCondMapVec "" "" "" 1
+test_c_veri_bsv ImplCondMapSL "sysImplCondMapVec.out.expected" "" "" 1
+test_c_veri ImplCondMapVecClassic "sysImplCondMapVec.out.expected" "" "" 1
+test_c_veri ImplCondMapSLClassic "sysImplCondMapVec.out.expected" "" "" 1
+
+# Conjunction propagation through fold/any/all/elem
+test_c_veri_bsv ImplCondFoldVec "" "" "" 1
+test_c_veri_bsv ImplCondFoldSL "sysImplCondFoldVec.out.expected" "" "" 1
+test_c_veri ImplCondFoldVecClassic "sysImplCondFoldVec.out.expected" "" "" 1
+test_c_veri ImplCondFoldSLClassic "sysImplCondFoldVec.out.expected" "" "" 1
+
+# Per-element condition propagation through zipWith (two sources)
+test_c_veri_bsv ImplCondZipVec "" "" "" 1
+test_c_veri_bsv ImplCondZipSL "sysImplCondZipVec.out.expected" "" "" 1
+test_c_veri ImplCondZipVecClassic "sysImplCondZipVec.out.expected" "" "" 1
+test_c_veri ImplCondZipSLClassic "sysImplCondZipVec.out.expected" "" "" 1
+
+# Condition propagation through dynamic select and update
+test_c_veri_bsv ImplCondDynSelVec "" "" "" 1
+test_c_veri_bsv ImplCondDynSelSL "sysImplCondDynSelVec.out.expected" "" "" 1
+test_c_veri ImplCondDynSelVecClassic "sysImplCondDynSelVec.out.expected" "" "" 1
+test_c_veri ImplCondDynSelSLClassic "sysImplCondDynSelVec.out.expected" "" "" 1
