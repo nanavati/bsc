@@ -222,6 +222,9 @@ package Prelude(
         primArrayGenWith,
         primArrayToList,
         primListToArray,
+        primArrayAppend,
+        primArrayConcat,
+        primArrayReverse,
         arrayLength,
         primArrayInitialize,
         primArrayCheck,
@@ -3810,6 +3813,9 @@ primitive primArrayZipWith :: (a -> b -> c) -> Array a -> Array b -> Array c
 primitive primArrayGenWith :: Integer -> (Integer -> a) -> Array a
 primitive primArrayToList :: Array a -> List a
 primitive primListToArray :: List a -> Array a
+primitive primArrayAppend :: Array a -> Array a -> Array a
+primitive primArrayConcat :: Array (Array a) -> Array a
+primitive primArrayReverse :: Array a -> Array a
 
 primitive primMarkArrayInitialized :: Array a -> Array a
 

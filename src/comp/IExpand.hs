@@ -4015,6 +4015,70 @@ conAp' i (ICPrim _ PrimListToArray) f as = do
   when doDebug $ traceM ("conAp': PrimListToArray!")
   doListToArray f as
 
+conAp' i (ICPrim _ PrimArrayAppend) f
+           [T a_ty, E arr1_e, E arr2_e] = do
+  when doDebug $ traceM ("conAp': PrimArrayAppend!")
+  norm <- getTypeNormalizer
+  let arrType = norm (ITAp itPrimArray a_ty)
+  withNormalizedArray True arr1_e arrType $ \p1 arr1_e' ->
+    case arr1_e' of
+      ICon ci (ICLazyArray _ arr1 _) ->
+        withNormalizedArray True arr2_e arrType $ \p2 arr2_e' ->
+          case arr2_e' of
+            ICon _ (ICLazyArray _ arr2 _) -> do
+              let (_, hi1) = Array.bounds arr1
+                  (_, hi2) = Array.bounds arr2
+                  cells = Array.elems arr1 ++ Array.elems arr2
+                  arr' = Array.listArray (0, hi1 + hi2 + 1) cells
+              addPredG (pConj p1 p2) $
+                return $ pExpr $ ICon ci (ICLazyArray arrType arr' Nothing)
+            _ -> nfError "primArrayAppend" $
+                   mkAp f [T a_ty, E arr1_e', E arr2_e']
+      _ -> nfError "primArrayAppend" $
+             mkAp f [T a_ty, E arr1_e', E arr2_e]
+
+conAp' i (ICPrim _ PrimArrayConcat) f
+           [T a_ty, E arr_e] = do
+  when doDebug $ traceM ("conAp': PrimArrayConcat!")
+  norm <- getTypeNormalizer
+  let innerArrType = norm (ITAp itPrimArray a_ty)
+      outerArrType = norm (ITAp itPrimArray innerArrType)
+  withNormalizedArray True arr_e outerArrType $ \p_outer outer_e ->
+    case outer_e of
+      ICon ci (ICLazyArray _ outerArr _) -> do
+        cellLists <- mapM (\(ArrayCell ptr ref) -> do
+            let inner_e = IRefT innerArrType ptr S.empty ref
+            P p_inner inner_e' <- eval1 inner_e >>= unheap
+            mArr <- expandDynUpdateToLazy inner_e'
+            let inner_e'' = case mArr of Just a -> a; Nothing -> inner_e'
+            case inner_e'' of
+              ICon _ (ICLazyArray _ innerArr _) ->
+                return (p_inner, Array.elems innerArr)
+              _ -> nfError "primArrayConcat" $
+                     mkAp f [T a_ty, E inner_e'']
+          ) (Array.elems outerArr)
+        let p_all = pConjs (p_outer : map fst cellLists)
+            allCells = concatMap snd cellLists
+            n = length allCells
+            arr' = Array.listArray (0, toInteger n - 1) allCells
+        addPredG p_all $
+          return $ pExpr $ ICon ci (ICLazyArray innerArrType arr' Nothing)
+      _ -> nfError "primArrayConcat" $ mkAp f [T a_ty, E outer_e]
+
+conAp' i (ICPrim _ PrimArrayReverse) f
+           [T a_ty, E arr_e] = do
+  when doDebug $ traceM ("conAp': PrimArrayReverse!")
+  norm <- getTypeNormalizer
+  let arrType = norm (ITAp itPrimArray a_ty)
+  withNormalizedArray False arr_e arrType $ \p arr_e' ->
+    case arr_e' of
+      ICon ci (ICLazyArray _ arr uninit) -> do
+        let cells = Array.elems arr
+            arr' = Array.listArray (Array.bounds arr) (Prelude.reverse cells)
+        addPredG p $
+          return $ pExpr $ ICon ci (ICLazyArray arrType arr' uninit)
+      _ -> nfError "primArrayReverse" $ mkAp f [T a_ty, E arr_e']
+
 conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
            as@(T elem_ty: T sz_t@(ITNum idx_sz): E arr_e: E idx_e: as') = do
   (idx_e', _) <- evalUH idx_e

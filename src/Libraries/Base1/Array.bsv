@@ -213,35 +213,11 @@ endfunction
 
 
 function Array#(any_T) append(Array#(any_T) v1, Array#(any_T) v2);
-
-   Integer ln1 = arrayLength(v1);
-   Integer ln2 = arrayLength(v2);
-   Array#(any_T) res = primArrayNewU(ln1 + ln2);
-
-   for (Integer x = (ln1 - 1); x >= 0; x = x - 1)
-     res[x + ln2] = v1[x];
-
-   for (Integer x = (ln2 - 1); x >= 0; x = x - 1)
-     res[x] = v2[x];
-
-   return res;
-
+   return primArrayAppend(v2, v1);
 endfunction
 
-
 function Array#(any_T) concat(Array#(Array#(any_T)) v);
-
-   Integer ln1 = arrayLength(v);
-   Integer ln2 = (ln1 == 0) ? 0 : arrayLength(v[0]);
-   Array#(any_T) resv = primArrayNewU(ln1 * ln2);
-
-
-   for(Integer i = (ln1 - 1); i >= 0; i = i - 1)
-     for(Integer j = (ln2 - 1); j >= 0; j = j - 1)
-       resv[(i*ln2) + j] = v[i][j];
-
-   return resv;
-
+   return primArrayConcat(v);
 endfunction
 
 
@@ -339,19 +315,7 @@ function Array#(res_T) zipWith3(function res_T f(fst_T f, snd_T s, thd_T t), Arr
 endfunction
 
 function Array#(any_T) reverse(Array#(any_T) v);
-
-  Integer ln = arrayLength(v);
-  if (ln <= 1) return v;
-  else
-  begin
-    Array#(any_T) resv = primArrayNewU(ln);
-
-    for(Integer i = 0; i < ln; i = i + 1)
-      resv[ln - i - 1] = v[i];
-
-    return resv;
-  end
-
+   return primArrayReverse(v);
 endfunction
 
 function Bool elem(any_T x, Array#(any_T) v)
