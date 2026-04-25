@@ -27,14 +27,11 @@ endfunction
 // A scan operation starting the Nth operation
 function Array#(res_T) scanr(function res_T f(any_T x, res_T y), res_T start, Array#(any_T) v);
 
-  Integer ln = arrayLength(v);
-  Array#(res_T) resv = primArrayNewU(ln + 1);
-  resv[ln] = start;
+  function List#(res_T) step(any_T x, List#(res_T) acc);
+    return Cons(f(x, List::head(acc)), acc);
+  endfunction
 
-  for(Integer i = (ln - 1); i >= 0; i = i - 1)
-    resv[i] = f(v[i], resv[i + 1]);
-
-  return resv;
+  return primListToArray(primArrayFoldR(step, Cons(start, Nil), v));
 
 endfunction
 
@@ -111,14 +108,11 @@ endfunction
 // a scan 1 from the 0th element
 function Array#(res_T) scanl(function res_T f(res_T x, any_T y), res_T start, Array#(any_T) v);
 
-  Integer ln = arrayLength(v) + 1;
-  Array#(res_T) resv = primArrayNewU(ln);
-  resv[0] = start;
+  function List#(res_T) step(List#(res_T) acc, any_T x);
+    return Cons(f(List::head(acc), x), acc);
+  endfunction
 
-  for(Integer i = 1; i < ln; i = i + 1)
-    resv[i] = f(resv[i - 1], v[i - 1]);
-
-  return resv;
+  return primArrayReverse(primListToArray(primArrayFoldL(step, Cons(start, Nil), v)));
 
 endfunction
 
@@ -128,14 +122,6 @@ function Bit#(vsz) packArray(Array#(any_T) v)
          (Bits#(any_T, sz));
 
    Integer inferLength = div(valueOf(vsz), valueOf(sz));
-
-   function Bit#(m) flatN(Integer n, Array#(Bit#(k)) b);
-
-     if (n == inferLength)
-       return 0;
-     else
-       return (flatN(n+1, b) << (valueOf(k))) | b[n][(valueOf(k) - 1):0];
-   endfunction
 
    // need to handle 0-bit elements and 0-element arrays
    if(valueOf(vsz) == 0) begin
@@ -148,17 +134,18 @@ function Bit#(vsz) packArray(Array#(any_T) v)
    end
    else if (inferLength > 0)
    begin
-     Array#(Bit#(sz)) packedArray = primArrayNewU(inferLength);
-     for(Integer i = inferLength - 1; i >= 0; i = i - 1)
-       packedArray[i] = pack(v[i]);
+     // genWith avoids needing arrayLength(v), which fails if v is _
+     function Bit#(sz) packElem(Integer i) = pack(v[i]);
 
-     return flatN(0, packedArray);
+     // Concatenate packed elements: v[n-1] in high bits, v[0] in low bits
+     function Bit#(m) flatStep(Bit#(sz) x, Bit#(m) acc);
+       return (acc << valueOf(sz)) | x[(valueOf(sz) - 1):0];
+     endfunction
+
+     return primArrayFoldR(flatStep, 0, genWith(inferLength, packElem));
    end
    else
      return error ("Result vector too short for pack!");
-   //cannot take length because array might be _, which includes using primArrayMap
-   //return flatN(arrayLength(v), map(pack, v));
-   //return flatN(arrayLength(v), reverse(map(pack, v)));
 
 endfunction
 
@@ -169,14 +156,12 @@ function Array#(any_T) unpackArray(Bit#(n) bts, Integer ln)
 
  Integer k = valueOf(sz);
 
- Array#(any_T) res = primArrayNewU(ln);
-
- for (Integer i = (ln - 1); i >= 0; i = i - 1) begin
+ function any_T unpackElem(Integer i);
    Bit#(sz) v = bts[((i*k)+k-1):(i*k)];
-   res[i] = unpack(v);
- end
+   return unpack(v);
+ endfunction
 
- return(res);
+ return genWith(ln, unpackElem);
 
 endfunction
 
@@ -184,15 +169,11 @@ endfunction
 function Array#(any_T) takeAt(Array#(any_T) v, Integer hi, Integer lo);
 
   Integer ln = hi - lo + 1;
+
+  function any_T selectElem(Integer x) = v[x + lo];
+
   if (ln > 0)
-  begin
-    Array#(any_T) resv = primArrayNewU(ln);
-
-    for (Integer x = 0; x < ln; x = x + 1)
-      resv[x] = v[x + lo];
-
-    return resv;
-  end
+    return genWith(ln, selectElem);
   else return primArrayNewU(0);
 
 endfunction
@@ -269,12 +250,10 @@ endfunction
 function Array#(Tuple3#(fst_T, snd_T, thd_T)) zip3(Array#(fst_T) v1, Array#(snd_T) v2, Array#(thd_T) v3);
 
   Integer ln = arrayLength(v1);
-  Array#(Tuple3#(fst_T, snd_T, thd_T)) resv = primArrayNewU(ln);
 
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = tuple3(v1[i], v2[i], v3[i]);
+  function Tuple3#(fst_T, snd_T, thd_T) zipElem(Integer i) = tuple3(v1[i], v2[i], v3[i]);
 
-  return resv;
+  return genWith(ln, zipElem);
 
 endfunction
 
@@ -282,12 +261,10 @@ endfunction
 function Array#(Tuple4#(fst_T, snd_T, thd_T, fth_T)) zip4(Array#(fst_T) v1, Array#(snd_T) v2, Array#(thd_T) v3, Array#(fth_T) v4);
 
   Integer ln = arrayLength(v1);
-  Array#(Tuple4#(fst_T, snd_T, thd_T, fth_T)) resv = primArrayNewU(ln);
 
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = tuple4(v1[i], v2[i], v3[i], v4[i]);
+  function Tuple4#(fst_T, snd_T, thd_T, fth_T) zipElem(Integer i) = tuple4(v1[i], v2[i], v3[i], v4[i]);
 
-  return resv;
+  return genWith(ln, zipElem);
 
 endfunction
 
@@ -305,12 +282,10 @@ endfunction
 function Array#(res_T) zipWith3(function res_T f(fst_T f, snd_T s, thd_T t), Array#(fst_T) v1, Array#(snd_T) v2, Array#(thd_T) v3);
 
   Integer ln = arrayLength(v1);
-  Array#(res_T) resv = primArrayNewU(ln);
 
-  for(Integer i = 0; i < ln; i = i + 1)
-    resv[i] = f(v1[i], v2[i], v3[i]);
+  function res_T applyElem(Integer i) = f(v1[i], v2[i], v3[i]);
 
-  return resv;
+  return genWith(ln, applyElem);
 
 endfunction
 
