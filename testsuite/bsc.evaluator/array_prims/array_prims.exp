@@ -16,6 +16,11 @@ compile_verilog_pass ImplCondLarge.bsv sysImplCondLarge
 compile_verilog_pass ImplCondUnfunnel.bsv sysImplCondUnfunnel
 compile_verilog_pass ImplCondUnfunnel.bsv sysImplCondUnfunnelTest
 
+# Contextual conditions: array primitives inside guarded rules must not
+# promote the guard condition to a container condition on the result array.
+compile_verilog_pass ContextCondMap.bsv sysContextCondMap
+compile_verilog_pass ContextCondZip.bsv sysContextCondZip
+
 # --- Compile-fail: conditions must NOT be dropped by primitives ---
 # One rule per primitive, each with (* no_implicit_conditions *).
 # If any primitive drops the condition, the error count decreases.

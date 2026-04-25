@@ -2836,6 +2836,12 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
       addPredG p' $
           evalAp "static-op set-sel-pos" f [T resultType, E e_pos, E e_res']
 
+    -- push through implicit condition wrappers
+    IAps (ICon _ (ICPrim _ PrimWhenPred)) [_]
+         [ICon _ (ICPred _ p_when), e_body] -> do
+      P p_body e_body' <- evalStaticOp' doUH doBK doUndet e_body resultType handler
+      return (P (pConj p (pConj p_when p_body)) e_body')
+
     -- otherwise, apply the static op's handler
     _ -> -- rather than "addPredG p", which would be redundant if the handler
          -- uses "ee", we pass "p" in for the handler to use with "e'"
@@ -4418,16 +4424,18 @@ expandDynUpdateToLazy _ = return Nothing
 
 -- Normalize an array expression to ICLazyArray, handling PrimIf,
 -- PrimArrayDynSelect, and PrimArrayDynUpdate, then call the handler.
+-- The handler receives the container predicate and decides how to use it:
+--   array->array ops push it to elements; scalar ops use addPredG.
 -- doUH=False for lazy ops (map) that preserve uninit arrays;
 -- doUH=True for strict ops (fold, zipWith) that error on uninit.
 withNormalizedArray :: Bool -> HExpr -> IType
-                    -> (HExpr -> G PExpr) -> G PExpr
+                    -> (HPred -> HExpr -> G PExpr) -> G PExpr
 withNormalizedArray doUH arr_e arrType handler =
-    let handler' _ (p, e') = addPredG p $ do
+    let handler' _ (p, e') = do
           mArr <- expandDynUpdateToLazy e'
           case mArr of
-            Just lazyArr -> handler lazyArr
-            Nothing      -> handler e'
+            Just lazyArr -> handler p lazyArr
+            Nothing      -> handler p e'
     in evalStaticOp' doUH True True arr_e arrType handler'
 
 doArrayMap :: HExpr -> [Arg] -> G PExpr
@@ -4438,12 +4446,12 @@ doArrayMap f@(ICon _ (ICPrim {primOp = PrimArrayMap}))
     let resultType = norm (ITAp itPrimArray b_ty)
         a_ty' = norm a_ty
         arrType = norm (ITAp itPrimArray a_ty)
-    withNormalizedArray False arr_e arrType $ \arr_e' ->
+    withNormalizedArray False arr_e arrType $ \p arr_e' ->
       case arr_e' of
         ICon ci (ICLazyArray _ arr uninit) -> do
           let mapCell (ArrayCell ptr ref) = do
                 let elem_e = IRefT a_ty' ptr S.empty ref
-                mkArrayCell (iAp func' elem_e)
+                mkArrayCell (pExprToHExpr (P p (iAp func' elem_e)))
           cells <- mapM mapCell (Array.elems arr)
           let arr' = Array.listArray (Array.bounds arr) cells
           return $ P pTrue $ ICon ci (ICLazyArray resultType arr' uninit)
@@ -4458,7 +4466,8 @@ doArrayFoldL f@(ICon _ (ICPrim {primOp = PrimArrayFoldL}))
     func' <- toHeap "array-foldl-fn" (norm (b_ty `itFun` a_ty `itFun` b_ty)) func Nothing
     let a_ty' = norm a_ty
         b_ty' = norm b_ty
-    withNormalizedArray True arr_e (ITAp itPrimArray a_ty') $ \arr_e' ->
+    withNormalizedArray True arr_e (ITAp itPrimArray a_ty') $ \p arr_e' ->
+      addPredG p $
       case arr_e' of
         ICon _ (ICLazyArray _ arr _) -> do
           let (lo, hi) = Array.bounds arr
@@ -4481,7 +4490,8 @@ doArrayFoldR f@(ICon _ (ICPrim {primOp = PrimArrayFoldR}))
     func' <- toHeap "array-foldr-fn" (norm (a_ty `itFun` b_ty `itFun` b_ty)) func Nothing
     let a_ty' = norm a_ty
         b_ty' = norm b_ty
-    withNormalizedArray True arr_e (ITAp itPrimArray a_ty') $ \arr_e' ->
+    withNormalizedArray True arr_e (ITAp itPrimArray a_ty') $ \p arr_e' ->
+      addPredG p $
       case arr_e' of
         ICon _ (ICLazyArray _ arr _) -> do
           let (lo, hi) = Array.bounds arr
@@ -4506,20 +4516,22 @@ doArrayZipWith f@(ICon _ (ICPrim {primOp = PrimArrayZipWith}))
         a_ty' = norm a_ty
         b_ty' = norm b_ty
         c_ty' = norm c_ty
-    withNormalizedArray True arr1_e (ITAp itPrimArray a_ty') $ \arr1_e' ->
+    withNormalizedArray True arr1_e (ITAp itPrimArray a_ty') $ \p1 arr1_e' ->
       case arr1_e' of
         ICon ci1 (ICLazyArray _ arr1 _) ->
-          withNormalizedArray True arr2_e (ITAp itPrimArray b_ty') $ \arr2_e' ->
+          withNormalizedArray True arr2_e (ITAp itPrimArray b_ty') $ \p2 arr2_e' ->
             case arr2_e' of
               ICon _ (ICLazyArray _ arr2 _) -> do
-                let bounds = Array.bounds arr1
+                let p12 = pConj p1 p2
+                    bounds = Array.bounds arr1
                     (lo, hi) = bounds
                     zipCell i = do
-                      let (ArrayCell p1 r1) = arr1 Array.! i
-                          (ArrayCell p2 r2) = arr2 Array.! i
-                          e1 = IRefT a_ty' p1 S.empty r1
-                          e2 = IRefT b_ty' p2 S.empty r2
-                      pe <- evalAp "array-zipwith" func' [E e1, E e2]
+                      let (ArrayCell pt1 r1) = arr1 Array.! i
+                          (ArrayCell pt2 r2) = arr2 Array.! i
+                          e1 = IRefT a_ty' pt1 S.empty r1
+                          e2 = IRefT b_ty' pt2 S.empty r2
+                      pe <- addPredG p12 $
+                              evalAp "array-zipwith" func' [E e1, E e2]
                       IRefT _ ref_p _ ref_r
                           <- toHeapWHNFCon "array-zipwith" c_ty' (pExprToHExpr pe) Nothing
                       return (ArrayCell ref_p ref_r)
