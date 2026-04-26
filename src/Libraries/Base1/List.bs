@@ -248,8 +248,7 @@ rotateR xs = Cons (last xs) (init xs)
 --@ function List#(c) zipWith (function c f(a x, b y), List#(a) xs, List#(b) ys);
 --@ \end{libverbatim}
 zipWith :: (a -> b -> c) -> List a -> List b -> List c
-zipWith f (Cons x xs) (Cons y ys) = Cons (f x y) (zipWith f xs ys)
-zipWith _ _ _ = Nil
+zipWith = primListZipWith
 
 --@ Combine three lists with a function.
 --@ \index{zipWith3@\te{zipWith3} (\te{List} function)}

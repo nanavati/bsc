@@ -4034,6 +4034,9 @@ conAp' _ (ICPrim _ PrimListLength) f [T t, E list_e] = do
 conAp' _ (ICPrim _ PrimListSelect) f [T t, E list_e, E idx_e] = do
   when doDebug $ traceM ("conAp': PrimListSelect!")
   doListSelect f t list_e idx_e
+conAp' _ (ICPrim _ PrimListZipWith) f [T a, T b, T c, E func, E list1, E list2] = do
+  when doDebug $ traceM ("conAp': PrimListZipWith!")
+  doListZipWith f a b c func list1 list2
 
 conAp' _ (ICPrim _ PrimArrayToList) f [T t, E arr] = do
   when doDebug $ traceM ("conAp': PrimArrayToList!")
@@ -4718,6 +4721,30 @@ doListMap f@(ICon _ (ICPrim {primOp = PrimListMap}))
     mapList list_e
 
 doListMap f _ _ _ _ = internalError("IExpand.doListMap : " ++ ppReadable f)
+
+doListZipWith :: HExpr -> IType -> IType -> IType -> HExpr -> HExpr -> HExpr -> G PExpr
+doListZipWith f@(ICon _ (ICPrim {primOp = PrimListZipWith}))
+              a_ty b_ty c_ty func list1_e list2_e = do
+    norm <- getTypeNormalizer
+    func' <- toHeap "list-zipwith-fn" (norm (a_ty `itFun` b_ty `itFun` c_ty)) func Nothing
+    let a_ty' = norm a_ty
+        b_ty' = norm b_ty
+        c_ty' = norm c_ty
+        result_ty = norm (itList c_ty)
+        zipLists e1 e2 =
+          evalListOp e1 a_ty' result_ty
+            (\p -> return $ P p $ iMkNil c_ty')
+            (\p1 e_h1 e_t1 ->
+              evalListOp e2 b_ty' result_ty
+                (\p2 -> return $ P (pConj p1 p2) $ iMkNil c_ty')
+                (\p2 e_h2 e_t2 -> do
+                  let mapped_h = pExprToHExpr (P (pConj p1 p2) (iAp (iAp func' e_h1) e_h2))
+                  P p_rest mapped_t <- zipLists e_t1 e_t2
+                  return $ P p_rest $ iMkCons c_ty' mapped_h mapped_t))
+    zipLists list1_e list2_e
+
+doListZipWith f _ _ _ _ _ _ = internalError("IExpand.doListZipWith : " ++ ppReadable f)
+
 
 doListFoldL :: HExpr -> IType -> IType -> HExpr -> HExpr -> HExpr -> [Arg] -> G PExpr
 doListFoldL f@(ICon _ (ICPrim {primOp = PrimListFoldL}))

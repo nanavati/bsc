@@ -4,7 +4,7 @@
 # One rule per primitive, each with (* no_implicit_conditions *).
 # If any primitive drops the condition, the error count decreases.
 
-compile_verilog_fail_error ImplCondListFail.bsv G0005 10
+compile_verilog_fail_error ImplCondListFail.bsv G0005 12
 
 # --- Compile-fail: conditions through list<->array conversions ---
 # Tests that conditions survive primListToArray / primArrayToList round-trips
@@ -28,6 +28,13 @@ test_c_veri_bsv ImplCondFoldList "" "" "" 1
 test_c_veri_bsv ImplCondFoldListRef "sysImplCondFoldList.out.expected" "" "" 1
 # Reference: list->array->fold via primListToArray/primArrayFoldL/R
 test_c_veri_bsv ImplCondFoldListArr "sysImplCondFoldList.out.expected" "" "" 1
+
+# Per-element condition propagation through primListZipWith (two sources)
+test_c_veri_bsv ImplCondZipList "" "" "" 1
+# Reference: recursive head/tail zipWith
+test_c_veri_bsv ImplCondZipListRef "sysImplCondZipList.out.expected" "" "" 1
+# Reference: list->array->zipWith->list via primArrayZipWith
+test_c_veri_bsv ImplCondZipListArr "sysImplCondZipList.out.expected" "" "" 1
 
 # --- Basic correctness: select and length ---
 test_c_veri_bsv ListSelectTest

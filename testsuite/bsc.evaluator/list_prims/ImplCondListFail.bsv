@@ -52,6 +52,15 @@ module sysImplCondListFail(Empty);
     out <= primListSelect(lv, 2);
   endrule
 
+  // Through primListZipWith (element conditions from both sources)
+  (* no_implicit_conditions *)
+  rule r_elem_zipwith;
+    List#(Bit#(8)) la = Cons(f0.first, Cons(f1.first, Nil));
+    List#(Bit#(8)) lb = Cons(f2.first, Cons(f3.first, Nil));
+    List#(Bit#(8)) zipped = primListZipWith(\+ , la, lb);
+    out <= primListSelect(zipped, 0);
+  endrule
+
   // ===== Spine condition at position 2 (3 errors) =====
   // List: Cons(10, Cons(20, when(f0.notEmpty, Cons(30, Cons(40, Nil)))))
   // Select at 0 or 1 should NOT have the condition.
@@ -84,6 +93,15 @@ module sysImplCondListFail(Empty);
     List#(Bit#(8)) lv = Cons(10, Cons(20, when(f0.notEmpty, Cons(30, Cons(40, Nil)))));
     Integer len = primListLength(lv);
     out <= fromInteger(len);
+  endrule
+
+  // ZipWith with spine condition in one source — should FAIL at that position
+  (* no_implicit_conditions *)
+  rule r_spine_zipwith;
+    List#(Bit#(8)) la = Cons(10, Cons(20, when(f0.notEmpty, Cons(30, Nil))));
+    List#(Bit#(8)) lb = Cons(1,  Cons(2,  Cons(3,  Nil)));
+    List#(Bit#(8)) zipped = primListZipWith(\+ , la, lb);
+    out <= primListSelect(zipped, 2);
   endrule
 
   // ===== Map with spine condition (1 error) =====

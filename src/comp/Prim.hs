@@ -330,6 +330,7 @@ data PrimOp =
         | PrimListConcat
         | PrimListLength
         | PrimListSelect
+        | PrimListZipWith
         | PrimBuildArray -- only exists after IExpand and in ASyntax
 
         | PrimSetSelPosition
@@ -594,6 +595,7 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primListConcat" = PrimListConcat
         tp "primListLength" = PrimListLength
         tp "primListSelect" = PrimListSelect
+        tp "primListZipWith" = PrimListZipWith
         tp "primBuildArray" = PrimBuildArray
 
         tp "primSetSelPosition" = PrimSetSelPosition
@@ -917,6 +919,7 @@ instance NFData PrimOp where
     rnf PrimListConcat = ()
     rnf PrimListLength = ()
     rnf PrimListSelect = ()
+    rnf PrimListZipWith = ()
     rnf PrimBuildArray = ()
     rnf PrimSetSelPosition = ()
     rnf PrimGetParamName = ()

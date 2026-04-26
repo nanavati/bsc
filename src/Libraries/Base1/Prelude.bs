@@ -232,6 +232,7 @@ package Prelude(
         primListConcat,
         primListLength,
         primListSelect,
+        primListZipWith,
         arrayLength,
         primArrayInitialize,
         primArrayCheck,
@@ -3721,10 +3722,10 @@ listStaticSelect pos xs n =
        else primListSelect xs n
 
 listPrimNum :: List e -> List (e, Integer)
-listPrimNum l = let listPrimNum' :: List e -> Integer -> List (e, Integer)
-                    listPrimNum' Nil _ = Nil
-                    listPrimNum' (Cons x xs) n = Cons (x, n) (listPrimNum' xs (n+1))
-                in listPrimNum' l 0
+listPrimNum l =
+    let go :: Integer -> List Integer
+        go n = Cons n (go (n+1))
+    in  primListZipWith (\ x i -> (x, i)) l (go 0)
 
 -- make sure not to recurse if the literal gets out of range to avoid
 -- an infinite loop with an infinite or undefined list
@@ -3819,6 +3820,7 @@ primitive primListAppend :: List a -> List a -> List a
 primitive primListConcat :: List (List a) -> List a
 primitive primListLength :: List a -> Integer
 primitive primListSelect :: List a -> Integer -> a
+primitive primListZipWith :: (a -> b -> c) -> List a -> List b -> List c
 
 primitive primMarkArrayInitialized :: Array a -> Array a
 
