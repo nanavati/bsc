@@ -3971,49 +3971,49 @@ conAp' _ (ICPrim _ PrimNoReset) f as = bldAp' "PrimNoReset" (icNoReset) as
 -- evaluate PrimNoPosition
 conAp' _ (ICPrim _ PrimNoPosition) f as = bldAp' "PrimNoPosition" (icNoPosition) as
 
-conAp' i (ICPrim _ PrimArrayNew) f as = do
+conAp' _ (ICPrim _ PrimArrayNew) f [T t, E sz, E val] = do
   when doDebug $ traceM ("conAp': Lazy PrimArrayNew")
-  doArrayNew f as
+  doArrayNew f t sz val
 
-conAp' i (ICPrim _ PrimArrayLength) f [T t, E e] = do
+conAp' _ (ICPrim _ PrimArrayLength) f [T t, E e] = do
   when doDebug $ traceM ("conAp': Lazy PrimArrayLength!")
-  doArrayLength f [T t, E e]
+  doArrayLength f t e
 
-conAp' i (ICPrim _ PrimArraySelect) f as = do
+conAp' _ (ICPrim _ PrimArraySelect) f (T t : E arr : E idx : as) = do
   when doDebug $ traceM ("conAp': Lazy PrimArraySelect!")
-  doArraySelect f as
+  doArraySelect f t arr idx as
 
-conAp' i (ICPrim _ PrimArrayUpdate) f as = do
+conAp' _ (ICPrim _ PrimArrayUpdate) f [T t, E arr, E idx, E val] = do
   when doDebug $ traceM ("conAp': Lazy PrimArrayUpdate!")
-  doArrayUpdate f as
+  doArrayUpdate f t arr idx val
 
-conAp' i (ICPrim _ PrimArrayMap) f as = do
+conAp' _ (ICPrim _ PrimArrayMap) f [T a, T b, E func, E arr] = do
   when doDebug $ traceM ("conAp': PrimArrayMap!")
-  doArrayMap f as
+  doArrayMap f a b func arr
 
-conAp' i (ICPrim _ PrimArrayFoldL) f as = do
+conAp' _ (ICPrim _ PrimArrayFoldL) f (T b : T a : E func : E init_e : E arr : as) = do
   when doDebug $ traceM ("conAp': PrimArrayFoldL!")
-  doArrayFoldL f as
+  doArrayFoldL f b a func init_e arr as
 
-conAp' i (ICPrim _ PrimArrayFoldR) f as = do
+conAp' _ (ICPrim _ PrimArrayFoldR) f (T a : T b : E func : E init_e : E arr : as) = do
   when doDebug $ traceM ("conAp': PrimArrayFoldR!")
-  doArrayFoldR f as
+  doArrayFoldR f a b func init_e arr as
 
-conAp' i (ICPrim _ PrimArrayZipWith) f as = do
+conAp' _ (ICPrim _ PrimArrayZipWith) f [T a, T b, T c, E func, E arr1, E arr2] = do
   when doDebug $ traceM ("conAp': PrimArrayZipWith!")
-  doArrayZipWith f as
+  doArrayZipWith f a b c func arr1 arr2
 
-conAp' i (ICPrim _ PrimArrayGenWith) f as = do
+conAp' _ (ICPrim _ PrimArrayGenWith) f [T t, E sz, E func] = do
   when doDebug $ traceM ("conAp': PrimArrayGenWith!")
-  doArrayGenWith f as
+  doArrayGenWith f t sz func
 
-conAp' i (ICPrim _ PrimArrayToList) f as = do
+conAp' _ (ICPrim _ PrimArrayToList) f [T t, E arr] = do
   when doDebug $ traceM ("conAp': PrimArrayToList!")
-  doArrayToList f as
+  doArrayToList f t arr
 
-conAp' i (ICPrim _ PrimListToArray) f as = do
+conAp' _ (ICPrim _ PrimListToArray) f [T t, E list_e] = do
   when doDebug $ traceM ("conAp': PrimListToArray!")
-  doListToArray f as
+  doListToArray f t list_e
 
 conAp' i (ICPrim _ PrimArrayAppend) f
            [T a_ty, E arr1_e, E arr2_e] = do
@@ -4336,8 +4336,8 @@ ppExprRefs r@(IRefT _ _ _ _) = do
 
 -----------------------------------------------------------------------------
 
-doArrayNew :: HExpr -> [Arg] -> G PExpr
-doArrayNew f@(ICon cn (ICPrim {primOp = PrimArrayNew, iConType = conType })) [T t, E e1, E val] = do
+doArrayNew :: HExpr -> IType -> HExpr -> HExpr -> G PExpr
+doArrayNew f@(ICon cn (ICPrim {primOp = PrimArrayNew, iConType = conType })) t e1 val = do
      -- save val to prevent redundant evaluation
      val' <- toHeap "array-new" t val Nothing
      norm <- getTypeNormalizer
@@ -4350,23 +4350,20 @@ doArrayNew f@(ICon cn (ICPrim {primOp = PrimArrayNew, iConType = conType })) [T 
           return $ pExpr $ ICon ci (ICLazyArray resultType' arr Nothing)
         handleArrayNew val' _ e1' =
           nfError "primArrayNew" $ mkAp f [T t, E e1', E val']
+doArrayNew f _ _ _ = internalError ("IExpand.doArrayNew : " ++ ppReadable f)
 
-doArrayNew f as = internalError ("IExpand.doArrayNew : " ++ ppReadable f ++ ppReadable as)
-
-doArrayLength :: HExpr -> [Arg] -> G PExpr
-doArrayLength f as@[T elem_t, E arr_e] =
+doArrayLength :: HExpr -> IType -> HExpr -> G PExpr
+doArrayLength f elem_t arr_e =
     evalStaticOp arr_e itInteger handleArrayLength
   where handleArrayLength (ICon ci (ICLazyArray {iArray = arr})) = do
           ln <- iArrayLength arr
           return $ pExpr $ ICon ci (ICInt { iConType = itInteger, iVal = ilDec ln })
         handleArrayLength (IAps (ICon _ (ICPrim _ PrimArrayDynUpdate))
-                                ts [arr_e2, idx_e, val_e]) = do
+                                ts [arr_e2, idx_e, val_e]) =
           -- update does not change the array length, so recurse into arr_e2
-          doArrayLength f [T elem_t, E arr_e2]
+          doArrayLength f elem_t arr_e2
         handleArrayLength arr_e' =
           nfError "primArrayLength" $ mkAp f [T elem_t, E arr_e']
-
-doArrayLength f as = internalError("IExpand.doArrayLength : " ++ ppReadable f ++ ppReadable as)
 
 -- Perform static array selection
 --
@@ -4386,8 +4383,8 @@ doArrayLength f as = internalError("IExpand.doArrayLength : " ++ ppReadable f ++
 -- And which way is better for reconstructing case-statements (in the index and
 -- in the array)?  We'll need to experiment.
 --
-doArraySelect :: HExpr -> [Arg] -> G PExpr
-doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
+doArraySelect :: HExpr -> IType -> HExpr -> HExpr -> [Arg] -> G PExpr
+doArraySelect f elem_t arr_e idx_e as = do
   (_, (P p idx_e')) <- evalUH idx_e
   case idx_e' of
     ICon idx_i idx_ic@(ICInt { iVal = IntLit { ilValue = index } }) -> do
@@ -4422,15 +4419,13 @@ doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
         addPredG p $ evalStaticOp arr_e elem_t handleArraySelect
     _ -> internalError ("IExpand.doArraySelect: index: " ++ ppReadable idx_e')
 
-doArraySelect f as = internalError("IExpand.doArraySelect : " ++ ppReadable f ++ ppReadable as)
-
 -- Perform static array update
 --
 -- See comments on doArraySelect.
 --
-doArrayUpdate :: HExpr -> [Arg] -> G PExpr
+doArrayUpdate :: HExpr -> IType -> HExpr -> HExpr -> HExpr -> G PExpr
 doArrayUpdate f@(ICon upd_i (ICPrim {iConType = opType}))
-              as@[T elem_t, E arr_e, E idx_e, E val_e] = do
+              elem_t arr_e idx_e val_e = do
   (_, P idx_p idx_e') <- evalUH idx_e
   case idx_e' of
     ICon _ (ICInt { iVal = IntLit { ilValue = index } }) -> do
@@ -4459,7 +4454,7 @@ doArrayUpdate f@(ICon upd_i (ICPrim {iConType = opType}))
         addPredG idx_p $ evalStaticOp arr_e res_t handleArrayUpdate
     _ -> internalError ("IExpand.doArrayUpdate: index: " ++ ppReadable idx_e')
 
-doArrayUpdate f as = internalError("IExpand.doArrayUpdate : " ++ ppReadable f ++ ppReadable as)
+doArrayUpdate f _ _ _ _ = internalError("IExpand.doArrayUpdate : " ++ ppReadable f)
 
 -- Expand a PrimArrayDynUpdate expression into an ICLazyArray.
 -- For each element i, creates: if (dyn_idx == i) then upd_val else base[i]
@@ -4510,9 +4505,9 @@ withNormalizedArray doUH arr_e arrType handler =
             Nothing      -> handler p e'
     in evalStaticOp' doUH True True arr_e arrType handler'
 
-doArrayMap :: HExpr -> [Arg] -> G PExpr
+doArrayMap :: HExpr -> IType -> IType -> HExpr -> HExpr -> G PExpr
 doArrayMap f@(ICon _ (ICPrim {primOp = PrimArrayMap}))
-           [T a_ty, T b_ty, E func, E arr_e] = do
+           a_ty b_ty func arr_e = do
     norm <- getTypeNormalizer
     func' <- toHeap "array-map-fn" (norm (a_ty `itFun` b_ty)) func Nothing
     let resultType = norm (ITAp itPrimArray b_ty)
@@ -4528,12 +4523,11 @@ doArrayMap f@(ICon _ (ICPrim {primOp = PrimArrayMap}))
           let arr' = Array.listArray (Array.bounds arr) cells
           return $ P pTrue $ ICon ci (ICLazyArray resultType arr' uninit)
         _ -> nfError "primArrayMap" $ mkAp f [T a_ty, T b_ty, E func, E arr_e']
+doArrayMap f _ _ _ _ = internalError("IExpand.doArrayMap : " ++ ppReadable f)
 
-doArrayMap f as = internalError("IExpand.doArrayMap : " ++ ppReadable f ++ ppReadable as)
-
-doArrayFoldL :: HExpr -> [Arg] -> G PExpr
+doArrayFoldL :: HExpr -> IType -> IType -> HExpr -> HExpr -> HExpr -> [Arg] -> G PExpr
 doArrayFoldL f@(ICon _ (ICPrim {primOp = PrimArrayFoldL}))
-             [T b_ty, T a_ty, E func, E init_e, E arr_e] = do
+             b_ty a_ty func init_e arr_e as = do
     norm <- getTypeNormalizer
     func' <- toHeap "array-foldl-fn" (norm (b_ty `itFun` a_ty `itFun` b_ty)) func Nothing
     let a_ty' = norm a_ty
@@ -4549,15 +4543,17 @@ doArrayFoldL f@(ICon _ (ICPrim {primOp = PrimArrayFoldL}))
                 acc' <- toHeap "array-foldl-acc" b_ty' (pExprToHExpr acc) Nothing
                 evalAp "array-foldl" func' [E acc', E elem_e]
           init_pe <- eval1 init_e
-          foldM foldCell init_pe [lo..hi]
+          result <- foldM foldCell init_pe [lo..hi]
+          case as of
+            [] -> return result
+            _  -> evalAp "array-foldl-rest" (pExprToHExpr result) as
         _ -> nfError "primArrayFoldL" $
                mkAp f [T b_ty, T a_ty, E func, E init_e, E arr_e']
+doArrayFoldL f _ _ _ _ _ _ = internalError ("IExpand.doArrayFoldL : " ++ ppReadable f)
 
-doArrayFoldL f as = internalError("IExpand.doArrayFoldL : " ++ ppReadable f ++ ppReadable as)
-
-doArrayFoldR :: HExpr -> [Arg] -> G PExpr
+doArrayFoldR :: HExpr -> IType -> IType -> HExpr -> HExpr -> HExpr -> [Arg] -> G PExpr
 doArrayFoldR f@(ICon _ (ICPrim {primOp = PrimArrayFoldR}))
-             [T a_ty, T b_ty, E func, E init_e, E arr_e] = do
+             a_ty b_ty func init_e arr_e as = do
     norm <- getTypeNormalizer
     func' <- toHeap "array-foldr-fn" (norm (a_ty `itFun` b_ty `itFun` b_ty)) func Nothing
     let a_ty' = norm a_ty
@@ -4573,15 +4569,17 @@ doArrayFoldR f@(ICon _ (ICPrim {primOp = PrimArrayFoldR}))
                 acc' <- toHeap "array-foldr-acc" b_ty' (pExprToHExpr acc) Nothing
                 evalAp "array-foldr" func' [E elem_e, E acc']
           init_pe <- eval1 init_e
-          foldM foldCell init_pe [hi, hi-1 .. lo]
+          result <- foldM foldCell init_pe [hi, hi-1 .. lo]
+          case as of
+            [] -> return result
+            _  -> evalAp "array-foldr-rest" (pExprToHExpr result) as
         _ -> nfError "primArrayFoldR" $
                mkAp f [T a_ty, T b_ty, E func, E init_e, E arr_e']
+doArrayFoldR f _ _ _ _ _ _ = internalError("IExpand.doArrayFoldR : " ++ ppReadable f)
 
-doArrayFoldR f as = internalError("IExpand.doArrayFoldR : " ++ ppReadable f ++ ppReadable as)
-
-doArrayZipWith :: HExpr -> [Arg] -> G PExpr
+doArrayZipWith :: HExpr -> IType -> IType -> IType -> HExpr -> HExpr -> HExpr -> G PExpr
 doArrayZipWith f@(ICon _ (ICPrim {primOp = PrimArrayZipWith}))
-               [T a_ty, T b_ty, T c_ty, E func, E arr1_e, E arr2_e] = do
+               a_ty b_ty c_ty func arr1_e arr2_e = do
     norm <- getTypeNormalizer
     func' <- toHeap "array-zipwith-fn" (norm (a_ty `itFun` b_ty `itFun` c_ty)) func Nothing
     let resultType = norm (ITAp itPrimArray c_ty)
@@ -4614,12 +4612,11 @@ doArrayZipWith f@(ICon _ (ICPrim {primOp = PrimArrayZipWith}))
                      mkAp f [T a_ty, T b_ty, T c_ty, E func, E arr1_e, E arr2_e']
         _ -> nfError "primArrayZipWith" $
                mkAp f [T a_ty, T b_ty, T c_ty, E func, E arr1_e', E arr2_e]
+doArrayZipWith f _ _ _ _ _ _ = internalError("IExpand.doArrayZipWith : " ++ ppReadable f)
 
-doArrayZipWith f as = internalError("IExpand.doArrayZipWith : " ++ ppReadable f ++ ppReadable as)
-
-doArrayGenWith :: HExpr -> [Arg] -> G PExpr
+doArrayGenWith :: HExpr -> IType -> HExpr -> HExpr -> G PExpr
 doArrayGenWith f@(ICon _ (ICPrim {primOp = PrimArrayGenWith}))
-               [T a_ty, E size_e, E func] = do
+               a_ty size_e func = do
     norm <- getTypeNormalizer
     func' <- toHeap "array-genwith-fn" (norm (itInteger `itFun` a_ty)) func Nothing
     let resultType = norm (ITAp itPrimArray a_ty)
@@ -4635,8 +4632,7 @@ doArrayGenWith f@(ICon _ (ICPrim {primOp = PrimArrayGenWith}))
       return $ pExpr $ ICon ci (ICLazyArray resultType arr Nothing)
     handleGenWith _ _ e' =
       nfError "primArrayGenWith" $ mkAp f [T a_ty, E e', E func]
-
-doArrayGenWith f as = internalError("IExpand.doArrayGenWith : " ++ ppReadable f ++ ppReadable as)
+doArrayGenWith f _ _ _ = internalError("IExpand.doArrayGenWith : " ++ ppReadable f)
 
 evalListElems :: IType -> HExpr -> G [HExpr]
 evalListElems elem_ty e = do
@@ -4659,9 +4655,9 @@ evalListElemsP elem_ty e = do
       else internalError ("evalListElemsP con: " ++ show i)
     _ -> nfError "evalListElemsP" e'
 
-doArrayToList :: HExpr -> [Arg] -> G PExpr
+doArrayToList :: HExpr -> IType -> HExpr -> G PExpr
 doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
-              [T a_ty, E arr_e] = do
+              a_ty arr_e = do
     norm <- getTypeNormalizer
     let a_ty' = norm a_ty
         arrType = norm (ITAp itPrimArray a_ty)
@@ -4673,12 +4669,11 @@ doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
               elems = map cellToExpr (Array.elems arr)
           return $ pExpr $ iMkList a_ty' elems
         _ -> nfError "primArrayToList" $ mkAp f [T a_ty, E arr_e']
+doArrayToList f _ _ = internalError("IExpand.doArrayToList : " ++ ppReadable f)
 
-doArrayToList f as = internalError("IExpand.doArrayToList : " ++ ppReadable f ++ ppReadable as)
-
-doListToArray :: HExpr -> [Arg] -> G PExpr
+doListToArray :: HExpr -> IType -> HExpr -> G PExpr
 doListToArray f@(ICon fi (ICPrim {primOp = PrimListToArray}))
-              [T a_ty, E list_e] = do
+              a_ty list_e = do
     norm <- getTypeNormalizer
     let a_ty' = norm a_ty
         resultType = norm (ITAp itPrimArray a_ty)
@@ -4688,8 +4683,7 @@ doListToArray f@(ICon fi (ICPrim {primOp = PrimListToArray}))
         arr = Array.listArray (0, n-1) cells
     addPredG p $
       return $ pExpr $ ICon fi (ICLazyArray resultType arr Nothing)
-
-doListToArray f as = internalError("IExpand.doListToArray : " ++ ppReadable f ++ ppReadable as)
+doListToArray f _ _ = internalError("IExpand.doListToArray : " ++ ppReadable f)
 
 -- if without extra arguments
 doIf :: HExpr -> [Arg] -> G PExpr

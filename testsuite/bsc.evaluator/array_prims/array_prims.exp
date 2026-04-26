@@ -64,3 +64,15 @@ test_c_veri_bsv ImplCondDynSelVec "" "" "" 1
 test_c_veri_bsv ImplCondDynSelSL "sysImplCondDynSelVec.out.expected" "" "" 1
 test_c_veri ImplCondDynSelVecClassic "sysImplCondDynSelVec.out.expected" "" "" 1
 test_c_veri ImplCondDynSelSLClassic "sysImplCondDynSelVec.out.expected" "" "" 1
+
+# --- Partial application of array primitives ---
+# Tests that partially-applied primitives fall through to bldAp'
+# instead of crashing in the do* handler.
+test_c_veri_bsv PartialApply
+test_c_veri PartialApplyClassic "sysPartialApply.out.expected"
+
+# --- Over-application of array primitives ---
+# Tests that polymorphic-result primitives (select, foldl, foldr)
+# forward trailing args when the result is a function.
+test_c_veri_bsv OverApply
+test_c_veri OverApplyClassic "sysOverApply.out.expected"
