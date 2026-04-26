@@ -89,8 +89,7 @@ infixr  8 :>
 --@ function List#(b) map (function b f(a), List#(a) xs);
 --@ \end{libverbatim}
 map :: (a -> b) -> List a -> List b
-map _ Nil = Nil
-map f (Cons x xs) = Cons (f x) (map f xs)
+map = primListMap
 
 --@ Return elements that satisfy the predicate
 --@ \index{filter@\te{filter} (\te{List} function)}

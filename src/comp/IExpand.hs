@@ -4007,6 +4007,10 @@ conAp' _ (ICPrim _ PrimArrayGenWith) f [T t, E sz, E func] = do
   when doDebug $ traceM ("conAp': PrimArrayGenWith!")
   doArrayGenWith f t sz func
 
+conAp' _ (ICPrim _ PrimListMap) f [T a, T b, E func, E list_e] = do
+  when doDebug $ traceM ("conAp': PrimListMap!")
+  doListMap f a b func list_e
+
 conAp' _ (ICPrim _ PrimArrayToList) f [T t, E arr] = do
   when doDebug $ traceM ("conAp': PrimArrayToList!")
   doArrayToList f t arr
@@ -4633,6 +4637,63 @@ doArrayGenWith f@(ICon _ (ICPrim {primOp = PrimArrayGenWith}))
     handleGenWith _ _ e' =
       nfError "primArrayGenWith" $ mkAp f [T a_ty, E e', E func]
 doArrayGenWith f _ _ _ = internalError("IExpand.doArrayGenWith : " ++ ppReadable f)
+
+-- Walk a list spine, handling PrimIf/PrimWhenPred/ICUndet at each node.
+-- Calls nilHandler on Nil, consHandler on Cons with (pred, head, tail).
+-- result_ty is used for improveIf merging on PrimIf branches.
+evalListOp :: HExpr -> IType -> IType ->
+              (HPred -> G PExpr) ->
+              (HPred -> HExpr -> HExpr -> G PExpr) ->
+              G PExpr
+evalListOp e elem_ty result_ty nilHandler consHandler = do
+  (_, P p e') <- evalUH e
+  case e' of
+    ICon i (ICUndet { iuKind = k }) -> do
+      let kind_integer = undefKindToInteger k
+      addPredG p $ doBuildUndefined result_ty (getPosition i) kind_integer []
+
+    IAps f@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els] -> do
+      P pthn thn' <- evalListOp thn elem_ty result_ty nilHandler consHandler
+      P pels els' <- evalListOp els elem_ty result_ty nilHandler consHandler
+      (e'', _) <- improveIf f result_ty cnd thn' els'
+      p' <- pIf cnd (pConj p pthn) (pConj p pels)
+      return (P p' e'')
+
+    IAps (ICon _ (ICPrim _ PrimWhenPred)) [_]
+         [ICon _ (ICPred _ p_when), e_body] -> do
+      P p_body e_body' <-
+          evalListOp e_body elem_ty result_ty nilHandler consHandler
+      return (P (pConj p (pConj p_when p_body)) e_body')
+
+    IAps (ICon i _) _ [a]
+      | i == idPrimChr -> nilHandler p
+      | i == idCons noPosition -> do
+          (_, P pa a') <- evalUH a
+          case a' of
+            IAps (ICon _ (ICTuple {})) _ [e_h, e_t] ->
+              consHandler (pConj p pa) e_h e_t
+            _ -> internalError ("evalListOp Cons: " ++ showTypeless a')
+
+    _ -> nfError "evalListOp" e'
+
+doListMap :: HExpr -> IType -> IType -> HExpr -> HExpr -> G PExpr
+doListMap f@(ICon _ (ICPrim {primOp = PrimListMap}))
+          a_ty b_ty func list_e = do
+    norm <- getTypeNormalizer
+    func' <- toHeap "list-map-fn" (norm (a_ty `itFun` b_ty)) func Nothing
+    let b_ty' = norm b_ty
+        a_ty' = norm a_ty
+        result_ty = norm (itList b_ty)
+    let mapList e =
+          evalListOp e a_ty' result_ty
+            (\p -> return $ P p $ iMkNil b_ty')
+            (\p e_h e_t -> do
+              let mapped_h = pExprToHExpr (P p (iAp func' e_h))
+              P p_rest mapped_t <- mapList e_t
+              return $ P p_rest $ iMkCons b_ty' mapped_h mapped_t)
+    mapList list_e
+
+doListMap f _ _ _ _ = internalError("IExpand.doListMap : " ++ ppReadable f)
 
 evalListElems :: IType -> HExpr -> G [HExpr]
 evalListElems elem_ty e = do

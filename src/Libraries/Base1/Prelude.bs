@@ -225,6 +225,7 @@ package Prelude(
         primArrayAppend,
         primArrayConcat,
         primArrayReverse,
+        primListMap,
         arrayLength,
         primArrayInitialize,
         primArrayCheck,
@@ -3764,8 +3765,7 @@ listPrimSomeBitsToList i n bs =
         in  Cons x (listPrimSomeBitsToList i' n bs)
 
 listPrimMap :: (c -> d) -> List c -> List d
-listPrimMap _ Nil = Nil
-listPrimMap f (Cons x xs) = Cons (f x) (listPrimMap f xs)
+listPrimMap = primListMap
 
 listPrimFoldL :: (b -> a -> b) -> b -> List a -> b
 listPrimFoldL _ z Nil = z
@@ -3816,6 +3816,7 @@ primitive primListToArray :: List a -> Array a
 primitive primArrayAppend :: Array a -> Array a -> Array a
 primitive primArrayConcat :: Array (Array a) -> Array a
 primitive primArrayReverse :: Array a -> Array a
+primitive primListMap :: (a -> b) -> List a -> List b
 
 primitive primMarkArrayInitialized :: Array a -> Array a
 

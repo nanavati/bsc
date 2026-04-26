@@ -323,6 +323,7 @@ data PrimOp =
         | PrimArrayAppend
         | PrimArrayConcat
         | PrimArrayReverse
+        | PrimListMap
         | PrimBuildArray -- only exists after IExpand and in ASyntax
 
         | PrimSetSelPosition
@@ -580,6 +581,7 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primArrayAppend" = PrimArrayAppend
         tp "primArrayConcat" = PrimArrayConcat
         tp "primArrayReverse" = PrimArrayReverse
+        tp "primListMap" = PrimListMap
         tp "primBuildArray" = PrimBuildArray
 
         tp "primSetSelPosition" = PrimSetSelPosition
@@ -896,6 +898,7 @@ instance NFData PrimOp where
     rnf PrimArrayAppend = ()
     rnf PrimArrayConcat = ()
     rnf PrimArrayReverse = ()
+    rnf PrimListMap = ()
     rnf PrimBuildArray = ()
     rnf PrimSetSelPosition = ()
     rnf PrimGetParamName = ()
