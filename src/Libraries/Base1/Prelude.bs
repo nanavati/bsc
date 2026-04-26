@@ -226,6 +226,12 @@ package Prelude(
         primArrayConcat,
         primArrayReverse,
         primListMap,
+        primListFoldL,
+        primListFoldR,
+        primListAppend,
+        primListConcat,
+        primListLength,
+        primListSelect,
         arrayLength,
         primArrayInitialize,
         primArrayCheck,
@@ -3636,12 +3642,10 @@ decodeList Nil = Invalid
 -- to be able to import standard list functions qualified
 -- not sure why re-exporting isn't working...
 listPrimAppend :: List a -> List a -> List a
-listPrimAppend Nil ys = ys
-listPrimAppend (Cons x xs) ys = Cons x (listPrimAppend xs ys)
+listPrimAppend = primListAppend
 
 listPrimConcat :: List (List a) -> List a
-listPrimConcat Nil = Nil
-listPrimConcat (Cons x xs) = listPrimAppend x (listPrimConcat xs)
+listPrimConcat = primListConcat
 
 instance PrimSelectable (List a) a
   where
@@ -3710,16 +3714,11 @@ listLength' (Cons _ xs) n = if (n == n) then
 
 listStaticSelect :: Position__ -> List a -> Integer -> a
 listStaticSelect pos xs n =
-    let listPrimSelect' :: List b -> Integer -> Integer -> b
-        listPrimSelect' Nil _ n0 =
-           let b = n0 < 0 || listNullOrUndef (listDrop n0 xs)
-              -- don't raise an error unless we can prove we are out-of-bounds
-           in if (isStaticValue b) && b then
-                primError pos $ listMessage n0 "list selection"
-              else primBuildUndefined pos iuDontCare -- should add runtime error here
-        listPrimSelect' (Cons x _) 0 _  = x
-        listPrimSelect' (Cons _ vs) i i0 = listPrimSelect' vs (i-1) i0
-    in  listPrimSelect' xs n n
+    let len = listPrimLength xs
+        oob = n < 0 || n >= len
+    in if isStaticValue oob && oob then
+         primError pos $ listMessage n "list selection"
+       else primListSelect xs n
 
 listPrimNum :: List e -> List (e, Integer)
 listPrimNum l = let listPrimNum' :: List e -> Integer -> List (e, Integer)
@@ -3737,8 +3736,7 @@ listDynamicSelect pos xs n = letseq rangeTest = inLiteralRange n
                              in listPrimFoldR f (primBuildUndefined pos iuDontCare) (listPrimNum xs)
 
 listPrimLength :: List a -> Integer
-listPrimLength Nil = 0
-listPrimLength (Cons _ xs) = 1 + (listPrimLength xs)
+listPrimLength = primListLength
 
 listPrimUpdate :: (PrimIndex ix dx) => Position__ -> List a -> ix -> a -> List a
 listPrimUpdate pos l k x =
@@ -3768,12 +3766,10 @@ listPrimMap :: (c -> d) -> List c -> List d
 listPrimMap = primListMap
 
 listPrimFoldL :: (b -> a -> b) -> b -> List a -> b
-listPrimFoldL _ z Nil = z
-listPrimFoldL f z (Cons x xs) = listPrimFoldL f (f z x) xs
+listPrimFoldL = primListFoldL
 
 listPrimFoldR :: (a -> b -> b) -> b -> List a -> b
-listPrimFoldR _ z Nil = z
-listPrimFoldR f z (Cons x xs) = f x (listPrimFoldR f z xs)
+listPrimFoldR = primListFoldR
 
 constantWithAllBitsSet :: (Bit sa)
 constantWithAllBitsSet = ((invert 0) :: Bit sa)
@@ -3817,6 +3813,12 @@ primitive primArrayAppend :: Array a -> Array a -> Array a
 primitive primArrayConcat :: Array (Array a) -> Array a
 primitive primArrayReverse :: Array a -> Array a
 primitive primListMap :: (a -> b) -> List a -> List b
+primitive primListFoldL :: (b -> a -> b) -> b -> List a -> b
+primitive primListFoldR :: (a -> b -> b) -> b -> List a -> b
+primitive primListAppend :: List a -> List a -> List a
+primitive primListConcat :: List (List a) -> List a
+primitive primListLength :: List a -> Integer
+primitive primListSelect :: List a -> Integer -> a
 
 primitive primMarkArrayInitialized :: Array a -> Array a
 
