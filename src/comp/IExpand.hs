@@ -3194,14 +3194,9 @@ conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
       E e : as' -> do
           let tys = takeT as
               ty = case itInstNorm norm outty tys of
-                     (ITAp _ t) -> t
+                     (ITAp (ITAp arr _) t) | arr == itArrow -> t
                      _ -> internalError "IExpand.conAp' ICOut: ty"
-              resType = dropArrows (length as') ty
-{-        -- XXX do we need to heap the args, to avoid duplication?
-          let toHeapArg (E e) = toHeapInferName "out-arg" e >>= return . E
-              toHeapArg a = return a
-          as'' <- mapM toHeapArg as'
--}
+              resType = dropArgs norm as' ty
           evalStaticOp' True True False e resType (doOut o c tys ty cti as')
       _ -> internalError ("conAp': ICOut: " ++ ppReadable (mkAp o as))
 conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
@@ -3210,14 +3205,9 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
       E e : as' -> do
           let tys = takeT as
               ty = case itInstNorm norm selty tys of
-                     (ITAp _ t) -> t
+                     (ITAp (ITAp arr _) t) | arr == itArrow -> t
                      _ -> internalError "IExpand.conAp' ICSel: ty"
-              resType = dropArrows (length as') ty
-{-        -- XXX do we need to heap the args, to avoid duplication?
-          let toHeapArg (E e) = toHeapInferName "sel-arg" e >>= return . E
-              toHeapArg a = return a
-          as'' <- mapM toHeapArg as'
--}
+              resType = dropArgs norm as' ty
           evalStaticOp' True True False e resType (doSel sel c tys ty n as')
       _ -> internalError ("conAp': ICSel: " ++ ppReadable (mkAp sel as))
 
@@ -3916,10 +3906,12 @@ conAp' i ic@(ICPrim _ PrimGenModuleName) p [] = do
 conAp' i ic@(ICPrim _ PrimIf) p (T ty : E c : E t : E e : as@(_:_)) = do
  --       traceM ("as: " ++ (show as))
  --       traceM ("ty: " ++ (show ty))
+        norm <- getTypeNormalizer
+        let ty' = dropArgs norm as ty
         as' <- mapM toHeapArg as
         when doDebug $ traceM ("if " ++ ppReadable (zip as' as))
         conAp i ic p [T ty', E c, E (mkAp t as'), E (mkAp e as')]
-  where ty' = dropArrows (length as) ty
+  where
         -- avoid duplicating arguments to if
         toHeapArg (E e) = toHeapInferName "if-arg" e >>= return . E
         toHeapArg a = return a
@@ -4898,6 +4890,17 @@ dropT as = as
 takeT :: [Arg] -> [IType]
 takeT (T t : as) = t : takeT as
 takeT _ = []
+
+-- Compute the result type after applying a mixed list of T and E args:
+-- T args instantiate foralls (via itInst then normalize, since the
+-- instantiation may expose type functions), E args peel one arrow each.
+-- Unlike dropArrows, this handles higher-rank types where T and E args
+-- are interleaved (e.g. a struct field of type forall a. C a => a -> a).
+dropArgs :: (IType -> IType) -> [Arg] -> IType -> IType
+dropArgs _    [] t = t
+dropArgs norm (T ty : as) t = dropArgs norm as (norm (itInst t [ty]))
+dropArgs norm (E _ : as) (ITAp (ITAp arr _) t) | arr == itArrow = dropArgs norm as t
+dropArgs _    as t = internalError ("dropArgs: " ++ ppReadable (as, t))
 
 firstE :: String -> [Arg] -> HExpr
 firstE err ((E e):_)  = e
