@@ -4715,7 +4715,7 @@ doListMap f@(ICon _ (ICPrim {primOp = PrimListMap}))
           evalListOp e a_ty' result_ty
             (\p -> return $ P p $ iMkNil b_ty')
             (\p e_h e_t -> do
-              let mapped_h = pExprToHExpr (P p (iAp func' e_h))
+              mapped_h <- toHeap "list-map-elem" b_ty' (pExprToHExpr (P p (iAp func' e_h))) Nothing
               P p_rest mapped_t <- mapList e_t
               return $ P p_rest $ iMkCons b_ty' mapped_h mapped_t)
     mapList list_e
@@ -4738,7 +4738,7 @@ doListZipWith f@(ICon _ (ICPrim {primOp = PrimListZipWith}))
               evalListOp e2 b_ty' result_ty
                 (\p2 -> return $ P (pConj p1 p2) $ iMkNil c_ty')
                 (\p2 e_h2 e_t2 -> do
-                  let mapped_h = pExprToHExpr (P (pConj p1 p2) (iAp (iAp func' e_h1) e_h2))
+                  mapped_h <- toHeap "list-zipwith-elem" c_ty' (pExprToHExpr (P (pConj p1 p2) (iAp (iAp func' e_h1) e_h2))) Nothing
                   P p_rest mapped_t <- zipLists e_t1 e_t2
                   return $ P p_rest $ iMkCons c_ty' mapped_h mapped_t))
     zipLists list1_e list2_e
