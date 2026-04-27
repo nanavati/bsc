@@ -689,8 +689,10 @@ aExp bflags etop@(ASDef t aid) =
            aggInline = ao_aggInline bflags
        return $
          case (aggInline, e ) of
-           (True,  el@(APrim _ _ PrimExtract [ _, (ASInt {} ), (ASInt {} ) ]))
-                                        -> el
+           -- It doesn't name sense to repeat a nontrivial expression just to inline
+           -- the bit extraction.
+           (True,  el@(APrim _ _ PrimExtract [ arg, (ASInt {} ), (ASInt {} ) ]))
+             | isASimple arg            -> el
            (True,  el@(AMethValue {} )) -> el
            (True,  el@(ASPort {} ))     -> el
            (True,  el@(ASParam {} ))    -> el
