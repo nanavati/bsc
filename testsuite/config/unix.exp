@@ -2152,6 +2152,14 @@ proc files_exist_bug { filenames { bug "" } } {
     files_exist $filenames
 }
 
+proc file_contains { filename pattern } {
+    if { ![file exists $filename] } { return 0 }
+    set fh [open $filename r]
+    set data [read $fh]
+    close $fh
+    return [expr {[string first $pattern $data] >= 0}]
+}
+
 proc compare_file { filename {expected ""} {stat "compare_file"}} {
     # FIX: make diff ignore alpha renaming?
     global srcdir
@@ -2752,6 +2760,9 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
     global vtest
     global lasterr
     global target_triplet
+    global verilog_compiler
+    global srcdir
+    global subdir
 
     if {[string compare $expected ""] == 0} {
         set expected "$sysmod.out.expected"
@@ -2785,7 +2796,17 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
         }
 
         compile_verilog_pass $top.$extension $sysmod $gen_options
+
+        # Designs that Verilator cannot build are detected after the link:
+        # the build script refuses them with a distinctive message, which
+        # link_verilog_pass records as an XFAIL, and we skip the run/compare
+        # steps (see verilator_link_locked).
+        set _vlt_xfail 0
+
         link_verilog_pass [join $vmods] $sysmod $link_options
+        if { [verilator_link_locked] } { set _vlt_xfail 1 }
+
+        if { ! $_vlt_xfail } {
         # if veribug is specified, we know the output will differ,
         # but we don't know if the sim will exit normally or not
         if { $veribug == "" } {
@@ -2825,6 +2846,7 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
 
             # XXX
             #check_verilog_output $sysmod.v-vcd.out $expected $veribug
+        }
         }
     }
 

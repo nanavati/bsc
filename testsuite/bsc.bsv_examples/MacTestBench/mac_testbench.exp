@@ -1,14 +1,23 @@
 if { $vtest == 1 && [isPositiveReset] == 0} {
 
+# These designs instantiate clock/reset generators, so under Verilator
+# (without the --timing back door) the link is locked: link_verilog_pass
+# records the lock as an XFAIL, and the run/compare is skipped since there
+# is no executable to run.
+
 compile_verilog_pass  TbEnv.bsv mkTbEnv -let-gen
 link_verilog_pass {mkTbEnv.v} mkTbEnv
-sim_verilog mkTbEnv "+receive +transmit"
-compare_file mkTbEnv.out mkTbEnv.out.expected
+if { ! [verilator_link_locked] } {
+    sim_verilog mkTbEnv "+receive +transmit"
+    compare_file mkTbEnv.out mkTbEnv.out.expected
+}
 
 compile_verilog_pass  SimpleSwitch.bsv
 link_verilog_pass {mkSimpleSwitch.v} mkSimpleSwitch
-sim_verilog mkSimpleSwitch "+receive +transmit"
-compare_file mkSimpleSwitch.out mkSimpleSwitch.out.expected
+if { ! [verilator_link_locked] } {
+    sim_verilog mkSimpleSwitch "+receive +transmit"
+    compare_file mkSimpleSwitch.out mkSimpleSwitch.out.expected
+}
 
 }
 
