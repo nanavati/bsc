@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances, PatternGuards #-}
 {-# LANGUAGE FlexibleInstances #-}
-module AVerilog (aVerilog) where
+module AVerilog (aVerilog, instGensClockOrReset) where
 
 import Data.List(nub,
             partition,
@@ -30,6 +30,7 @@ import Pragma(PProp(..))
 import ASyntax
 import ASyntaxUtil
 import Verilog
+import VModInfo(vClk, vRst, output_clocks, output_resets)
 import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
@@ -55,6 +56,16 @@ import qualified GraphWrapper as G
 -- Flags are the compiler flags
 -- [PProp] are the Pragmas
 -- XXX this function is too big
+-- Whether an instantiated submodule generates a clock or reset (has an
+-- output clock or reset in its VModInfo).  Evaluated over the .ba hierarchy
+-- at Verilog link time to decide whether the design needs a delay-based
+-- (--timing) verilator harness.
+instGensClockOrReset :: AVInst -> Bool
+instGensClockOrReset avi =
+    let vmi = avi_vmi avi
+    in  not (null (output_clocks (vClk vmi))) ||
+        not (null (output_resets (vRst vmi)))
+
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack ffmap =
@@ -76,9 +87,10 @@ aVerilog errh flags pps aspack ffmap =
                              inlined_submod_comments,
                              inlined_rule_comments]
         trailer = ["",""]
-        comments = if (null comments_list)
-                   then []
-                   else (intercalate [""] comments_list) ++ trailer
+        comments = (if (null comments_list)
+                    then []
+                    else (intercalate [""] comments_list) ++ trailer)
+
 
         -- The modules are:
         --   (1) The main module

@@ -120,7 +120,7 @@ import APaths(aPathsPreSched, aPathsPostSched)
 import AProofs(aCheckProofs)
 import ADropDefs(aDropDefs)
 import AOpt(aOpt)
-import AVerilog(aVerilog)
+import AVerilog(aVerilog, instGensClockOrReset)
 import AVeriQuirks(aVeriQuirks)
 import VIOProps(VIOProps, getIOProps)
 import VFinalCleanup(finalCleanup)
@@ -2091,9 +2091,17 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     (t, ofiles) <- vGenFFuncs errh flags t prefix cfilenames_unique ffuncs
     t <- dump errh flags t DFcompileVPI dumpnames ofiles
 
+    -- Whether the design instantiates a generated clock or reset anywhere
+    -- in its hierarchy, analyzed from the .ba data: such designs need a
+    -- delay-based (--timing) harness, and the verilator build script is
+    -- told via BSC_VSIM_NEEDS_TIMING.
+    let needs_timing = or [ instGensClockOrReset avi
+                          | (_, abmi) <- mod_abmis
+                          , avi <- apkg_state_instances (abmi_apkg abmi) ]
+
     -- pass the info to vSimLink: array, location of files, -I, -L, -l
     start flags DFveriloglink
-    vSimLink errh flags topmod_name prefix vfilenames ofiles
+    vSimLink errh flags topmod_name prefix vfilenames ofiles needs_timing
     t <- dump errh flags t DFveriloglink dumpnames
              ((map vfnString vfilenames) ++ ofiles)
 
@@ -2111,8 +2119,8 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
 --   - the environment variable BSC_VERILOG_SIM
 --   - any auto-detected simulator
 vSimLink ::  ErrorHandle -> Flags ->
-             String -> String -> [VFileName] -> [String] -> IO ()
-vSimLink errh flags toplevel prefix vfiles ofiles = do
+             String -> String -> [VFileName] -> [String] -> Bool -> IO ()
+vSimLink errh flags toplevel prefix vfiles ofiles needs_timing = do
     build_script <- getVerilogSim errh flags
     let bsdir = bluespecDir flags
         libdirflags = map ("-L "++) (cLibPath flags)
@@ -2138,7 +2146,11 @@ vSimLink errh flags toplevel prefix vfiles ofiles = do
                 veriFiles bsdir ++
                 (map vfnString vfiles) ++
                 ofiles)
-        cmd = unwords (build_script : args)
+        -- whether the design needs a delay-based (--timing) harness,
+        -- analyzed from the .ba hierarchy by the caller
+        timingEnv = if needs_timing then "1" else "0"
+        cmd = "BSC_VSIM_NEEDS_TIMING=" ++ timingEnv ++ " " ++
+              unwords (build_script : args)
     when (verbose flags) $ putStrLnF ("exec: " ++ cmd)
     rc <- system cmd
     case rc of
