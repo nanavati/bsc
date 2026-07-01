@@ -1228,7 +1228,7 @@ proc bsc_compile_verilog { source { module "" } { options "" } } {
         append v_comp_options " -g $module"
     }
 
-    set cmd "$bsc $options $v_comp_options $source >& $output"
+    set cmd "$bsc $options [dpi_flag] $v_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_verilog" "$cmd" 2]
     cd $here
@@ -1254,7 +1254,7 @@ proc bsc_compile_synthesize_verilog { source { module "" } { options "" } } {
         append v_comp_options " -g $module"
     }
 
-    set cmd "$bsc $options $v_comp_options $source >& $output"
+    set cmd "$bsc $options [dpi_flag] $v_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_synthesize_verilog" $cmd 2]
     cd $here
@@ -1280,7 +1280,7 @@ proc bsc_compile_verilog_dump_schedule { source { module "" } { options "" } } {
         append v_comp_options " -verilog -g $module"
     }
 
-    set cmd "$bsc $options $v_comp_options $source >& $output"
+    set cmd "$bsc $options [dpi_flag] $v_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_verilog_dump_schedule" $cmd 2]
     cd $here
@@ -2797,12 +2797,31 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
 
         compile_verilog_pass $top.$extension $sysmod $gen_options
 
-        # Designs that Verilator cannot build are detected after the link:
-        # the build script refuses them with a distinctive message, which
-        # link_verilog_pass records as an XFAIL, and we skip the run/compare
-        # steps (see verilator_link_locked).
+        # Under Verilator, some designs can't be built/simulated:
+        #
+        #   * srandom() -- a foreign function of that name collides with the
+        #     SystemVerilog built-in, which Verilator internal-errors on.
+        #     XFAIL the link and skip run/compare.
+        #
+        #   (Other designs Verilator cannot build are detected after the
+        #   link: the build script refuses them with a distinctive message,
+        #   which link_verilog_pass records as an XFAIL, and we skip the
+        #   run/compare steps; see verilator_link_locked.)
         set _vlt_xfail 0
+        if { $verilog_compiler eq "verilator" } {
+            foreach _vm $vmods {
+                set _vf [file join [absolute $srcdir] $subdir $_vm]
+                # A foreign function named srandom() collides with the
+                # SystemVerilog built-in srandom method, which Verilator
+                # internal-errors on -- there is no back door for this.
+                if { [file_contains $_vf "srandom("] } {
+                    set _vlt_xfail 1
+                    break
+                }
+            }
+        }
 
+        if { $_vlt_xfail } { setup_xfail $target_triplet "verilator-srandom" }
         link_verilog_pass [join $vmods] $sysmod $link_options
         if { [verilator_link_locked] } { set _vlt_xfail 1 }
 
@@ -3461,6 +3480,23 @@ set ::is64 "64"
 # Verilog
 
 set verilog_compiler $env(BSC_VERILOG_SIM)
+
+# Whether foreign functions are compiled to DPI-C (-use-dpi) instead of VPI.
+# This is orthogonal to the simulator, EXCEPT that Verilator requires it (no VPI
+# support) and iverilog cannot use it (no DPI support); other simulators may
+# select it via the USE_DPI environment variable.  Derived here so callers don't
+# have to smuggle -use-dpi through BSC_OPTIONS (and so it is applied uniformly
+# and only where it belongs -- see bsc_initialize and useDPI).
+if { $verilog_compiler == "verilator" } {
+    set use_dpi 1
+} elseif { $verilog_compiler == "iverilog" } {
+    set use_dpi 0
+} elseif { [info exists env(USE_DPI)] } {
+    set use_dpi $env(USE_DPI)
+} else {
+    set use_dpi 0
+}
+verbose -log "Use DPI for foreign functions is $use_dpi" 1
 
 get_verilog_compiler_version
 
