@@ -60,8 +60,15 @@ compile_verilog_pass ZeroBitActionValueForeignWithArgs.bsv \
 # Test that the method reference has been replaced by 0 in the evaluator
 if { $vtest == 1 } {
     # XXX The call even survives into the Verilog!
-    find_regexp sysZeroBitActionValueForeignWithArgs.v \
-	{\$imported\_my\_time\(8\'d0\)}
+    if { [useDPI] } {
+	# Under -use-dpi the BDPI import is emitted as a DPI-C function and
+	# called directly, with no VPI "$imported_" system-task wrapper.
+	find_regexp sysZeroBitActionValueForeignWithArgs.v \
+	    {my\_time\(8\'d0\)}
+    } else {
+	find_regexp sysZeroBitActionValueForeignWithArgs.v \
+	    {\$imported\_my\_time\(8\'d0\)}
+    }
 }
 
 # --
