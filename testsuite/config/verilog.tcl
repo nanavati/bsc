@@ -225,7 +225,16 @@ proc sim_verilog_status { sim expstatus {options ""} } {
 
         set status [get_exec_status $status]
 
-        if { [lsearch -exact $expstatus $status] != -1 } then {
+        set match [expr { [lsearch -exact $expstatus $status] != -1 }]
+        # A non-zero exit means the simulation reported an error.  Simulators
+        # use different error codes for $error/$fatal (e.g. verilator aborts
+        # with 134 where iverilog exits 1), so when only a non-zero (error)
+        # status is expected, accept any non-zero status as a match.
+        if { !$match && $status != 0 && [lsearch -exact $expstatus 0] == -1 } then {
+            set match 1
+        }
+
+        if { $match } then {
             pass "Verilog simulation `$sim' exits with expected status"
         } else {
             fail "Verilog simulation `$sim' exits with status $status (expected $expstatus)"
