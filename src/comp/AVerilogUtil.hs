@@ -37,7 +37,7 @@ import Data.Maybe
 
 import FStringCompat(FString, getFString)
 import ErrorUtil
-import Flags(Flags, readableMux, unSpecTo, v95, systemVerilogTasks, useDPI)
+import Flags(Flags, readableMux, unSpecTo, v95, systemVerilogOutput, useDPI)
 import PPrint
 import IntLit
 import Id
@@ -90,7 +90,7 @@ flagsToVco flags = VConvtOpts {
                                vco_v95    = v95 flags,
                                vco_v95_tasks = ["$signed", "$unsigned"],
                                vco_readableMux = readableMux flags,
-                               vco_sv_tasks = systemVerilogTasks flags,
+                               vco_sv_tasks = systemVerilogOutput flags,
                                vco_use_dpi = useDPI flags,
                                vco_ffmap = M.empty,
                                vco_def_widths = M.empty
