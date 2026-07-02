@@ -6,5 +6,11 @@
 test_veri_only_bsv_modules Bug898 {mkBug898} sysBug898.v.out.expected
 test_c_only_bsv_modules Bug898 {mkBug898} 
 
-test_veri_only_bsv_modules Bug898_2 {mkBug898_2} sysBug898_2.v.out.expected
-test_c_only_bsv_modules Bug898_2 {mkBug898_2} 
+# Bug898_2 drops its final "Counter incremented by 2 at time 55" $display under
+# verilator: that display coincides with $finish, and verilator's deferred
+# $finish stops the run before emitting it (iverilog/Bluesim complete the
+# timestamp).  Both behaviors are legal, but we prefer the Bluesim-equivalent
+# full output; the missing line cannot be reconciled by sorting, so it is
+# XFAILed under verilator.
+test_veri_only_bsv_modules Bug898_2 {mkBug898_2} sysBug898_2.v.out.expected verilator
+test_c_only_bsv_modules Bug898_2 {mkBug898_2}

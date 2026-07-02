@@ -151,6 +151,12 @@ if { $verilog_compiler == "iverilog" &&
     # add 'iverilog' to the list of simulators to exempt
     set verilog_bug $verilog_compiler
 }
+# verilator schedules the inlined zero-delay logic differently from the
+# iverilog-generated golden and (being 2-state) computes a different s1 value
+# -- it is the same GitHub #559 manifestation, so exempt verilator too.
+if { $verilog_compiler == "verilator" } {
+    set verilog_bug $verilog_compiler
+}
 # This test doesn't make the expected outputs match, because that adds
 # inlined logic, so separate calls are needed
 #
@@ -168,7 +174,11 @@ test_c_veri_bsv_separately LogicBetweenTasks3 sysLogicBetweenTasks3.out.expected
 # Check that the Verilog output fails in the way that we expected,
 # so that we can be alerted if it changes (but still fails the above test).
 #
-copy sysLogicBetweenTasks3.v.out sysLogicBetweenTasks3.v-bug.out 
+copy sysLogicBetweenTasks3.v.out sysLogicBetweenTasks3.v-bug.out
+# The captured "buggy" output is iverilog-specific: iverilog shows the #559
+# race as 4-state X, whereas verilator (2-state) shows it as all-1s, so the
+# check-the-bug-fails-as-expected comparison cannot match under verilator.
+if { [useDPI] } { setup_xfail "*-*-*" "verilator-2state-559-bug-output" }
 compare_file sysLogicBetweenTasks3.v-bug.out
 
 # The above examples are about logic between tasks in the same module.
@@ -230,6 +240,11 @@ compile_verilog_pass ErrorTest.bsv sysErrorTest "-system-verilog-tasks"
 link_verilog_pass sysErrorTest.v sysErrorTest
 sim_verilog_status sysErrorTest 1
 move sysErrorTest.out sysErrorTest.v.out
+# Verilator renders $error/$fatal as "%Error: ... Assertion failed"/"Verilog
+# $stop" and drops the $fatal message ("bar"), so the filtered output cannot
+# match iverilog's; XFAIL the comparison under verilator.  (The nonzero exit
+# status is already accepted by sim_verilog_status.)
+if { [useDPI] } { setup_xfail "*-*-*" "verilator-error-fatal-rendering" }
 compare_file_filtered sysErrorTest.v.out sysErrorTest.out.expected {} \
     {-e "/^ *Time:/d" -e "/^ *Scope:/d" -e "s/^(ERROR|FATAL):.*: //"}
 }

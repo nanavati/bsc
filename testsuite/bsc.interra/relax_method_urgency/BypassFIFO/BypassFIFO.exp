@@ -1,2 +1,13 @@
-test_veri_only_bsv_multi Testbench mkTestbench {mkTop mkDesign} "mkTestbench.v.out.expected"
+# Besides the usual same-cycle cross-module ordering (which sort_output would
+# handle), verilator drops the final "Data enqued" $display: that display and
+# the $finish land in the same timestamp, and verilator's deferred $finish
+# stops the run before emitting it, whereas iverilog/Bluesim complete the
+# timestamp.  Both behaviors are legal (whether $finish aborts the remaining
+# same-time events is implementation-defined), but we prefer the Bluesim-
+# equivalent variant that emits the full timestamp.  Because the design's
+# deq_out and enq displays both fire every cycle in separately-synthesized
+# modules, there is no display-free cycle on which $finish could fire, so this
+# cannot be reshaped into a pure reorder; the missing line is XFAILed under
+# verilator (sorting cannot reconcile a missing line).
+test_veri_only_bsv_multi Testbench mkTestbench {mkTop mkDesign} "mkTestbench.v.out.expected" verilator
 test_c_only_bsv_multi Testbench mkTestbench {mkTop mkDesign} "mkTestbench.c.out.expected"

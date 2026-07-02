@@ -1,4 +1,5 @@
 set here [file join [absolute $srcdir] $subdir]
 source $here/../common.tcl
 
-test_ovl  assertNeverUnknownAsync2  assert_never_unknown_async.vlib
+# verilator is 2-state: the "test_expr contains X or Z" violation can't fire (XFAIL)
+test_ovl  assertNeverUnknownAsync2  assert_never_unknown_async.vlib  verilator

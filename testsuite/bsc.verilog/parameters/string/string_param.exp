@@ -1,8 +1,21 @@
-test_c_veri_bsv_modules StringParam mkStringParamSub ""
-test_c_veri_bsv_modules StringParamCond mkStringParamCondSub ""
+# Under verilator, an untyped string-valued parameter used as a $display
+# format string prints numerically.  For a plain string display (no
+# format specifiers), compiling with -system-verilog-output emits a
+# SystemVerilog `parameter string`, which verilator prints as text -- so
+# StringParam passes.  Where the string value carries format specifiers
+# consumed by later arguments (StringParamCond, StringConcat1), verilator
+# does not interpret a string VALUE as a runtime format string even as an
+# SV string (documented divergence; iverilog and VCS format it per the
+# LRM), so those compares are XFAILed under verilator.  The guard exists
+# because iverilog's default grammar rejects `parameter string`.
+set svo ""
+if { [useDPI] } { set svo "-system-verilog-output" }
+
+test_c_veri_bsv_modules_options StringParam mkStringParamSub $svo
+test_c_veri_bsv_modules StringParamCond mkStringParamCondSub "" "" verilator
 
 # Bug 1547
-test_c_veri_bsv_modules StringConcat1 "" ""
+test_c_veri_bsv_modules StringConcat1 "" "" "" verilator
 test_c_veri_bsv_modules StringConcat2 "" ""
 
 test_c_veri_bsv_modules TwoLevelString {bsvDisplayString mkStringPassThrough}
@@ -12,6 +25,4 @@ compile_object_fail_error StringParamErr1.bsv G0120
 
 # port of type string in import "BVI"
 # fails with bad proviso error message, but shouldn't compile regardless
-compile_object_fail StringParamErr2.bsv 
-
-
+compile_object_fail StringParamErr2.bsv

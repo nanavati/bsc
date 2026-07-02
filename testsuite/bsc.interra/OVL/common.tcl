@@ -1,4 +1,4 @@
-proc test_ovl { topmod vlib } {
+proc test_ovl { topmod vlib {veribug ""} } {
     global vtest
 
     if {$vtest == 1} {
@@ -12,6 +12,6 @@ proc test_ovl { topmod vlib } {
 	link_verilog_pass {} $topmod "$defines $includes $objects"
 
 	sim_verilog $topmod {}
-	compare_file $topmod.out $topmod.out.expected
+	check_verilog_output $topmod.out $topmod.out.expected $veribug
     }
 }

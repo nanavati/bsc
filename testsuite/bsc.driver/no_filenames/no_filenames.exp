@@ -34,6 +34,14 @@ move mkTop.bsc-vcomp-out vlog_build.out
 compare_file vlog_build.out
 sim_verilog mkTop {}
 move mkTop.out vlog_sim.out
+# verilator drops the final timestamp's displays: the two submodules print
+# every cycle and Sub2's $finish lands in that same timestamp, so verilator's
+# deferred $finish stops the run before emitting them (iverilog/Bluesim complete
+# the timestamp).  Both behaviors are legal, but we prefer the Bluesim-
+# equivalent full output; the missing lines cannot be reconciled by sorting
+# (this is a driver test anyway -- its assertions are the build/link outputs
+# above), so XFAIL the sim-output comparison under verilator.
+if { [useDPI] } { setup_xfail "*-*-*" "verilator-finish-boundary" }
 compare_file vlog_sim.out
 
 }

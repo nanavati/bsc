@@ -20,7 +20,8 @@ if { [lsearch -exact -nocase {aarch64 arm64} [which_mach]] != -1 } {
 }
 
 # In Verilog it silently produces x's
-test_veri_only_bsv DivideByZero sysDivideByZero.v.out.expected
+# verilator is 2-state: divide-by-zero yields 0, not x -> output differs (XFAIL)
+test_veri_only_bsv DivideByZero sysDivideByZero.v.out.expected verilator
 
 # Test that divide-by-zero produces some failure in Bluesim
 compile_object_pass DivideByZeroWide.bsv sysDivideByZeroWide
@@ -28,7 +29,7 @@ link_objects_pass sysDivideByZeroWide sysDivideByZeroWide
 sim_output_status sysDivideByZeroWide $fpe
 
 # In Verilog it silently produces x's
-test_veri_only_bsv DivideByZeroWide sysDivideByZeroWide.v.out.expected
+test_veri_only_bsv DivideByZeroWide sysDivideByZeroWide.v.out.expected verilator
 
 # Test that compile-time divide-by-zero produces a compile-time failure
 compile_object_fail_error DivideByZeroStatic.bsv G0059 1 sysDivideByZeroStatic

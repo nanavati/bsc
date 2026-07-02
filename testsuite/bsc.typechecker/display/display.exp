@@ -42,7 +42,11 @@ test_c_veri_bsv DisplaySizedLiteral
 # Bug 1620
 # iVerilog no longer rounds and Bluesim no longer internal errors,
 # but Bluesim rounds and gives an error about the casting
-test_veri_only_bsv DisplayRealLiteral
+# $display of a bare real uses the LRM default %g.  Strict %g strips trailing
+# zeros (0.5) -- verilator and VCS both do this -- while iverilog keeps them
+# (0.500000).  iverilog is the outlier, so the golden holds the standard %g form
+# and iverilog's output is XFAILed via veribug.
+test_veri_only_bsv DisplayRealLiteral "" iverilog
 test_c_only_bsv DisplayRealLiteral sysDisplayRealLiteral.c.out.expected
 
 # --------------------

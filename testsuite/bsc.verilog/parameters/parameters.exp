@@ -33,8 +33,10 @@ find_n_strings sysModulePort_WithStaticValue_TwoLevel.bsc-ccomp-out \
 
 # Test what Bluesim and Verilog do with a top-level with a port.
 # Given our main.v, Verilog treats it as 'z'
+# verilator is 2-state: the undriven port reads as 0, not z, so its output
+# differs from the 4-state golden (XFAIL)
 test_veri_only_bsv ModulePort_WithStaticValue_TopLevel \
-    sysModulePort_WithStaticValue_TopLevel.v.out.expected
+    sysModulePort_WithStaticValue_TopLevel.v.out.expected verilator
 # Bluesim fails to link, at the moment
 # XXX should it treat the value as 0? or give a user error?
 compile_object_pass ModulePort_WithStaticValue_TopLevel.bsv

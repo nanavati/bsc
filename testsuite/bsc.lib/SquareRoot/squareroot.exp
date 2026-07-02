@@ -5,9 +5,13 @@
 # be done for these tests, since they use the ConstrainedRandom
 # package, which has different implementations for the two backends.
 
+# These use $random for stimulus.  Verilator's $random does not implement the
+# IEEE 1364 reference algorithm (iverilog does), so its stimulus -- and thus the
+# output -- differs.  The DUT self-checks still pass; only the golden output
+# differs, so XFAIL the Verilog output comparison under verilator (via veribug).
 proc do_test { name } {
     test_c_only_bsv     $name  sys$name.c.out.expected
-    test_veri_only_bsv  $name  sys$name.v.out.expected
+    test_veri_only_bsv  $name  sys$name.v.out.expected verilator
 }
 
 # -----

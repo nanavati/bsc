@@ -1,7 +1,15 @@
 
+# Under verilator these outputs differ for two deterministic reasons, so the
+# affected comparisons use veribug "verilator" (XFAIL under verilator, normal
+# under iverilog):
+#  1. Verilator defers $finish to the end of the current eval (VL_FINISH_MT just
+#     sets a flag; execution falls through), so a rule sharing the negedge block
+#     with the $finish fires one extra time -> one extra $fwrite line in the .dat.
+#  2. Verilator allocates MCD $fopen channels top-down (first handle 0x40000000
+#     = 1<<30) vs the IEEE/iverilog bottom-up allocation (0x00000002).
 if { $vtest } {
     test_veri_only_bsv FOpen
-    compare_file FOpen.dat.out 
+    check_verilog_output FOpen.dat.out FOpen.dat.out.expected verilator
 }
 if { $ctest } {
     test_c_only_bsv FOpen
@@ -25,8 +33,8 @@ compile_fail_error FOpen3.bsv T0020
 ## Some multi channel tests
 
 if { $vtest } {
-    test_veri_only_bsv FOpen_MCD
-    compare_file FOpen_MCD.dat.out 
+    test_veri_only_bsv FOpen_MCD "" verilator
+    check_verilog_output FOpen_MCD.dat.out FOpen_MCD.dat.out.expected verilator
 }
 if { $ctest } {
     test_c_only_bsv FOpen_MCD
@@ -95,16 +103,16 @@ compile_fail_error GetC_err3.bsv T0031
 
 if { $vtest } {
     test_veri_only_bsv FWrites
-    compare_file FWrites.dat.out
+    check_verilog_output FWrites.dat.out FWrites.dat.out.expected verilator
 
     test_veri_only_bsv FWrite2
-    compare_file FWrite2.dat.out
+    check_verilog_output FWrite2.dat.out FWrite2.dat.out.expected verilator
 
     test_veri_only_bsv FWrite3
-    compare_file FWrite3o.dat.out
-    compare_file FWrite3h.dat.out
-    compare_file FWrite3d.dat.out
-    compare_file FWrite3b.dat.out
+    check_verilog_output FWrite3o.dat.out FWrite3o.dat.out.expected verilator
+    check_verilog_output FWrite3h.dat.out FWrite3h.dat.out.expected verilator
+    check_verilog_output FWrite3d.dat.out FWrite3d.dat.out.expected verilator
+    check_verilog_output FWrite3b.dat.out FWrite3b.dat.out.expected verilator
 }
 
 if { $ctest } {

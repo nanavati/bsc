@@ -16,7 +16,11 @@ if {$vtest == 1} {
   # Verilog executes tasks in methods in wrong order
   compare_file_bug sysInterfaceTaskCalls.sysBar.v.out sysInterfaceTaskCalls.out.expected 215
   # Check that the wrong order is at least the same wrong order as it has
-  # always been (otherwise, a change in sim output could go undetected)
+  # always been (otherwise, a change in sim output could go undetected).
+  # verilator's wrong order differs from iverilog's (this .bug-expected golden
+  # captures iverilog's specific ordering of the #215 bug), so XFAIL under
+  # verilator; the main comparison is already XFAILed via #215 above.
+  if { [useDPI] } { setup_xfail "*-*-*" "verilator-215-bug-output" }
   compare_file sysInterfaceTaskCalls.sysBar.v.out sysInterfaceTaskCalls.sysBar.v.out.bug-expected
 }
 
