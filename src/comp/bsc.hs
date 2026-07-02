@@ -2149,7 +2149,13 @@ vSimLink errh flags toplevel prefix vfiles ofiles needs_timing = do
         -- whether the design needs a delay-based (--timing) harness,
         -- analyzed from the .ba hierarchy by the caller
         timingEnv = if needs_timing then "1" else "0"
-        cmd = "BSC_VSIM_NEEDS_TIMING=" ++ timingEnv ++ " " ++
+        -- pass the requested waveform dump formats to the build script, which
+        -- translates them to the simulator's mechanism (or errors if unsupported)
+        dumpFmts = case dumpFormats flags of
+                     [] -> "none"
+                     fs -> intercalate "," fs
+        cmd = "BSC_VSIM_TRACE_FORMATS=" ++ dumpFmts ++ " " ++
+              "BSC_VSIM_NEEDS_TIMING=" ++ timingEnv ++ " " ++
               unwords (build_script : args)
     when (verbose flags) $ putStrLnF ("exec: " ++ cmd)
     rc <- system cmd
