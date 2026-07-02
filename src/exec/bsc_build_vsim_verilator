@@ -321,7 +321,10 @@ fi
 
 cp -p $BLUESPECDIR/Verilator/sim_main.cpp $OBJDIR/sim_main.cpp
 
-make $MAKE_QUIET -C $OBJDIR -j -f ${TOPCLASS}.mk ${TOPCLASS}
+# Parallelism of the generated C++ build.  Defaults to unbounded (-j) for a
+# fast standalone build; set BSC_VERILATOR_BUILD_JOBS (e.g. =1) to cap it, which
+# parallel test runs do to avoid each build fanning out and oversubscribing.
+make $MAKE_QUIET -C $OBJDIR -j${BSC_VERILATOR_BUILD_JOBS} -f ${TOPCLASS}.mk ${TOPCLASS}
 
 status=$?
 if [ "$status" != "0" ]; then
