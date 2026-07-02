@@ -50,6 +50,16 @@ int main (int argc, char **argv, char **env) {
     VerilatedVcdC* tfp = NULL;    // pointer for tracing
 
 #if VM_TRACE
+    // +bsctrace: arm Verilator's tracing *support* without opening any dump
+    // (parallels the build-time --trace).  A design that manages its own VCD
+    // via $dumpfile/$dumpvars/$dumpon/$dumpoff needs Verilated::traceEverOn(true)
+    // before time 0 for any $dump* to work, but must not get the harness
+    // dump.vcd.  Used by the VCD-dump-control tests.
+    const char* dotrace = Verilated::commandArgsPlusMatch("bsctrace");
+    if (dotrace && 0==strcmp(dotrace, "+bsctrace")) {
+        Verilated::traceEverOn(true);
+    }
+
     // If verilator was invoked with --trace argument,
     // and if at run time passed the +bscvcd argument, turn on tracing
     const char* flag = Verilated::commandArgsPlusMatch("bscvcd");

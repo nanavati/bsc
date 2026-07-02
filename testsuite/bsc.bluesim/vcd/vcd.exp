@@ -32,6 +32,10 @@ if {$ctest == 1} {
                                       -c "main.top.counter.SETF becomes 0 @610" }
 }
 
-test_c_veri_bsv VCDTest1
+# VCDTest1/2 drive their own VCD ($dumpfile/$dumpvars/$dumpon/$dumpoff).  Under
+# verilator that requires tracing armed before time 0, so pass +bsctrace via
+# sim_options -- scoped to just these dumping tests, so the trace-compute cost
+# isn't paid by every verilator sim.  (Bluesim ignores the unknown plusarg.)
+test_c_veri_bsv_modules_options VCDTest1 {} {} "" "" "" "" +bsctrace
 
-test_c_veri_bsv VCDTest2
+test_c_veri_bsv_modules_options VCDTest2 {} {} "" "" "" "" +bsctrace

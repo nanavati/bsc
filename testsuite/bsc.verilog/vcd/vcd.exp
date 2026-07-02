@@ -1,6 +1,11 @@
 compile_verilog_pass DumpOnOff.bsv
 link_verilog_pass sysDumpOnOff.v sysDumpOnOff
-sim_verilog sysDumpOnOff
+# DumpOnOff drives its own VCD via $dumpfile/$dumpvars/$dumpon/$dumpoff.  Under
+# verilator those tasks abort unless tracing is armed before time 0, so pass the
+# +bsctrace plusarg (which arms Verilated::traceEverOn without opening the
+# harness dump.vcd).  iverilog supports $dump* natively and ignores the unknown
+# plusarg, so it can be passed unconditionally.
+sim_verilog sysDumpOnOff +bsctrace
 
 # need to add vcd validation at this point
 
