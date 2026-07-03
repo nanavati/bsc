@@ -353,8 +353,39 @@ followABMIHierarchy curpkg = do
               then return ()
               else followABIHierarchy (Just curmodname) modname >> return ()
 
+    -- Function modules (noinline functions and Classic foreign functions
+    -- both appear as ANoInlineFun) are followed like submodules when their
+    -- .ba exists -- a noinline function is elaborated by bsc, so its
+    -- Verilog can be checked and regenerated -- but a foreign function
+    -- bound to hand-written Verilog (e.g. the library's Fork) has no .ba
+    -- by nature: treat it as a foreign leaf, like a BVI import.
+    let
+        followOneFunc :: String -> M ()
+        followOneFunc modname = do
+            s <- get
+            let hier_map = m_foundmod_map s
+            if modname `M.member` hier_map
+              then return ()
+              else do
+                abis <- getABIs
+                case (filter ((== modname) . fst) abis) of
+                  (_:_) -> followABIHierarchy (Just curmodname) modname
+                             >> return ()
+                  [] -> do
+                    let be_verbose = m_verbose s
+                        ifc_path   = m_ifc_path s
+                        backend    = m_backend s
+                        errh       = m_errHandle s
+                    mabi <- lift $ readAndCheckABinPath errh be_verbose
+                                       ifc_path backend modname
+                    case mabi of
+                      Nothing -> addForeignMod modname
+                      Just _  -> followABIHierarchy (Just curmodname) modname
+                                   >> return ()
+
     -- we don't follow foreign modules (which includes primitives)
-    mapM_ followOneSubMod (native_submod_names ++ func_names)
+    mapM_ followOneSubMod native_submod_names
+    mapM_ followOneFunc func_names
 
 -- ---------------
 
