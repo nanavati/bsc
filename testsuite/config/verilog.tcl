@@ -75,6 +75,13 @@ proc bsc_link_verilog { objects toplevel { options "" } } {
         # the BSC_VERILATOR_ENABLE_TIMING back door is set
         set ::vlt_link_lock_reason "verilator-needs-timing"
     }
+    if { $status != 0 && $verilog_compiler eq "verilator" \
+         && [file_contains $output "shorts inout ports"] } {
+        # the design's Verilog shorts inout ports (rendered as port
+        # aliases, which Verilator cannot parse); see
+        # bsc_build_vsim_verilator
+        set ::vlt_link_lock_reason "verilator-inout-ports"
+    }
     cd $here
     return [expr $status == 0]
 }

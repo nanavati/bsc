@@ -261,6 +261,20 @@ if [ "$NEEDS_TIMING" = "no" ] && [ "$HAS_MAIN" = "0" ] ; then
     TIMING_REASON="it is linked without a main module (its top drives its own clock)"
 fi
 
+# bsc renders shorted inout ports (two or more ports on one net) as
+# Verilog port aliases (".X1(net), .X2(net)" in the module header),
+# which Verilator cannot parse -- nor does it support the alternative
+# renderings of a short (SystemVerilog 'alias' and the V1995 'tran'
+# primitive).  bsc analyzes the design's .ba hierarchy at link time
+# (BSC_VSIM_INOUT_PORTS); fail up front with a clear message rather
+# than a Verilator syntax error.
+if [ "$BSC_VSIM_INOUT_PORTS" = "1" ]; then
+    echo "ERROR: This design shorts inout ports, which its generated Verilog" >&2
+    echo "       renders as port aliases (.X1(net), .X2(net)).  Verilator cannot" >&2
+    echo "       parse these; use another Verilog simulator for this design." >&2
+    exit 1
+fi
+
 # Starting with version 5, zero-delay statements (like #0) require
 # a flag to specify how they should be handled (--timing or --no-timing).
 # Designs that generate a clock/reset additionally require --timing, which

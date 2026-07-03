@@ -1,7 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances, PatternGuards #-}
 {-# LANGUAGE FlexibleInstances #-}
-module AVerilog (aVerilog, instGensClockOrReset) where
+module AVerilog (aVerilog, instGensClockOrReset,
+                 modUsesInoutPortExpressions) where
 
 import Data.List(nub,
             partition,
@@ -68,6 +69,81 @@ instGensClockOrReset avi =
     let vmi = avi_vmi avi
     in  not (null (output_clocks (vClk vmi))) ||
         not (null (output_resets (vRst vmi)))
+
+-- Whether the generated Verilog for this module keeps inout port
+-- expressions in its module header, which Verilator cannot parse.
+-- An inout port whose net carries no other port is renamed to the port
+-- name and emitted plain (see renameInoutPorts), so only SHORTED
+-- boundary inouts -- two or more ports on one net, e.g. a module
+-- argument re-exported as an interface inout, or two boundary inouts
+-- joined by mkConnection -- keep the port-alias form
+-- ".X1(net), .X2(net)".  Verilator rejects that header syntax
+-- outright, and does not support the alternative renderings either
+-- (SystemVerilog "alias" and the V1995 "tran" primitive).  InoutConnect
+-- instances kept as real instances (-no-inline-inout-connect) pull in
+-- the library InoutConnect.v, whose header is itself a port alias.
+-- Evaluated over the .ba hierarchy at Verilog link time (with the
+-- flags that produced each module's .v) to decide whether Verilator
+-- can build the design.  This mirrors computeInouts/renameInoutPorts;
+-- where an inout expression defeats the net resolution, it
+-- conservatively reports True.
+modUsesInoutPortExpressions :: Flags -> APackage -> Bool
+modUsesInoutPortExpressions flags apkg =
+    kept_connects || unresolved || shared_boundary
+  where
+    connect_insts = filter isInoutConnect (apkg_state_instances apkg)
+    inlined = removeInoutConnect flags
+    kept_connects = not inlined && not (null connect_insts)
+
+    -- resolve an inout expression to the port or wire at its root
+    defmap = M.fromList [ (i, e) | ADef i _ e _ <- apkg_local_defs apkg ]
+    inoutNet :: [AId] -> AExpr -> Maybe (AId, AType)
+    inoutNet seen (ASInout _ (AInout { ainout_wire = e })) = inoutNet seen e
+    inoutNet _ (ASPort t i) = Just (i, t)
+    inoutNet seen (ASDef t i)
+        | i `elem` seen = Nothing
+        | Just e <- M.lookup i defmap = inoutNet (i:seen) e
+        | otherwise = Just (i, t)
+    inoutNet _ _ = Nothing
+
+    ifc_wires = [ e | AIInout { aif_inout = AInout { ainout_wire = e } }
+                          <- apkg_interface apkg ]
+
+    -- nets with a (nonzero-width) port on this module's boundary;
+    -- zero-width inouts never reach the port list (see computeInouts)
+    boundary_nets =
+        [ i | (AAI_Inout i n) <- apkg_inputs apkg, n > 0 ] ++
+        [ n | e <- ifc_wires
+            , Just (n, t) <- [inoutNet [] e]
+            , isNotZeroSized t ]
+
+    -- nets shorted by InoutConnect instances that will be inlined away
+    pair_nets avi = [ n | e <- avi_iargs avi
+                        , Just (n, _) <- [inoutNet [] e] ]
+    connect_pairs = [ (a, b) | inlined
+                             , avi <- connect_insts
+                             , [a, b] <- [pair_nets avi] ]
+
+    -- conservatively lock when an inout shape defeats the resolution
+    unresolved =
+        or ([ True | e <- ifc_wires, Nothing <- [inoutNet [] e] ] ++
+            [ True | inlined
+                   , avi <- connect_insts
+                   , length (pair_nets avi) /= 2 ])
+
+    -- union-find over the shorted nets; port expressions survive when
+    -- an equivalence class holds more than one boundary port
+    findRoot m i = case M.lookup i m of
+                     Just j | j /= i -> findRoot m j
+                     _ -> i
+    addPair m (a, b) = let ra = findRoot m a
+                           rb = findRoot m b
+                       in  if ra == rb then m else M.insert ra rb m
+    net_roots = foldl addPair M.empty connect_pairs
+    class_sizes = M.fromListWith (+)
+                      [ (findRoot net_roots n, 1 :: Integer)
+                      | n <- boundary_nets ]
+    shared_boundary = any (> 1) (M.elems class_sizes)
 
 -- Rename one-port-per-net inout ports to plain named ports.  bsc binds
 -- each inout port of a generated module to its internal net with a
