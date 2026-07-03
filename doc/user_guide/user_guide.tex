@@ -1200,8 +1200,12 @@ name on the search path) and regenerates any module's \te{.v} file
 that is missing or older than its \te{.ba}; up-to-date files are
 reused, and each reuse is reported.  A \te{.v} file listed explicitly
 on the command line is the user's to provide and is never regenerated.
-If no \te{.ba} files can be found for the design, BSC issues a warning
-and links with the \te{.v} files as found.
+When linking for Verilator, the design's \te{.ba} hierarchy is
+required: BSC analyzes it to configure the build (for example, whether
+the design needs a delay-based harness), so it is an error if the
+\te{.ba} file of the top module or any submodule cannot be found.  For
+other simulators, if no \te{.ba} files can be found for the design,
+BSC issues a warning and links with the \te{.v} files as found.
 
 \index{Verilog simulator!cvc}
 \index{Verilog simulator!cver}

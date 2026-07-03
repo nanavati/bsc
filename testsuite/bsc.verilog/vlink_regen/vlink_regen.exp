@@ -1,8 +1,11 @@
 #
 # Tests for link-time regeneration of Verilog from .ba files:
 # "bsc -verilog -e top" regenerates any module .v that is missing or
-# older than its .ba, reuses the rest, and warns (and links with the .v
-# files as found) when the design's .ba hierarchy is unavailable.
+# older than its .ba and reuses the rest.  For verilator the design's .ba
+# hierarchy is required (the link analyzes it to configure the build), so
+# a submodule .ba missing under a loadable top is an error; a top with no
+# .ba at all is the hand-written-top flow and warns (S0099), as do other
+# simulators in all cases, linking with the .v files as found.
 #
 
 # run "bsc -verilog -e" capturing output; expect success
@@ -12,6 +15,16 @@ proc vlink_run { toplevel output {files ""} } {
         pass "link $toplevel ($output)"
     } else {
         fail "link $toplevel should succeed ($output)"
+    }
+}
+
+# run "bsc -verilog -e" capturing output; expect failure
+proc vlink_fail { toplevel output {files ""} } {
+    set opts "-no-show-timestamps -no-show-version -verilog -e $toplevel -o $toplevel.vexe $files"
+    if [ gen_basic_output $opts $output ] {
+        fail "link $toplevel should fail ($output)"
+    } else {
+        pass "link $toplevel fails ($output)"
     }
 }
 
@@ -71,19 +84,28 @@ find_regexp_fail vlink5.bsc-out {Verilog file created: mkRSub\.v}
 vlink_run sysVRegenTb vlink5b.bsc-out
 
 # -------------------------
-# The .ba check is all-or-nothing per design: if any module's .ba is
-# missing (here a submodule's, while the top's is present), the link
-# warns and uses the .v files as found -- it never half-regenerates a
-# design it cannot fully see -- and still succeeds
+# The .ba availability is all-or-nothing per design: if any module's .ba
+# is missing (here a submodule's, while the top's is present), the link
+# never half-regenerates a design it cannot fully see.  Under verilator
+# this is an error (the link's analysis is required); under other
+# simulators it warns and links with the .v files as found.
 
 erase mkRSub.ba
-vlink_run sysVRegenTb vlink7.bsc-out
-find_n_strings vlink7.bsc-out {Warning: Command line: (S0099)} 1
+if { [useDPI] } {
+    vlink_fail sysVRegenTb vlink7.bsc-out
+    find_n_strings vlink7.bsc-out {Error: Command line: (S0040)} 1
+    find_regexp vlink7.bsc-out {mkRSub}
+} else {
+    vlink_run sysVRegenTb vlink7.bsc-out
+    find_n_strings vlink7.bsc-out {Warning: Command line: (S0099)} 1
+}
 find_regexp_fail vlink7.bsc-out {Verilog file created}
 find_regexp_fail vlink7.bsc-out {Verilog file reused}
 
-# ... and the same from the other direction: the top's .ba missing
-# while the submodule's is present
+# ... and the other direction -- the top's .ba missing while the
+# submodule's is present -- is indistinguishable from a hand-written
+# Verilog top (for which no .ba ever exists), so it warns and links
+# with the .v files as found, under every simulator
 
 compile_verilog_pass VRegen.bsv sysVRegenTb
 erase sysVRegenTb.ba
@@ -93,8 +115,8 @@ find_regexp_fail vlink8.bsc-out {Verilog file created}
 find_regexp_fail vlink8.bsc-out {Verilog file reused}
 
 # -------------------------
-# With no .ba hierarchy available, the link warns and uses the .v
-# files as found (the pre-regeneration behavior)
+# With no .ba hierarchy available at all, the top's is among the missing:
+# the hand-written-top flow again, so warn and link as found
 
 erase sysVRegenTb.ba
 erase mkRSub.ba

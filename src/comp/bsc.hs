@@ -68,7 +68,7 @@ import FlagsDecode(
         exitWithUsage,
         exitWithHelp,
         exitWithHelpHidden)
-import Error(internalError, ErrMsg(..),
+import Error(internalError, ErrMsg(..), EMsgs(errmsgs),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
              bsError, bsWarning, bsMessage,
              exitFail, exitOK, exitFailWith)
@@ -1998,6 +1998,12 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     let read_abin_fn = readAndCheckABin errh (Just Verilog)
     user_abis <- mapM read_abin_fn afilenames_unique
 
+    -- Resolve the target simulator now: verilator requires the design's
+    -- .ba hierarchy (its link analysis configures the build), while other
+    -- simulators can link pre-existing Verilog without one.
+    build_script <- getVerilogSim errh flags
+    let vsim_is_verilator = "verilator" `isSuffixOf` build_script
+
     -- see if .ba files exist for the top-level of this design
     let prim_names = map sb_name primBlocks
     mhier0 <- runExceptT $
@@ -2015,11 +2021,31 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
                                           Right (a, b, c, d, e, f, modinfos)
 
     (ffuncs, mod_abmis) <-
+        -- whether the hierarchy failed because the top itself has no .ba:
+        -- that is the hand-written-Verilog-top flow (a .ba for such a top
+        -- never exists), as opposed to a bsc-generated design with a
+        -- missing piece
+        let topBaMissing msgs =
+                or [ True | (_, EMissingABinModFile name Nothing)
+                                <- errmsgs msgs
+                          , name == topmod_name ]
+        in
         case (mhier) of
+          Left msgs | vsim_is_verilator && not (topBaMissing msgs) ->
+            -- For verilator a loadable design's .ba hierarchy is required:
+            -- the link analyzes it (whether the design needs a delay-based
+            -- --timing harness) to configure the build, and a half-visible
+            -- generated design cannot be checked or regenerated.  Report
+            -- why the hierarchy could not be loaded.  (A top with no .ba at
+            -- all is the hand-written-top flow and falls through to the
+            -- warn-and-link-as-found path below, like other simulators.)
+            bsError errh (errmsgs msgs)
+
           Left _ -> do
-            -- this design doesn't exist as .ba file
-            --traceM("Elaboration files not loaded for this design")
-            -- resort to what we know from the command line
+            -- Other simulators consume no link-time analysis, so a missing
+            -- .ba hierarchy only prevents the staleness check of generated
+            -- Verilog: warn and use the .v files as found (module .ba files
+            -- given explicitly on the command line are still used, below)
 
             when ((null user_abis) && (not (null cfilenames))) $
                  bsError errh [(cmdPosition, EVPIFilesWithNoABin cfilenames)]
@@ -2047,10 +2073,6 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
                           [(cmdPosition,
                             EMultipleABinFilesForName link_name file_names)]
 
-            -- without the design's .ba hierarchy, the staleness of
-            -- generated Verilog cannot be checked; warn and use the .v
-            -- files as found (module .ba files given explicitly on the
-            -- command line are still regenerated from, below)
             bsWarning errh
                 [(cmdPosition, WNoABinForVerilogRegen topmod_name)]
 
@@ -2108,16 +2130,19 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     t <- dump errh flags t DFcompileVPI dumpnames ofiles
 
     -- Whether the design instantiates a generated clock or reset anywhere
-    -- in its hierarchy, analyzed from the .ba data: such designs need a
-    -- delay-based (--timing) harness, and the verilator build script is
-    -- told via BSC_VSIM_NEEDS_TIMING.
+    -- in its hierarchy, analyzed from the .ba data (required when linking
+    -- for verilator): such designs need a delay-based (--timing) harness,
+    -- and the verilator build script is told via BSC_VSIM_NEEDS_TIMING.
+    -- (In the no-.ba fallback for other simulators this analysis sees only
+    -- the .ba files given on the command line, which is fine: no other
+    -- simulator consumes it.)
     let needs_timing = or [ instGensClockOrReset avi
                           | (_, abmi) <- mod_abmis
                           , avi <- apkg_state_instances (abmi_apkg abmi) ]
 
     -- pass the info to vSimLink: array, location of files, -I, -L, -l
     start flags DFveriloglink
-    vSimLink errh flags topmod_name prefix vfilenames ofiles needs_timing
+    vSimLink errh flags build_script topmod_name prefix vfilenames ofiles needs_timing
     t <- dump errh flags t DFveriloglink dumpnames
              ((map vfnString vfilenames) ++ ofiles)
 
@@ -2134,10 +2159,9 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
 --   - the command-line flag -vsim
 --   - the environment variable BSC_VERILOG_SIM
 --   - any auto-detected simulator
-vSimLink ::  ErrorHandle -> Flags ->
+vSimLink ::  ErrorHandle -> Flags -> String ->
              String -> String -> [VFileName] -> [String] -> Bool -> IO ()
-vSimLink errh flags toplevel prefix vfiles ofiles needs_timing = do
-    build_script <- getVerilogSim errh flags
+vSimLink errh flags build_script toplevel prefix vfiles ofiles needs_timing = do
     let bsdir = bluespecDir flags
         libdirflags = map ("-L "++) (cLibPath flags)
         userlibs = map ("-l "++) (cLibs flags)
@@ -2162,14 +2186,14 @@ vSimLink errh flags toplevel prefix vfiles ofiles needs_timing = do
                 veriFiles bsdir ++
                 (map vfnString vfiles) ++
                 ofiles)
-        -- whether the design needs a delay-based (--timing) harness,
-        -- analyzed from the .ba hierarchy by the caller
-        timingEnv = if needs_timing then "1" else "0"
         -- pass the requested waveform dump formats to the build script, which
         -- translates them to the simulator's mechanism (or errors if unsupported)
         dumpFmts = case dumpFormats flags of
                      [] -> "none"
                      fs -> intercalate "," fs
+        -- whether the design needs a delay-based (--timing) harness,
+        -- analyzed from the .ba hierarchy by the caller
+        timingEnv = if needs_timing then "1" else "0"
         cmd = "BSC_VSIM_TRACE_FORMATS=" ++ dumpFmts ++ " " ++
               "BSC_VSIM_NEEDS_TIMING=" ++ timingEnv ++ " " ++
               unwords (build_script : args)
