@@ -3597,6 +3597,40 @@ the same pragma set the scheduler sees. Type-level naming
 flat type's identity must not change when post-typecheck pragmas
 arrive (renderings never fork nominal types, A98).
 
+**5 — increment I ships: `contractAlwaysReady` collapses the RDY
+port.** `genModule` computes the module's effective pragma set once
+at entry — GenWrap's set plus what the interface's declared contract
+implies (`ContractCheck.contractReadyPragmas`; dotted paths flatten
+to the boundary rendering) — and that one set drives elaboration,
+scheduling, the always-ready proof (`ENotAlwaysReady`/G0006 at the
+member's own compile when readiness is not provably constant), the
+boundary field filter, the wrapper's readiness guards, and the
+recorded `.ba` pragmas, so the schedule and the recorded boundary
+agree by construction. Two seams surfaced and closed during
+verification, each instructive: (i) the wrapper renderer briefly kept
+receiving the GenWrap-time snapshot while the schedule used the
+effective set — `mkVModInfo`'s pair-completeness check refused the
+desync, the mirror image of the failure that motivated the round,
+caught by the same guard; (ii) the flat nominal type keeps its RDY
+field (type identity is a GenWrap-time fact) while the collapsed
+import lacks it, so the `CmoduleVerilog` completeness check learned
+that a missing `RDY_<m>` for a declared method reads as constant
+readiness — the semantics ready-less BVI declarations always had.
+`.ba` tag bumped (recorded pragmas now include the contract-derived
+set). Verified: `bsc.boundary/incI` (25 tests — the collapse is
+clause-scoped: declared methods lose `RDY_*`, an undeclared guarded
+method keeps its port; a separately-compiled parent consumes the
+collapsed boundary through the `.bo` on both backends; the guarded
+negative raises G0006; the increment-G mixed group re-forms with NO
+`always_ready` pragma anywhere, the pragma-free generated root's
+pinout equal to the ready-less BVI's); all ten behavioral suites
+green; corpus comparison shows zero diffs outside contract-carrying
+tests, and every contract-carrying diff is exactly the RDY-port
+removal (port list, declaration, wire, constant assign). This
+closes the §13 "parent-side sealed-constant readiness fold" residual
+for generated members: parents see constant readiness as ordinary
+evaluated truth.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
