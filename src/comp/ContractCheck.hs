@@ -148,6 +148,22 @@ readStr1 err env e = case collectStrs env e of
     collectStrs env' (IVar v) | Just d <- M.lookup v env' = collectStrs env' d
     collectStrs _ _ = []
 
+-- The admitted path grammar (A97): MethodPath ::= ident ("." ident)*
+-- Dotted paths name subinterface methods; the canonical rendering of
+-- hierarchy joins components with '_' (the flattened boundary names).
+flattenAtomPath :: String -> Either String String
+flattenAtomPath s =
+  let comps = splitOn '.' s
+      splitOn c str = case break (== c) str of
+                        (a, []) -> [a]
+                        (a, _:rest) -> a : splitOn c rest
+      okIdent [] = False
+      okIdent cs = all (\ c -> isAlphaNum c || c == '_' || c == '$') cs
+  in if all okIdent comps
+     then Right (intercalate "_" comps)
+     else Left ("`" ++ s ++ "' is not a method path " ++
+                "(MethodPath ::= ident (\".\" ident)*)")
+
 -- the carriers live in the Prelude; cons/nil also have List reexports
 isLibId :: [String] -> Id -> Bool
 isLibId names i = getIdBaseString i `elem` names &&
@@ -342,7 +358,8 @@ checkStmt mci rdyTrue meths stmt =
         -- wire is constant, and the method id itself when an
         -- always_ready pragma removed the wire
         Right i | i `elem` rdyTrue -> []
-                | any (\r -> getIdBaseString r == ("RDY_" ++ m)) rdyTrue -> []
+                | any (\r -> Right (getIdBaseString r) ==
+                             fmap ("RDY_" ++) (flattenAtomPath m)) rdyTrue -> []
                 | otherwise ->
                     ["contractAlwaysReady " ++ m ++ " is declared but the " ++
                      "method's readiness is not constantly true"]
@@ -354,8 +371,9 @@ checkStmt mci rdyTrue meths stmt =
           Left ("`" ++ n ++ "': RDY_* names do not appear in contracts; " ++
                 "readiness is the method's own offer " ++
                 "(use contractAlwaysReady)")
-      | otherwise =
-          case [ i | i <- meths, getIdBaseString i == n ] of
+      | otherwise = do
+          fn <- flattenAtomPath n
+          case [ i | i <- meths, getIdBaseString i == fn ] of
             (i:_) -> Right i
             [] -> Left ("unknown method `" ++ n ++
                         "'; the interface's methods are " ++
@@ -407,13 +425,21 @@ imposeDeclared stmts kinds vmi =
       isRdyI m = take 4 (getIdBaseString m) == "RDY_"
       real = [ m | m <- meths, not (isRdyI m) ]
       rdys = [ m | m <- meths, isRdyI m ]
-      kindOf m = lookup (getIdBaseString m) kinds
+      -- signature paths are dotted; boundary names are the flattened
+      -- (underscore-joined) rendering of the same paths
+      flattenSig p = map (\ c -> if c == '.' then '_' else c) p
+      kindOf m = case [ k | (p, k) <- kinds,
+                            flattenSig p == getIdBaseString m ] of
+                   (k:_) -> Just k
+                   [] -> Nothing
 
-      resolve s = case [ m | m <- real, getIdBaseString m == s ] of
-                    (m:_) -> Right m
-                    [] -> Left ("unknown method `" ++ s ++
-                                "'; the boundary's methods are " ++
-                                intercalate ", " (map getIdBaseString real))
+      resolve s = do
+          fs <- flattenAtomPath s
+          case [ m | m <- real, getIdBaseString m == fs ] of
+            (m:_) -> Right m
+            [] -> Left ("unknown method `" ++ s ++
+                        "'; the boundary's methods are " ++
+                        intercalate ", " (map getIdBaseString real))
 
       resolveStmt (CRel a r b) = do
           ma <- resolve a
@@ -544,7 +570,7 @@ declaredConventions alldefs cqt =
       case M.lookup (conventionIdForIfc ifcId) alldefs of
         Nothing -> Right []
         Just body ->
-          case readConventions body of
+          case readConventions body >>= mapM flattenAtomPath of
             Left msg -> Left ("convention def `" ++
                               getIdBaseString (conventionIdForIfc ifcId) ++
                               "': " ++ msg)

@@ -2346,9 +2346,13 @@ findBoundaryInstance prim err_pos e_ifc = do
                                            ": state var not found: " ++ show uid)
         ifc_fields <- findIfcFieldNames e_ifc
         -- every kind of boundary field counts: methods, and the
-        -- clock/reset/inout fields the interface may also carry
+        -- clock/reset/inout fields the interface may also carry.  A
+        -- subinterface field is present as its flattened subtree
+        -- (field `sub' appears as boundary methods `sub_*')
         let meth_names = [ getIdBaseString (vf_name f) | f <- vFields vmi ]
-            missing = [ f | f <- ifc_fields, f `notElem` meth_names ]
+            missing = [ f | f <- ifc_fields,
+                            f `notElem` meth_names,
+                            not (any ((f ++ "_") `isPrefixOf`) meth_names) ]
             inst_id = fst (headOrErr (prim ++ ": no state vars") svs)
             bnd_pos = if getPosition inst_id /= noPosition
                       then getPosition inst_id
