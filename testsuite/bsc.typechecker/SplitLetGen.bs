@@ -1,0 +1,32 @@
+package SplitLetGen(contradictorySplit) where
+
+-- The "let (x, y) = split z" footgun.
+--
+-- With let generalization turned on (-let-gen), the untyped pattern
+-- binding below is desugared and generalized to
+--     x :: (Add n m 8) => Bit n
+--     y :: (Add n m 8) => Bit m
+-- so every use of "x" and every use of "y" chooses its own split
+-- point, re-elaborating the split each time.
+--
+-- Below, "x" is used at Bit 3, choosing the split 3/5 (so "x" is the
+-- top 3 bits of "z"), while "y" is also used at Bit 3, choosing the
+-- contradictory split 5/3 (so "y" is the bottom 3 bits of "z").
+-- The two results do not come from any single split of "z":
+-- the middle two bits of "z" appear in neither "x" nor "y".
+--
+--     z = 10110100
+--         ^^^  ^^^
+--          x    y     =>  contradictorySplit = (0b101, 0b100)
+--
+-- Without -let-gen, "x" and "y" are monomorphic and share one split
+-- point, so using "x" at Bit 3 forces "y" to be Bit 5, and this
+-- package is rejected with a type error.
+
+z :: Bit 8
+z = 0b10110100
+
+contradictorySplit :: (Bit 3, Bit 3)
+contradictorySplit =
+    let (x, y) = split z
+    in  (x, y)

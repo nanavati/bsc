@@ -38,6 +38,13 @@ compare_file CircularRegister.bsv.bsc-out
 # Test of polymorphically bound lambdas (new CLam rule)
 compile_pass PolyLam.bs -let-gen
 
+# The "let (x, y) = split z" footgun: with -let-gen, the two results
+# of split can be used at contradictory types, each use choosing its
+# own split point.  Without -let-gen, the binding is monomorphic and
+# the contradictory uses are a type error.
+compile_pass SplitLetGen.bs -let-gen
+compile_fail SplitLetGen.bs
+
 compile_fail PackedString.bs
 
 # Fix a bug where substitution info was being lost
