@@ -350,6 +350,11 @@ fsFromWrapField   = mkFString "fromWrapField"
 fsToWrapField     = mkFString "toWrapField"
 fsSaveFieldPortTypes = mkFString "saveFieldPortTypes"
 
+fsBoundaryEntry, fsPrimMkFieldEntry, fsPrimMkOpaqueEntry :: FString
+fsBoundaryEntry = mkFString "BoundaryEntry"
+fsPrimMkFieldEntry = mkFString "primMkFieldEntry"
+fsPrimMkOpaqueEntry = mkFString "primMkOpaqueEntry"
+
 -- XXX low ASCII only, please...
 sAcute             = "__"
 fsAcute            = mkFString sAcute

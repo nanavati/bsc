@@ -225,6 +225,8 @@ data PrimOp =
 
         -- implementation-group attachment (mkOneOf)
         | PrimMkGroup
+        | PrimMkFieldEntry              -- a boundary-description leaf: carries
+        | PrimMkOpaqueEntry             -- a WrapField dictionary / opaque kind
 
         -- compile time numbers
         | PrimIntegerAdd
@@ -482,6 +484,8 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primSavePortType" = PrimSavePortType
 
         tp "primMkGroup" = PrimMkGroup
+        tp "primMkFieldEntry" = PrimMkFieldEntry
+        tp "primMkOpaqueEntry" = PrimMkOpaqueEntry
 
         tp "primSeq" = PrimSeq
         tp "primSeqCond" = PrimSeqCond
@@ -796,6 +800,8 @@ instance NFData PrimOp where
     rnf PrimIsIfcType = ()
     rnf PrimSavePortType = ()
     rnf PrimMkGroup = ()
+    rnf PrimMkFieldEntry = ()
+    rnf PrimMkOpaqueEntry = ()
     rnf PrimIntegerAdd = ()
     rnf PrimIntegerSub = ()
     rnf PrimIntegerNeg = ()

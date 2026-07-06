@@ -62,6 +62,7 @@ package Prelude(
         primGetParamName,
         setStateName, primGetModuleName, primSavePortType,
         primMkGroup, mkOneOf,
+        BoundaryEntry, primMkFieldEntry, primMkOpaqueEntry,
         SynthPort(..), SynthMethod(..), SynthField(..),
         Synthesizable'(..), Synthesizable(..),
         WrapIfc'(..), MediateField(..), genericWrapIfc, genericUnwrapIfc,
@@ -2615,6 +2616,26 @@ primitive primSavePortType :: Maybe Name__ -> String -> Type -> Module ()
 -- contract; the alternates must be separately synthesized modules
 -- and are never instantiated
 primitive primMkGroup :: List (String, Module ifc) -> ifc -> Module ()
+
+-- ================================================================
+-- Boundary descriptions (increment 6 of the GenWrap-dissolution
+-- round).  GenWrap emits one boundary_<flatifc> def per synthesized
+-- interface: a literal list of entries, one per leaf of the flattened
+-- boundary.  A field entry names the leaf (its flattened path) and
+-- carries its rendering slots AND -- because the entry's proviso is
+-- resolved by the typechecker at the declaration -- a reference to
+-- the leaf's WrapField dictionary: the codec that marshals the field
+-- across the boundary.  Post-typecheck consumers (the shadow checker;
+-- later, the wrapper fold) read the codec out of the def body through
+-- the ordinary def machinery.  The entries are inert descriptions:
+-- they are never evaluated as values.
+
+primitive type BoundaryEntry :: *
+
+primitive primMkFieldEntry :: (WrapField name f w) =>
+    StrArg name -> f -> List (String, String) -> BoundaryEntry
+
+primitive primMkOpaqueEntry :: String -> String -> BoundaryEntry
 
 -- one boundary, several implementations: instantiate the default
 -- (root) implementation and form an implementation group over it;

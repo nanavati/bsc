@@ -915,6 +915,9 @@ data DefProp
   | DefP_Method Id -- for method predicates
   | DefP_Instance Id  -- for method predicates
   | DefP_NoCSE -- indicate this def should never be used for CSE
+  | DefP_Boundary -- a compiler-emitted boundary description def
+                  -- (signature_/boundary_): rooted, must survive any
+                  -- future dead-def elimination of the .bo
   deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 instance PPrint DefProp where
@@ -925,6 +928,7 @@ instance NFData DefProp where
   rnf (DefP_Instance x) = rnf x
   rnf (DefP_Method x) = rnf x
   rnf DefP_NoCSE = ()
+  rnf DefP_Boundary = ()
 
 -- --------------------
 

@@ -96,8 +96,10 @@ import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
-import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..))
+import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..), isRdyToRemoveField)
 import GenBoundary(renderWrapperCDefn)
+import BoundaryDesc(boundaryIdForIfc, readBoundaryEntries,
+                    shadowBoundaryErrs)
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
 import IExpand(iExpand)
@@ -466,7 +468,18 @@ compilePackage
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    imod <- iConvPackage errh flags symt mod'
+    imod0conv <- iConvPackage errh flags symt mod'
+    -- root the boundary-description defs (signature_/boundary_/
+    -- contract_/convention_): consumers reference them by naming
+    -- convention, so any future dead-def elimination of the .bo
+    -- must treat the tag as a root
+    let isDescId i = any (`isPrefixOf` getIdBaseString i)
+                         ["signature_", "boundary_",
+                          "contract_", "convention_"]
+        tagDef d@(IDef i t_ e props)
+            | isDescId i = IDef i t_ e (DefP_Boundary : props)
+            | otherwise = d
+        imod = imod0conv { ipkg_defs = map tagDef (ipkg_defs imod0conv) }
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
     iPCheck flags symt imod "internal"
@@ -1069,6 +1082,40 @@ genModule
     -- filter and the readiness guards agree with the recorded
     -- schedule by construction (the ifc-declaration pragmas are
     -- per-type facts, carried in the BoundarySpec)
+    -- the shadow check (increment 6): under -check-wrap-shadow,
+    -- verify that the boundary_ description determines the boundary
+    -- being assembled -- the substrate proof the fold increment
+    -- builds on.  The description def is package-qualified with the
+    -- flat interface's package; fall back to a same-base scan (the
+    -- members may live in another package).
+    when (checkWrapShadow flags) $ do
+        let bid = boundaryIdForIfc (wrapper_ifc wi)
+            bid_base = getIdBaseString bid
+            mbody = case M.lookup bid alldefs of
+                      Just b -> Just b
+                      Nothing ->
+                        case [ b | (i, b) <- M.toList alldefs,
+                                   getIdBaseString i == bid_base ] of
+                          (b:_) -> Just b
+                          [] -> Nothing
+            eff_pps = bs_iprags (wi_boundary wi) ++ pps
+            shadow_fields = filter (not . isRdyToRemoveField eff_pps)
+                                   fieldinfo
+        case mbody of
+          Nothing -> bsError errh
+              [(def_pos, EGeneric ("wrap shadow: no boundary def `" ++
+                                   bid_base ++ "' found"))]
+          Just body ->
+            case readBoundaryEntries body of
+              Left msg -> bsError errh [(def_pos, EGeneric
+                              ("wrap shadow: " ++ msg))]
+              Right entries ->
+                case shadowBoundaryErrs eff_pps entries shadow_fields of
+                  [] -> return ()
+                  errs -> bsError errh
+                      [ (def_pos, EGeneric ("wrap shadow: " ++ e))
+                      | e <- errs ]
+
     let bspec = wi_boundary wi
     def <- renderWrapperCDefn bspec
                  pps

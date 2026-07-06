@@ -235,6 +235,11 @@ idPolyWrapField = mk_no fsPolyWrapField
 idLiftModule :: Id
 idLiftModule = prelude_id_no fsLiftModule
 
+idBoundaryEntry, idPrimMkFieldEntry, idPrimMkOpaqueEntry :: Id
+idBoundaryEntry = prelude_id_no fsBoundaryEntry
+idPrimMkFieldEntry = prelude_id_no fsPrimMkFieldEntry
+idPrimMkOpaqueEntry = prelude_id_no fsPrimMkOpaqueEntry
+
 idWrapField, idFromWrapField, idToWrapField, idSaveFieldPortTypes :: Id
 idWrapField = prelude_id_no fsWrapField
 idFromWrapField = prelude_id_no fsFromWrapField

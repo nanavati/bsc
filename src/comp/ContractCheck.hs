@@ -1,6 +1,7 @@
 module ContractCheck(checkDeclaredContract,
                      ContractStmt(..), readContract,
                      contractReadyPragmas,
+                     REnv, whead, readStr1, readListSpine, readPairWith,
                      contractIdForIfc, signatureIdForIfc,
                      readSignatureKinds,
                      imposeDeclared, markMustHigh,

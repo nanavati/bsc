@@ -162,7 +162,11 @@ data Flags = Flags {
         -- as opposed to the default-on .ba write for codegen backends;
         -- gates the "Elaborated module file created" progress message
         -- (kept last so the Bin instance's positional prefix is stable)
-        genABinExplicit :: Bool
+        genABinExplicit :: Bool,
+        -- compare the assembled boundary against the boundary_
+        -- description at every module generation (a checker for the
+        -- description substrate; increment 6)
+        checkWrapShadow :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

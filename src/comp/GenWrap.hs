@@ -381,12 +381,21 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        -- interface (entries with port renderings) as ordinary data in the .bo
        signatureDefs <- mapM mkSignatureDef finalIfcTRecs
 
+       -- boundary defs: the codec-bearing sibling of the signature
+       -- def, whose field entries resolve each leaf's WrapField
+       -- dictionary at this declaration (foreign interfaces excluded:
+       -- their leaves flatten through genIfcFieldFN's typemap and a
+       -- hand-declared boundary needs no generated codecs)
+       boundaryDefs <- mapM mkBoundaryDef
+                            [ r | r <- finalIfcTRecs, not (rec_isforeign r) ]
+
        let finalDefs = reverse fixedDefs ++
                        ifcdefns ++
                        newModule_s ++
                        ifcConversionDefs ++
                        instanceDefs ++
-                       signatureDefs
+                       signatureDefs ++
+                       boundaryDefs
 
        gens <- mapM (genWrapInfo newFlatIfcs) moduledefs
 
@@ -2155,6 +2164,95 @@ saveTopModPortTypeStmt i t =
 -- schedules stay in the .ba).
 --
 --   signature_<flatifc> :: List (String, List (String, String))
+
+-- One boundary_<flatifc> def per generated (non-foreign) interface: a
+-- literal List BoundaryEntry.  Field entries name the leaf (flattened
+-- path), carry its rendering slots, and -- because primMkFieldEntry's
+-- WrapField proviso is resolved by the typechecker at this
+-- declaration against the leaf's name and type proxies -- a reference
+-- to the leaf's codec dictionary, serialized into the .bo by the
+-- ordinary def machinery.  Clock/reset/inout leaves are opaque
+-- entries: the native floor needs no dictionary.
+mkBoundaryDef :: IfcTRec -> GWMonad CDefn
+mkBoundaryDef rec =
+ do let ifcId = rec_rootid rec
+        pos = getPosition ifcId
+    entries <- boundaryEntries ifcId (rec_finfs rec)
+    let sane c = if isAlphaNum c then c else '_'
+        defId = mkId pos (concatFString
+                            [mkFString "boundary_",
+                             mkFString (map sane (getIdBaseString (rec_id rec)))])
+        tBoundary = TAp (cTCon idList) (cTCon idBoundaryEntry)
+        body = mkList pos entries
+    return (CValueSign (CDef defId (CQType [] tBoundary) [CClause [] [] body]))
+
+-- the same traversal discipline as signatureEntries, producing the
+-- entry expressions
+boundaryEntries :: Id -> [FInf] -> GWMonad [CExpr]
+boundaryEntries topIfcId = concatMapM (ent noPrefixes topIfcId)
+ where
+   ent :: IfcPrefixes -> Id -> FInf -> GWMonad [CExpr]
+   ent prefixes ifcIdIn (FInf f as r aIds) =
+    do
+      ciPrags <- getInterfaceFieldPrags ifcIdIn f
+      mi <- chkInterface r
+      case (mi, as) of
+        (Just (ti, _, fts), []) -> do
+          newprefixes <- extendPrefixes prefixes ciPrags r f
+          concatMapM (ent newprefixes ti) fts
+        _ -> do
+          isVec <- isVectorInterfaces r
+          case (isVec, as) of
+            (Just (n, tVec, _isListN), []) -> do
+               let nums = [0..(n-1)] :: [Integer]
+               let recurse num =
+                     do newprefixes <- extendPrefixes prefixes ciPrags r f
+                        ent newprefixes ifcIdIn (FInf (mkNumId num) [] tVec [])
+               concatMapM recurse nums
+            _ -> do
+              let methodStr = getIdBaseString f
+                  currentPre = ifcp_renamePrefixes prefixes
+                  localPrefix1 = fromMaybe methodStr (lookupPrefixIfcPragma ciPrags)
+                  localPrefix = joinStrings_ currentPre localPrefix1
+                  resultName = case lookupResultIfcPragma ciPrags of
+                                 Just str -> joinStrings_ currentPre str
+                                 Nothing -> joinStrings_ currentPre methodStr
+                  path = fieldPathName prefixes f
+                  pathStr = getFString path
+                  pos = getIdPosition f
+                  eStr = stringLiteralAt pos
+              isClk <- isClockType r
+              isRst <- isResetType r
+              mIno <- isInoutType r
+              if isClk || isRst || isJust mIno
+                then let kind | isClk = "clock"
+                              | isRst = "reset"
+                              | otherwise = "inout"
+                     in  return [cVApply idPrimMkOpaqueEntry
+                                     [eStr pathStr, eStr kind]]
+                else do
+                  let kind | leftCon r == Just idActionValue =
+                               if leftCon (getActionValueArg r) == Just idPrimUnit
+                               then "action" else "actionvalue"
+                           | leftCon r == Just idPrimAction = "action"
+                           | leftCon r == Just idAction = "action"
+                           | otherwise = "value"
+                      tyStr = pfpString (foldr arrow r as)
+                      argSlots = [ ("arg" ++ show n, getIdString i)
+                                 | (n, i) <- zip [(1 :: Integer)..] aIds ]
+                      slots = [("path", pathStr),
+                               ("kind", kind), ("type", tyStr),
+                               ("prefix", localPrefix),
+                               ("result", resultName)]
+                              ++ argSlots
+                      slotE (k, v) = mkTuple pos [eStr k, eStr v]
+                      slotsE = mkList pos (map slotE slots)
+                      fproxy = mkTypeProxyExpr (
+                                 TAp (cTCon idStrArg)
+                                     (cTStr path (getIdPosition f)))
+                      proxy = mkTypeProxyExpr (foldr arrow r as)
+                  return [cVApply idPrimMkFieldEntry
+                              [fproxy, proxy, slotsE]]
 
 mkSignatureDef :: IfcTRec -> GWMonad CDefn
 mkSignatureDef rec =

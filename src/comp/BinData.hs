@@ -1108,6 +1108,7 @@ instance Bin DefProp where
     writeBytes (DefP_Method i) = do putI 1 ; toBin i
     writeBytes (DefP_Instance i) = do putI 2 ; toBin i
     writeBytes DefP_NoCSE = putI 3
+    writeBytes DefP_Boundary = putI 4
     readBytes = do
       select <- getI
       case select of
@@ -1115,6 +1116,7 @@ instance Bin DefProp where
         1 -> do i <- fromBin ; return $ DefP_Method i
         2 -> do i <- fromBin ; return $ DefP_Instance i
         3 -> return DefP_NoCSE
+        4 -> return DefP_Boundary
         n -> internalError $ "BinData.Bin(DefProp).readBytes: " ++ show n
 
 -- ------------
