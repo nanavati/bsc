@@ -186,6 +186,7 @@ package Prelude(
         ContractStmt(..),
         contractCF, contractSB, contractSBR, contractC,
         contractAlwaysReady, contractAlwaysEnabled,
+        ConventionStmt(..), conventionReadyValid,
 
         -- other list primitives
         listLength,
@@ -3694,6 +3695,21 @@ contractAlwaysReady = ContractAlwaysReady
 
 contractAlwaysEnabled :: String -> ContractStmt
 contractAlwaysEnabled = ContractAlwaysEnabled
+
+-- Method conventions (compile-time values, read by the compiler): a
+-- sparse list beside the interface declaration choosing how methods
+-- are realized at module boundaries.  The unwritten default is the
+-- classic enable convention; conventionReadyValid selects retractable
+-- ready/valid (the boundary accepts a request that may be asserted
+-- while not ready; the transfer happens on request AND ready).
+--
+--   convention_Counter :: List ConventionStmt
+--   convention_Counter = cons (conventionReadyValid "incr") nil
+
+data ConventionStmt = ConventionReadyValid String
+
+conventionReadyValid :: String -> ConventionStmt
+conventionReadyValid = ConventionReadyValid
 
 -- uck! We define these twice because we want people
 -- to be able to import standard list functions qualified

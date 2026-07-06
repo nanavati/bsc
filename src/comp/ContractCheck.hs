@@ -3,6 +3,7 @@ module ContractCheck(checkDeclaredContract,
                      contractIdForIfc, signatureIdForIfc,
                      readSignatureKinds,
                      imposeDeclared, markMustHigh,
+                     declaredConventions,
                      pinoutErrs, pinoutSummary) where
 
 -- Declared interface contracts, checked at each implementation's own
@@ -271,9 +272,13 @@ readSignatureKinds e0 =
 -- under an IsModule context), so the interface is the argument of the
 -- outermost application.
 contractDefId :: CQType -> Maybe Id
-contractDefId (CQType _ t) =
+contractDefId cqt = fmap contractIdForIfc (cqtIfcCon cqt)
+
+-- the interface tycon of a module's original type
+cqtIfcCon :: CQType -> Maybe Id
+cqtIfcCon (CQType _ t) =
   case snd (getArrows t) of
-    TAp _ ifcT -> fmap contractIdForIfc (leftCon ifcT)
+    TAp _ ifcT -> leftCon ifcT
     _ -> Nothing
 
 -- the (package-qualified) id of an interface's contract def
@@ -503,6 +508,48 @@ imposeDeclared stmts kinds vmi =
             sEXT = [] }
     return (old { methodConflictInfo = new_mci }, ae_ids)
 
+-- ==================================================
+-- Declared method conventions (convention_<Ifc>): a sparse literal
+-- list choosing boundary realizations per method.  v0 carries one
+-- statement, conventionReadyValid (retractable ready/valid).  The
+-- unwritten default is the classic enable convention.
+
+conventionIdForIfc :: Id -> Id
+conventionIdForIfc ifcId =
+    setIdBase ifcId (concatFString [mkFString "convention_", getIdBase ifcId])
+
+-- read a convention def: the method names declared ReadyValid
+readConventions :: IExpr a -> Either String [String]
+readConventions = readListSpine notLit readStmt M.empty
+  where
+    notLit :: Either String b
+    notLit = Left ("a convention def must be a literal list of " ++
+                   "conventionReadyValid statements, with method names " ++
+                   "as string literals")
+    readStmt env e =
+      case whead env e of
+        (env', ICon i _, [m])
+          | isLibId ["conventionReadyValid", "ConventionReadyValid"] i ->
+              readStr1 notLit env' m
+        _ -> notLit
+
+-- look up and read the declared conventions for the module's
+-- interface; absence means every method keeps the classic default
+declaredConventions :: M.Map Id (IExpr a) -> CQType
+                    -> Either String [String]
+declaredConventions alldefs cqt =
+  case cqtIfcCon cqt of
+    Nothing -> Right []
+    Just ifcId ->
+      case M.lookup (conventionIdForIfc ifcId) alldefs of
+        Nothing -> Right []
+        Just body ->
+          case readConventions body of
+            Left msg -> Left ("convention def `" ++
+                              getIdBaseString (conventionIdForIfc ifcId) ++
+                              "': " ++ msg)
+            Right ns -> Right (nub ns)
+
 -- stamp the caller obligation on the enable ports of the given
 -- methods (sealed contractAlwaysEnabled clauses): VPmusthigh keys the
 -- existing always-enabled proof obligation without changing the
@@ -545,6 +592,14 @@ showMethodShape (ins, out, en, mult) =
     maybe "" ((", result " ++) . getVNameString) out ++
     maybe "" ((", enable " ++) . getVNameString) en ++
     ", mult " ++ show mult ++ ")"
+
+-- enable-port properties worth surfacing in the pinout record
+-- (conventions and obligations; empty for plain classic enables)
+enPropsDesc :: VFieldInfo -> String
+enPropsDesc (Method { vf_enable = Just (_, ps) })
+    | not (null ps) =
+        " enable-props:" ++ intercalate "," (map (drop 2 . show) ps)
+enPropsDesc _ = ""
 
 isMethodField :: VFieldInfo -> Bool
 isMethodField (Method {}) = True
@@ -600,7 +655,8 @@ pinoutSummary :: VModInfo -> [(String, String)]
 pinoutSummary vmi =
     [ ("arguments",
        intercalate "; " (map (argWireDesc vmi) (vArgs vmi))) ] ++
-    [ (getIdBaseString (vf_name m), showMethodShape (methodShapeOf m))
+    [ (getIdBaseString (vf_name m),
+       showMethodShape (methodShapeOf m) ++ enPropsDesc m)
     | m <- vFields vmi, isMethodField m ] ++
     [ (getIdBaseString (vf_name f), "interface field")
     | f <- vFields vmi, not (isMethodField f) ]

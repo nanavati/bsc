@@ -93,6 +93,11 @@ data VeriPortProp = VPreg
                                  -- contractAlwaysEnabled clause); unlike
                                  -- VPinhigh the port physically exists
                                  -- and stays connected
+                  | VPreadyvalid -- this enable follows the retractable
+                                 -- ready/valid convention: it may be
+                                 -- asserted while the method is not
+                                 -- ready, and the transfer happens on
+                                 -- enable AND ready
                   | VPunused
         deriving (Show, Eq, Ord, Generic.Data, Generic.Typeable)
 
@@ -106,6 +111,7 @@ instance NFData VeriPortProp where
     rnf VPreset = ()
     rnf VPinout = ()
     rnf VPmusthigh = ()
+    rnf VPreadyvalid = ()
     rnf VPunused = ()
 
 instance PPrint VeriPortProp where
@@ -118,6 +124,7 @@ instance PPrint VeriPortProp where
     pPrint _ _ VPreset  = text "reset"
     pPrint _ _ VPinout  = text "inout"
     pPrint _ _ VPmusthigh = text "musthigh"
+    pPrint _ _ VPreadyvalid = text "readyvalid"
     pPrint _ _ VPclockgate = text "clock gate"
 
 

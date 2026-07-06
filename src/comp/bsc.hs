@@ -17,7 +17,7 @@ import Data.Char(isSpace, toLower, ord, isAlphaNum)
 import Data.List(intersect, nub, partition, intersperse, sort,
             isPrefixOf, isSuffixOf, unzip5, intercalate)
 import Data.Time.Clock.POSIX(getPOSIXTime)
-import Data.Maybe(isJust, isNothing)
+import Data.Maybe(isJust, isNothing, listToMaybe)
 import Numeric(showOct)
 
 import Control.Monad(when, unless, filterM, liftM, foldM)
@@ -77,7 +77,8 @@ import CVPrint
 import Id
 import Backend
 import Pragma
-import VModInfo(VPathInfo, VPort, vImpls, vName, getVNameString)
+import VModInfo(VPathInfo, VPort, vImpls, vName, getVNameString,
+                VeriPortProp(..), VFieldInfo(..))
 import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
@@ -150,7 +151,8 @@ import Classic(SyntaxMode(..), setSyntax)
 import ILift(iLift)
 import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
-import ContractCheck(checkDeclaredContract, pinoutSummary)
+import ContractCheck(checkDeclaredContract, pinoutSummary,
+                     declaredConventions)
 import SchedInfo(methodConflictInfo)
 import ADumpSchedule (MethodDumpInfo, aDumpSchedule, aDumpScheduleErr,
                       dumpMethodInfo, dumpMethodBVIInfo)
@@ -975,12 +977,53 @@ genModule
     -- (any rdy signals in this list don't need to be wired up
     -- in the wrapper; it can assume a value of 1)
     let true_ifc_ids  = [ i | IEFace i _ (Just (e, t)) _ _ _ <- ifc, isTrue e || isAlwaysRdy pps i ]
+    -- declared method conventions (convention_<Ifc>): stamp
+    -- VPreadyvalid on the enable ports of ReadyValid-tagged methods.
+    -- Every member of the interface is stamped from the same
+    -- declaration, so conformance across a group holds by
+    -- construction
+    rv_names <- case declaredConventions alldefs (orig_cqt wi) of
+                  Left msg -> bsError errh [(def_pos, EGeneric msg)]
+                  Right ns -> return ns
+    let findFieldInfo n =
+            listToMaybe [ m | m@(Method {}) <- fieldinfo,
+                              getIdBaseString (vf_name m) == n ]
+    rv_props <- let chk n =
+                      case findFieldInfo n of
+                        Nothing ->
+                          bsError errh [(def_pos,
+                            EGeneric ("convention: unknown method `" ++ n ++
+                                      "' for module `" ++ modstr ++ "'"))]
+                        Just m
+                          | isAlwaysEn pps (vf_name m) ->
+                          bsError errh [(def_pos,
+                            EGeneric ("conventionReadyValid cannot be " ++
+                                      "combined with always_enabled for " ++
+                                      "method `" ++ n ++ "' (a tied-high " ++
+                                      "request is a different convention)"))]
+                          | otherwise ->
+                          case vf_enable m of
+                            Just (vn, _) -> return (vn, [VPreadyvalid])
+                            Nothing ->
+                              bsError errh [(def_pos,
+                                EGeneric ("conventionReadyValid is declared " ++
+                                          "for `" ++ n ++ "', which has no " ++
+                                          "enable (value methods have no " ++
+                                          "request wire)"))]
+                in mapM chk rv_names
+    -- merge (fixupPort takes the FIRST entry per port name, and the
+    -- Verilog backend already emits entries for enable ports)
+    let mergedPortProps =
+            [ (vn, ps ++ concat [ eps | (evn, eps) <- rv_props, evn == vn ])
+            | (vn, ps) <- veriPortProps ] ++
+            [ e | e@(evn, _) <- rv_props,
+                  evn `notElem` map fst veriPortProps ]
     def <- (deffun wi)
                  fwrapper
                  wireinfo
                  (asi_v_sched_info schedule_info)
                  vPathInfo
-                 veriPortProps
+                 mergedPortProps
                  symt
                  fieldinfo
                  true_ifc_ids
