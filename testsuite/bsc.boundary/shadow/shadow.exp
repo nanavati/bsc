@@ -1,0 +1,99 @@
+# -check-wrap-shadow (hidden flag): at every module generation the
+# compiler reads the module's boundary_<flatifc> description def
+# (emitted by GenWrap beside signature_) and compares the described
+# boundary against the actually-assembled one -- member names (methods
+# incl. RDY twins after any contractAlwaysReady collapse, output
+# clocks, resets, inouts) and per-kind port shape (action -> enable,
+# no output; actionvalue -> enable+output; value -> output, no
+# enable).  Any disagreement is a positioned S0015 "wrap shadow: ..."
+# error; with agreement the compile is unchanged.
+#
+# All tests here are positives: a mismatch requires a compiler bug, so
+# there is no negative yet.  Every source is also compiled WITHOUT the
+# flag first, to show the baseline is green independent of the checker.
+# Tests (1) and (6) also link+sim on Bluesim against a hand-computed
+# .out.expected, to show the flag does not perturb behavior.
+
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "*.cexe"
+erase_many "*.cexe.so"
+erase_many "*.out"
+erase_many "*.impls.json"
+
+# ----------
+# (1) Simple flat interface: value + action + actionvalue methods
+
+compile_verilog_pass Flat.bsv mkFlatDut
+compile_verilog_pass Flat.bsv mkFlatDut {-check-wrap-shadow}
+
+if { $ctest == 1 } {
+    compile_object_pass Flat.bsv mkFlatTb
+    compile_object_pass Flat.bsv mkFlatTb {-check-wrap-shadow}
+    link_objects_pass {mkFlatTb} mkFlatTb
+    sim_output mkFlatTb
+    move mkFlatTb.out mkFlatTb.c.out
+    # (10), then getVal sees 11; freeze after the first green run
+    compare_file mkFlatTb.c.out mkFlatTb.out.expected
+}
+
+# ----------
+# (2) Hierarchical interface: sub-interface methods flatten to
+#     underscore-joined boundary names
+
+compile_verilog_pass HierShadow.bsv mkHierShadow
+compile_verilog_pass HierShadow.bsv mkHierShadow {-check-wrap-shadow}
+
+# ----------
+# (3) Vector-of-subinterface: numeric-leaf traversal of the
+#     description (subs_0_*, subs_1_*)
+
+compile_verilog_pass VecShadow.bsv mkVecShadow
+compile_verilog_pass VecShadow.bsv mkVecShadow {-check-wrap-shadow}
+
+# ----------
+# (4) Renamed ports: prefix/result attributes fill the description's
+#     prefix/result slots; the checker compares the renamed names
+
+compile_verilog_pass Renamed.bsv mkRenamed
+compile_verilog_pass Renamed.bsv mkRenamed {-check-wrap-shadow}
+
+# ----------
+# (5) always_ready pragma: RDY twins absent on both sides
+
+compile_verilog_pass AlwaysReadyShadow.bsv mkAlwaysReadyShadow
+compile_verilog_pass AlwaysReadyShadow.bsv mkAlwaysReadyShadow {-check-wrap-shadow}
+
+# ----------
+# (6) contractAlwaysReady collapse: tick/count lose their RDY twins at
+#     the member's own boundary, pause keeps RDY_pause; the shadow
+#     must describe the effective (collapsed) boundary
+
+compile_verilog_pass TickShadow.bsv mkTickShadow
+compile_verilog_pass TickShadow.bsv mkTickShadow {-check-wrap-shadow}
+
+if { $ctest == 1 } {
+    compile_object_pass TickShadow.bsv mkTickShadowTb
+    compile_object_pass TickShadow.bsv mkTickShadowTb {-check-wrap-shadow}
+    link_objects_pass {mkTickShadowTb} mkTickShadowTb
+    sim_output mkTickShadowTb
+    move mkTickShadowTb.out mkTickShadowTb.c.out
+    # after the first green run
+    compare_file mkTickShadowTb.c.out mkTickShadowTb.out.expected
+}
+
+# ----------
+# (7) Clock/Reset output fields: opaque entries in the description,
+#     matched by name against the assembled boundary; compile only
+
+compile_verilog_pass ClkFieldShadow.bsv mkClkFieldShadow
+compile_verilog_pass ClkFieldShadow.bsv mkClkFieldShadow {-check-wrap-shadow}
+
+# ----------
+# (8) BVI import: no boundary_ def, no generated wrapper -- the import
+#     must not trip the per-generated-module check; the generated
+#     mkBviUser that instantiates it compiles green with the flag
+
+compile_verilog_pass BviShadow.bsv mkBviUser
+compile_verilog_pass BviShadow.bsv mkBviUser {-check-wrap-shadow}
