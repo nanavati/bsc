@@ -3552,7 +3552,11 @@ tags, count as stale). `.ba` header tag bumped
 recorded: link-time consumers still accept a wrong-processing `.ba`
 if handed one directly — the same written-backend check belongs in
 `decodeABin`'s compatibility test; deferred with the note that the
-Depend fix removes every path the suite exercises.
+Depend fix removes every path the suite exercises. Verified: the
+full-suite gate rerun passes 18564 with 26 unexpected failures, all
+environmental (SystemC headers not installed; permission-denied
+negatives that cannot fire as root), at 2:07 wall against the 2:13
+baseline — the freshness decode is free at suite scale.
 
 ---
 
