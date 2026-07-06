@@ -854,10 +854,19 @@ genModule
     start flags DFvschedinfo
     t <- dump errh flags t DFvschedinfo dumpnames (asi_v_sched_info schedule_info)
 
+    -- declared method conventions (convention_<Ifc>): the names of
+    -- methods whose boundary speaks retractable ready/valid; consumed
+    -- by the schedule-defs pass (request gated with ready) and by
+    -- wrapper generation (VPreadyvalid on the enable port)
+    rv_names <- case declaredConventions alldefs (orig_cqt wi) of
+                  Left msg -> bsError errh [(def_pos, EGeneric msg)]
+                  Right ns -> return ns
+
     -- Add CAN_FIRE and WILL_FIRE defs based on the schedule
     start flags DFscheduledefs
     amod_scheduled <- aAddScheduleDefs flags
                                        pps
+                                       rv_names
                                        amod_sched
                                        schedule_info
     t <- dump errh flags t DFscheduledefs dumpnames amod_scheduled
@@ -977,14 +986,11 @@ genModule
     -- (any rdy signals in this list don't need to be wired up
     -- in the wrapper; it can assume a value of 1)
     let true_ifc_ids  = [ i | IEFace i _ (Just (e, t)) _ _ _ <- ifc, isTrue e || isAlwaysRdy pps i ]
-    -- declared method conventions (convention_<Ifc>): stamp
-    -- VPreadyvalid on the enable ports of ReadyValid-tagged methods.
+    -- stamp VPreadyvalid on the enable ports of ReadyValid-tagged
+    -- methods (rv_names was read before the schedule-defs pass).
     -- Every member of the interface is stamped from the same
     -- declaration, so conformance across a group holds by
     -- construction
-    rv_names <- case declaredConventions alldefs (orig_cqt wi) of
-                  Left msg -> bsError errh [(def_pos, EGeneric msg)]
-                  Right ns -> return ns
     let findFieldInfo n =
             listToMaybe [ m | m@(Method {}) <- fieldinfo,
                               getIdBaseString (vf_name m) == n ]

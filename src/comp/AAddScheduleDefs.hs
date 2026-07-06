@@ -12,7 +12,7 @@ import PFPrint
 import Error(ErrMsg(..))
 import ErrorUtil(internalError)
 import VModInfo(VModInfo(..), VFieldInfo(..), VeriPortProp(..), mkNamedEnable)
-import Id (Id, getIdString, isRdyId, dropReadyPrefixId,
+import Id (Id, getIdString, getIdBaseString, isRdyId, dropReadyPrefixId,
            mkIdWillFire, mkIdCanFire, mkRdyId)
 import Position
 import BackendNamingConventions
@@ -84,9 +84,9 @@ import Data.Maybe(fromJust, fromMaybe, maybeToList, mapMaybe)
 
 type ExprMap = M.Map Id AExpr
 
-aAddScheduleDefs :: Flags -> [PProp] -> APackage -> AScheduleInfo ->
-                    IO APackage
-aAddScheduleDefs flags pps pkg aschedinfo =
+aAddScheduleDefs :: Flags -> [PProp] -> [String] -> APackage ->
+                    AScheduleInfo -> IO APackage
+aAddScheduleDefs flags pps rv_meths pkg aschedinfo =
   do
      -- Collect some useful information
      let defs0     = apkg_local_defs pkg
@@ -116,8 +116,18 @@ aAddScheduleDefs flags pps pkg aschedinfo =
                        ]
          (rdy_map, rdy_proof_obs) =
              handleAlwaysReady (unsafeAlwaysRdy flags) pkgpos pps pre_rdy_map
-         (en_map, enrdy_proof_obs) =
+         (en_map0, enrdy_proof_obs) =
              handleEnableWhenReady pps rdy_map pre_en_map
+         -- retractable ready/valid methods (declared conventions): the
+         -- boundary accepts a request that may be asserted while not
+         -- ready, so the method's execute condition is gated with its
+         -- own ready -- the transfer happens on request AND ready.
+         -- (The reference is to the method's RDY def, whose value is
+         -- replaced below with the schedule's conflict expression.)
+         en_map = M.mapWithKey gateRV en_map0
+         gateRV n e | getIdBaseString n `elem` rv_meths =
+                        aAnds [e, aBoolVar (mkRdyId n)]
+                    | otherwise = e
 
      -- Build proof obligations for always_enabled methods of submodules
      let ensub_proof_obs = handleSubmodAlwaysEnabled mumap insts0
