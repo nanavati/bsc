@@ -223,6 +223,9 @@ data PrimOp =
         -- type-tracking primitive
         | PrimSavePortType
 
+        -- implementation-group attachment (mkOneOf)
+        | PrimMkGroup
+
         -- compile time numbers
         | PrimIntegerAdd
         | PrimIntegerSub
@@ -477,6 +480,8 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primIsIfcType" = PrimIsIfcType
 
         tp "primSavePortType" = PrimSavePortType
+
+        tp "primMkGroup" = PrimMkGroup
 
         tp "primSeq" = PrimSeq
         tp "primSeqCond" = PrimSeqCond
@@ -790,6 +795,7 @@ instance NFData PrimOp where
     rnf PrimTypeEQ = ()
     rnf PrimIsIfcType = ()
     rnf PrimSavePortType = ()
+    rnf PrimMkGroup = ()
     rnf PrimIntegerAdd = ()
     rnf PrimIntegerSub = ()
     rnf PrimIntegerNeg = ()

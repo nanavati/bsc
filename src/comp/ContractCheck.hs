@@ -1,5 +1,6 @@
 module ContractCheck(checkDeclaredContract,
-                     ContractStmt(..), readContract) where
+                     ContractStmt(..), readContract,
+                     contractIdForIfc, imposeDeclared) where
 
 -- Declared interface contracts, checked at each implementation's own
 -- compile (design doc A78/A83: no inference across boundaries; the
@@ -32,17 +33,19 @@ module ContractCheck(checkDeclaredContract,
 -- reader (literal lists only, no evaluation).
 
 import qualified Data.Map as M
-import Data.List(nub, intercalate)
+import Data.List(nub, intercalate, group, sort)
 
 import Error(ErrorHandle, ErrMsg(..), bsError)
 import Position(Position)
 import Id
+import Util(ordPair, uniquePairs)
 import FStringCompat(mkFString, concatFString)
 import CType(Type(..), leftCon, getArrows)
 import CSyntax(CQType(..))
 import ISyntax
-import SchedInfo(MethodConflictInfo(..))
-import VModInfo(VMethodConflictInfo)
+import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
+import VModInfo(VModInfo, VSchedInfo, VMethodConflictInfo,
+                vSched, vFields, VFieldInfo(..))
 
 -- ==================================================
 -- The permission lattice: what a relation grants for an ordered pair
@@ -183,13 +186,13 @@ readContract = readSpine M.empty
 contractDefId :: CQType -> Maybe Id
 contractDefId (CQType _ t) =
   case snd (getArrows t) of
-    TAp _ ifcT ->
-      case leftCon ifcT of
-        Just ifcId ->
-            Just (setIdBase ifcId
-                    (concatFString [mkFString "contract_", getIdBase ifcId]))
-        Nothing -> Nothing
+    TAp _ ifcT -> fmap contractIdForIfc (leftCon ifcT)
     _ -> Nothing
+
+-- the (package-qualified) id of an interface's contract def
+contractIdForIfc :: Id -> Id
+contractIdForIfc ifcId =
+    setIdBase ifcId (concatFString [mkFString "contract_", getIdBase ifcId])
 
 -- The entry point: look up contract_<Ifc> for the module's interface;
 -- if declared, read it and check the inferred schedule against it.
@@ -265,4 +268,87 @@ checkStmt mci rdyTrue meths stmt =
             [] -> Left ("unknown method `" ++ n ++
                         "'; the interface's methods are " ++
                         intercalate ", "
-                          (nub (map getIdBaseString meths)))
+                          (nub [ s | i <- meths,
+                                     let s = getIdBaseString i,
+                                     take 4 s /= "RDY_" ]))
+
+-- ==================================================
+-- The imposition (mkOneOf / primMkGroup)
+
+-- Impose a declared contract on a member's recorded boundary: the
+-- returned schedule carries exactly the declared freedoms.  Declared
+-- pairs get their declared relation; unlisted pairs of distinct
+-- methods become conflicting (unpromised freedoms are not carried
+-- through, so the parent schedules against the declaration rather
+-- than this member's accidents); self-pairs keep the member's own
+-- classification (they are outside the contract language).
+--
+-- Readiness folding: RDY_* faces cannot appear in contracts --
+-- readiness is the method's own offer aspect, and reading the offer
+-- wire is conflict-free with everything (a property of the canonical
+-- rendering, not a contract freedom).  So every pair involving a
+-- RDY_* face is imposed as CF, after checking that the member's own
+-- schedule actually grants that (bsc-generated boundaries always do;
+-- this guards the assumption rather than trusting it).
+--
+-- No other refinement check happens here: the member was already
+-- checked against this same declaration at its own compile (the
+-- design's A78/A83 inversion).
+imposeDeclared :: [ContractStmt] -> VModInfo -> Either String VSchedInfo
+imposeDeclared stmts vmi =
+  let old = vSched vmi
+      omci = methodConflictInfo old
+      meths = [ n | Method { vf_name = n } <- vFields vmi ]
+      isRdyI m = take 4 (getIdBaseString m) == "RDY_"
+      real = [ m | m <- meths, not (isRdyI m) ]
+      rdys = [ m | m <- meths, isRdyI m ]
+
+      resolve s = case [ m | m <- real, getIdBaseString m == s ] of
+                    (m:_) -> Right m
+                    [] -> Left ("unknown method `" ++ s ++
+                                "'; the boundary's methods are " ++
+                                intercalate ", " (map getIdBaseString real))
+
+      resolveStmt (CRel a r b) = do
+          ma <- resolve a
+          mb <- resolve b
+          if ma == mb
+            then Left ("self pair (" ++ a ++ ", " ++ b ++
+                       ") is outside the contract language")
+            else Right [(ma, r, mb)]
+      resolveStmt (CAlwaysReady m) = resolve m >> Right []
+      resolveStmt (CAlwaysEnabled m) = resolve m >> Right []
+
+      isSelf (a, b) = a == b
+  in
+  do
+    decls <- fmap concat (mapM resolveStmt stmts)
+    let keys = [ ordPair (a, b) | (a, _, b) <- decls ]
+    case [ k | (k:_:_) <- group (sort keys) ] of
+      ((a, b):_) -> Left ("methods " ++ getIdBaseString a ++ " and " ++
+                          getIdBaseString b ++ " are related more than " ++
+                          "once in the contract")
+      [] -> Right ()
+    let rdy_pairs = [ (r, m) | r <- rdys, m <- real ] ++ uniquePairs rdys
+        not_cf = [ r | (r, m) <- rdy_pairs,
+                   not (permCovers (True, True, True) (mciPerms omci r m)) ]
+    case not_cf of
+      (r:_) -> Left ("the readiness of `" ++ drop 4 (getIdBaseString r) ++
+                     "' is not conflict-free in the member's own " ++
+                     "schedule; such a boundary cannot join a group yet")
+      [] -> Right ()
+    let unlisted = [ p | p <- map ordPair (uniquePairs real),
+                     p `notElem` keys ]
+        new_mci = MethodConflictInfo {
+            sCF  = [ (a, b) | (a, "CF", b) <- decls ] ++ rdy_pairs ++
+                   filter isSelf (sCF omci),
+            sSB  = [ (a, b) | (a, "SB", b) <- decls ] ++
+                   filter isSelf (sSB omci),
+            sME  = [],
+            sP   = filter isSelf (sP omci),
+            sSBR = [ (a, b) | (a, "SBR", b) <- decls ] ++
+                   filter isSelf (sSBR omci),
+            sC   = [ (a, b) | (a, "C", b) <- decls ] ++ unlisted ++
+                   filter isSelf (sC omci),
+            sEXT = sEXT omci }
+    return (old { methodConflictInfo = new_mci })

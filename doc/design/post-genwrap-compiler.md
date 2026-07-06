@@ -3282,6 +3282,94 @@ traversals with the field statically in view, so evidence is
 *re-proved* by instance resolution instead of carried
 (`MediateField`'s pattern).
 
+---
+
+## 13. As built: the clean-slate declaration-first implementation (phases 0–3)
+
+Executed on a fresh branch from upstream `main` (`534241d`), per A83's
+reordering: the description substrate and declared contracts *first*,
+groups as a nearly-free consequence. The §12 branch remains untouched
+as the port source; everything below is either new code or a verbatim
+port of its verified, on-path halves.
+
+**Phase 1 — signature defs.** GenWrap emits one literal `CDefn` per
+synthesized interface — `signature_<Ifc> :: List (String, List (String,
+String))` — entries keyed by flattened field path, slots split by
+stratum (A85): `kind`/`type` are signature, `prefix`/`argN`/`result`
+are rendering directives (A86: slots stay inside BVI's committed
+vocabulary). It lands in the `.bo` through the ordinary def pipeline
+(no new Bin instances, per A61) and is readable by user code: a probe
+module can `messageM` a formatted signature, and a library lint can
+*reject* interfaces at compile time from their signature alone —
+introspection as a deliverable, not a debug flag.
+
+**Phase 2 — contracts declared at the interface, checked at each
+member's own compile.** `contract_<Ifc>` beside the interface
+declaration; `ContractCheck.hs` hooks `genModule` after scheduling,
+where the inferred `VSchedInfo`, the interface type, the constant-RDY
+set, and the full def map coexist. The check is actual-refines-declared
+over the permission lattice (perms(CF) ⊇ perms(SB) ⊇ perms(SBR) ⊇
+perms(C); ME grants nothing pairwise). Violations are rejected at the
+*member's* compile with the relation named — the A78 inversion,
+observed working. Per A87 the declaration surface is the typed carrier
+from birth: Prelude `ContractStmt` constructors in a literal list, read
+by a purely structural reader (a small head-normalizer resolves the
+typechecker's dictionary lets; referenced defs are never unfolded, so
+computation is rejected). There is no textual contract grammar
+anywhere, and none should be added without substantial usage
+experience. `RDY_*` names are rejected: readiness is the method's own
+offer aspect (A82), spelled `contractAlwaysReady`.
+
+**Phase 3 — selection groups, checkless.** The emission and selection
+halves ported verbatim from §12 (they were always on-path): `vImpls`
+on `VModInfo` with Bin instances and format bumps, the two-level
+`BSV_IMPL_*` ifdef chain, Bluesim `-use-impl` link substitution, the
+`<mod>.impls.json` manifest, `.ba`-by-default. The group surface
+shrank to one primitive and one library line:
+
+```bsv
+Counter c <- mkOneOf(cons(tuple2("stub", mkCounterStub), nil), mkCounterA);
+```
+
+No contract argument — the group's contract IS the interface's
+declared one, and an interface without a declared contract cannot form
+a group (positioned error). `primMkGroup` does exactly two things:
+*impose* the declaration on the root instance's recorded schedule
+(declared pairs get their declared relation; unlisted pairs of
+distinct methods become conflicting, so the parent schedules against
+the declaration, never a member's accidents; self-pairs stay the
+member's own — outside the language), and *record* the alternates'
+Verilog names into `vImpls`. The §12 conformance machinery
+(`checkAlternate`, the group-site walk-and-compare) does not exist
+here at all: members were checked at their own compiles.
+
+*Readiness folding at imposition:* `RDY_*` faces cannot be declared,
+so the imposition folds them — every pair involving a `RDY_*` face is
+imposed CF, guarded by a check that the member's own schedule grants
+it (bsc-generated boundaries always do; the guard converts the
+assumption into an error for exotic boundaries rather than trusting
+it).
+
+Demonstrated end to end: iverilog selects stub vs default by macro
+(values 0 vs 2), Bluesim substitutes by `-use-impl` at link, manifests
+list instance/default/alternates/macros/flags, groups form across
+packages (the qualified `contract_<Ifc>` lookup), and the negatives
+are positioned errors: no declared contract, non-synthesized
+alternate, non-synthesized (inlined) root, port-argument boundaries
+(A74: contracts on duals not yet expressible — rejected, not
+half-checked).
+
+**Residuals, recorded not hidden.** (1) Alternates' module-argument
+and port shapes are not compared at the group site — the canonical
+rendering makes same-interface members identical, but a member with
+extra module arguments would produce malformed Verilog; the signature
+def is the natural future carrier for this check. (2) Alternates'
+`RDY_*` scheduling beyond the CF guard on the root is unchecked
+(members' own compiles don't see RDY relations; benign for
+bsc-generated members). (3) BVI members don't yet get the member-side
+contract check (the §12 finding that BVI = declared boundary still
+applies; it re-enters as a small import-validation check). (4)
+`contractAlwaysEnabled` is recorded, not yet enforced against callers.
 
 ---
 

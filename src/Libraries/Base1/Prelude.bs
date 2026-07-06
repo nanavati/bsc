@@ -61,6 +61,7 @@ package Prelude(
         primGetNamePosition, primGetNameString,
         primGetParamName,
         setStateName, primGetModuleName, primSavePortType,
+        primMkGroup, mkOneOf,
         Attributes__, setStateAttrib,
         primJoinActions, primNoActions, toPrimAction, fromPrimAction,
         primJoinRules, primNoRules, emptyRules,
@@ -2596,6 +2597,32 @@ instance Eq Type where
 
 -- type-tracking primitives
 primitive primSavePortType :: Maybe Name__ -> String -> Type -> Module ()
+
+-- implementation groups: given a list of (selection key, module)
+-- alternates and an interface value rooted at a single
+-- synthesized-module instance, impose the interface's *declared*
+-- contract (contract_<Ifc>) on the instance's recorded boundary --
+-- the parent schedules against the declaration, never against a
+-- member's accidents -- and record the alternates so the Verilog
+-- backend emits a macro-selected instantiation per alternate and
+-- Bluesim links with -use-impl.  There is no conformance check here:
+-- every member, root and alternates alike, is checked against the
+-- same declaration at its own compile.  The interface must declare a
+-- contract; the alternates must be separately synthesized modules
+-- and are never instantiated
+primitive primMkGroup :: List (String, Module ifc) -> ifc -> Module ()
+
+-- one boundary, several implementations: instantiate the default
+-- (root) implementation and form an implementation group over it;
+-- an alternate is chosen per instance or design-wide at
+-- simulator/synthesis compile time (Verilog `-D`/+define+, Bluesim
+-- -use-impl), defaulting to the root
+mkOneOf :: List (String, Module ifc) -> Module ifc -> Module ifc
+mkOneOf alts root = do
+    {-# hide #-}
+    _i <- root
+    primMkGroup alts _i
+    return _i
 
 
 -- ================================================================

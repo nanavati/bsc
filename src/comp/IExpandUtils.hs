@@ -19,7 +19,9 @@ module IExpandUtils(
         addPort, getPortWires, savePortType,
         saveRules, getSavedRules, clearSavedRules, replaceSavedRules,
         setBackendSpecific, cacheDef, lookupCExprCache, insertCExprCache,
-        addStateVar, step, updHeap, getHeap, {- filterHeapPtrs, -}
+        addStateVar, setStateVarAlternates, getStateVarVModInfo,
+        setStateVarSchedInfo,
+        step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getCross, getErrHandle, getModuleName,
         getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer,
         instFunType,
@@ -2428,6 +2430,35 @@ addStateVar v@(id,hsv) = do
   when doTraceLoc $ traceM $ ("New state var: " ++ ppReadable (id))
   put (s { vars = v : vars s
          ,stateLocMap = newMap})
+
+-- update the recorded boundary of an already-created state variable
+-- (identified by its unique number) with alternate implementations
+-- (used by primMkGroup / mkOneOf)
+setStateVarAlternates :: Int -> [(String, VName)] -> G ()
+setStateVarAlternates uid impls = do
+  s <- get
+  let upd (i, hsv) | isv_uid hsv == uid =
+          (i, hsv { isv_vmi = setVImpls impls (isv_vmi hsv) })
+      upd x = x
+  put (s { vars = map upd (vars s) })
+
+-- look up the boundary info of an already-created state variable
+-- (identified by its unique number)
+getStateVarVModInfo :: Int -> G (Maybe VModInfo)
+getStateVarVModInfo uid = do
+  s <- get
+  return $ listToMaybe [ isv_vmi hsv | (_, hsv) <- vars s, isv_uid hsv == uid ]
+
+-- replace the recorded schedule of an already-created state variable
+-- (identified by its unique number); the parent is then scheduled
+-- against the imposed schedule rather than the inferred one
+setStateVarSchedInfo :: Int -> VSchedInfo -> G ()
+setStateVarSchedInfo uid sched = do
+  s <- get
+  let upd (i, hsv) | isv_uid hsv == uid =
+          (i, hsv { isv_vmi = setVSched sched (isv_vmi hsv) })
+      upd x = x
+  put (s { vars = map upd (vars s) })
 
 
 {-

@@ -34,6 +34,7 @@ import System.FilePath(isRelative)
 import qualified Data.Array as Array
 import qualified Data.IntMap as IM
 import qualified Data.Map as M
+import qualified Data.IntSet as IS
 import qualified Data.Set as S
 import Debug.Trace(traceM)
 
@@ -64,6 +65,7 @@ import CSyntax
 import qualified TIMonad as TM
 import TypeCheck(topExpr)
 import VModInfo
+import ContractCheck(readContract, imposeDeclared, contractIdForIfc)
 import Pragma
 import Changed(changedOrId)
 import ISyntax
@@ -1418,6 +1420,73 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimSavePor
   -- just need to return ()
   return (P p (icUndet itPrimUnit UNotUsed))
 
+handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimMkGroup })) ts [e_alts, e_ifc]) = do
+  (alts, alts_pos) <- evalKeyModList e_alts
+  let pos = getIExprPosition e
+      err_pos = if alts_pos == noPosition then pos else alts_pos
+  -- the group's contract is the interface's declared contract,
+  -- located from the group's interface type by naming convention
+  ifc_con <- case ts of
+               [t] | Just i <- itLeftCon t -> return i
+               _ -> errG (err_pos, EGeneric ("mkOneOf: the group type is " ++
+                                             "not a plain interface type"))
+  let cid = contractIdForIfc ifc_con
+  denv <- getDefEnv
+  body <- case M.lookup cid denv of
+            Just b -> return b
+            Nothing ->
+                errG (err_pos,
+                      EGeneric ("mkOneOf: the interface `" ++
+                                getIdBaseString ifc_con ++ "' does not " ++
+                                "declare a contract (no definition of `" ++
+                                getIdString cid ++ "'); an implementation " ++
+                                "group requires its interface to declare " ++
+                                "one"))
+  stmts <- case readContract body of
+             Left msg -> errG (err_pos,
+                               EGeneric ("mkOneOf: contract `" ++
+                                         getIdString cid ++ "': " ++ msg))
+             Right ss -> return ss
+  (_, uid, vmi) <- findBoundaryInstance "mkOneOf" err_pos e_ifc
+  -- port arguments are interface arguments in degenerate form: what an
+  -- implementation may assume about such an input (stability, read
+  -- timing) is a contract on a *used* interface, which the contract
+  -- language cannot yet express -- so groups over boundaries carrying
+  -- them are rejected rather than checked incompletely.  Parameters,
+  -- clocks and resets are fine
+  let port_args = [ getVNameString vn | Port (vn, _) _ _ <- vArgs vmi ]
+  when (not (null port_args)) $
+      errG (err_pos, EGeneric ("mkOneOf: the boundary has port " ++
+                               "argument(s) " ++
+                               intercalate ", " port_args ++
+                               "; port arguments are interface " ++
+                               "arguments in degenerate form and their " ++
+                               "contracts are not yet expressible, so " ++
+                               "implementation groups over them are " ++
+                               "not supported"))
+  -- impose the declaration on the recorded boundary: the parent
+  -- schedules against the contract, not this member's accidents.
+  -- No conformance check happens here (the checkless inversion):
+  -- every member was checked against the same declaration at its own
+  -- compile
+  case imposeDeclared stmts vmi of
+    Left msg -> errG (err_pos, EGeneric ("mkOneOf: contract `" ++
+                                         getIdString cid ++ "': " ++ msg))
+    Right sched -> setStateVarSchedInfo uid sched
+  -- record the alternates by name: each must be a separately
+  -- synthesized module (its compiled form carries the one Verilog
+  -- boundary we point the emitted ifdef chain at); alternates are
+  -- never instantiated and never inspected beyond their names
+  let nameOne (key, e_mod) = do
+        r <- findModuleBoundary e_mod
+        case r of
+          Left msg -> errG (err_pos, EGeneric ("mkOneOf alternate `" ++
+                                               key ++ "': " ++ msg))
+          Right (vnm, _) -> return (key, VName vnm)
+  impls <- mapM nameOne alts
+  setStateVarAlternates uid impls
+  return (P p (icUndet itPrimUnit UNotUsed))
+
 handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimChkClockDomain })) _ [e_name, e_object, e_chk]) = do
   name <- evalName e_name
   (object_str,_) <- evalString e_object
@@ -2177,6 +2246,185 @@ evalStringList e = do
       else if i == idPrimChr then return ([], getIExprPosition e')
       else internalError ("evalStringList con: " ++ show i)
     _ -> nfError "evalStringList" e'
+
+-- evaluate a List of (String, module) pairs: the key is evaluated to
+-- a string, the module element is kept unevaluated (it must never be
+-- run; its boundary is read off syntactically by findModuleBoundary)
+evalKeyModList :: HExpr -> G ([(String, HExpr)], Position)
+evalKeyModList e = do
+  e' <- evaleUH e
+  case e' of
+    IAps (ICon i _) _ [a] ->
+      if i == idCons noPosition then do
+        a' <- evaleUH a
+        case a' of
+          IAps (ICon _ (ICTuple {})) _ [e_h, e_t] -> do
+            e_h' <- evaleUH e_h
+            hp <- case e_h' of
+                    IAps (ICon _ (ICTuple {})) _ [e_k, e_m] -> do
+                      (sk, _) <- evalString e_k
+                      return (sk, e_m)
+                    _ -> internalError ("evalKeyModList pair: " ++
+                                        showTypeless e_h')
+            (t, _) <- evalKeyModList e_t
+            return (hp:t, getIExprPosition e')
+          _ -> internalError ("evalKeyModList Cons: " ++ showTypeless a')
+      -- We get primChr for Nil, since it's a no-argument constructor
+      else if i == idPrimChr then return ([], getIExprPosition e')
+      else internalError ("evalKeyModList con: " ++ show i)
+    _ -> nfError "evalKeyModList" e'
+
+-- the leftmost constructor of an elaborated type
+itLeftCon :: IType -> Maybe Id
+itLeftCon (ITAp f _) = itLeftCon f
+itLeftCon (ITCon i _ _) = Just i
+itLeftCon _ = Nothing
+
+-- locate the single state-variable instance at the root of an
+-- interface value, and check that its boundary provides the
+-- interface's methods.  This is the entry of the group primitive
+-- (primMkGroup): the interface must be exactly the boundary of one
+-- synthesized module instance.  An inlined module (whose interface is
+-- built from inner state like a register) fails the method check,
+-- turning a silently-lost group into an error.
+findBoundaryInstance :: String -> Position -> HExpr -> G (Id, Int, VModInfo)
+findBoundaryInstance prim err_pos e_ifc = do
+  svs <- findStateVars e_ifc
+  case (nub (map snd svs)) of
+    [uid] -> do
+        mvmi <- getStateVarVModInfo uid
+        vmi <- case mvmi of
+                 Just vmi -> return vmi
+                 Nothing -> internalError (prim ++
+                                           ": state var not found: " ++ show uid)
+        ifc_fields <- findIfcFieldNames e_ifc
+        -- every kind of boundary field counts: methods, and the
+        -- clock/reset/inout fields the interface may also carry
+        let meth_names = [ getIdBaseString (vf_name f) | f <- vFields vmi ]
+            missing = [ f | f <- ifc_fields, f `notElem` meth_names ]
+            inst_id = fst (headOrErr (prim ++ ": no state vars") svs)
+            bnd_pos = if getPosition inst_id /= noPosition
+                      then getPosition inst_id
+                      else err_pos
+        when (not (null missing)) $
+            errG (bnd_pos, EGeneric (prim ++ ": the interface is " ++
+                                     "not the boundary of a synthesized " ++
+                                     "module: instance `" ++
+                                     getIdBaseString inst_id ++
+                                     "' (module `" ++
+                                     getVNameString (vName vmi) ++ "') does " ++
+                                     "not provide method(s) " ++
+                                     intercalate ", " missing ++
+                                     " (is the root module synthesized?)"))
+        return (inst_id, uid, vmi)
+    [] -> errG (err_pos, EGeneric (prim ++ ": the interface value " ++
+                                   "is not rooted at a synthesized module " ++
+                                   "instance (no instance found)"))
+    uids -> errG (err_pos, EGeneric (prim ++ ": the interface value " ++
+                                     "reaches " ++ show (length uids) ++
+                                     " module instances; it must be rooted " ++
+                                     "at exactly one synthesized module"))
+
+-- syntactically locate the Verilog boundary that a module value would
+-- instantiate, without instantiating it: walk the expression graph
+-- (descending into package defs, with visited sets for the cyclic def
+-- graph and the heap) and collect the ICVerilog constants it reaches.
+-- A separately synthesized module's post-synthesis definition is a
+-- wrapper around exactly one ICVerilog carrying the boundary VModInfo
+-- and applied to the Verilog module name.  Returns the name and the
+-- boundary info, or an explanation of why there is no unique boundary.
+findModuleBoundary :: HExpr -> G (Either String (String, VModInfo))
+findModuleBoundary e0 = do
+    (_, _, found) <- walk (IS.empty, S.empty, []) e0
+    case found of
+      [(mvn, vmi)] ->
+          case mvn of
+            Just vn -> return (Right (vn, vmi))
+            Nothing -> return (Left ("cannot determine the Verilog module " ++
+                                     "name of the alternate (it is not a " ++
+                                     "literal)"))
+      [] -> return (Left ("the alternate is not a separately synthesized " ++
+                          "module (no Verilog boundary found; is it marked " ++
+                          "(* synthesize *) and already compiled?)"))
+      vs -> return (Left ("the alternate does not have a unique Verilog " ++
+                          "boundary (" ++ show (length vs) ++ " found)"))
+  where
+    walk :: (IS.IntSet, S.Set Id, [(Maybe String, VModInfo)]) -> HExpr
+         -> G (IS.IntSet, S.Set Id, [(Maybe String, VModInfo)])
+    walk acc@(seenP, seenD, found) e =
+      case e of
+        IRefT _ ptr _ ->
+            if ptr `IS.member` seenP
+            then return acc
+            else do e' <- unheapU e
+                    walk (IS.insert ptr seenP, seenD, found) e'
+        IAps (ICon _ (ICVerilog { vInfo = vi })) _ (e_name:_) ->
+            -- the boundary: record it (with its name, read from the
+            -- name argument) and do not descend into its arguments
+            let entry = (litString e_name, vi)
+            in  if entry `elem` found
+                then return acc
+                else return (seenP, seenD, entry:found)
+        IAps f _ es -> foldM walk acc (f:es)
+        ILam _ _ b -> walk acc b
+        ILAM _ _ b -> walk acc b
+        ICon i (ICDef _ b) ->
+            if i `S.member` seenD
+            then return acc
+            else walk (seenP, S.insert i seenD, found) b
+        ICon _ (ICMethod { iMethod = m }) -> walk acc m
+        _ -> return acc
+    -- read a string literal out of an unevaluated name expression
+    -- (e.g. fromString applied to the literal); no descent into defs
+    litString :: HExpr -> Maybe String
+    litString (ICon _ (ICString { iStr = s })) = Just s
+    litString (IAps _ _ es) =
+        case [ s | Just s <- map litString es ] of
+          [s] -> Just s
+          _ -> Nothing
+    litString _ = Nothing
+
+-- walk an (evaluated or partially evaluated) expression graph and
+-- collect the state-variable instances it reaches: (instance Id, uid).
+-- Heap references are dereferenced one level at a time with a visited
+-- set; state variables are collected without descending into their
+-- instantiation arguments (which may reach unrelated instances).
+findStateVars :: HExpr -> G [(Id, Int)]
+findStateVars e0 = do
+    (_, res) <- walk (IS.empty, []) e0
+    return (reverse res)
+  where
+    walk :: (IS.IntSet, [(Id, Int)]) -> HExpr
+         -> G (IS.IntSet, [(Id, Int)])
+    walk acc@(seen, res) e =
+      case e of
+        IRefT _ ptr _ ->
+            if ptr `IS.member` seen
+            then return acc
+            else do e' <- unheapU e
+                    walk (IS.insert ptr seen, res) e'
+        IAps f _ es -> foldM walk acc (f:es)
+        ILam _ _ b -> walk acc b
+        ILAM _ _ b -> walk acc b
+        ICon i (ICStateVar { iVar = v }) ->
+            let entry = (i, isv_uid v)
+            in  if entry `elem` res
+                then return acc
+                else return (seen, entry:res)
+        ICon _ (ICMethod { iMethod = m }) -> walk acc m
+        _ -> return acc
+
+-- read the field names of an (evaluated) interface value; used by
+-- primMkGroup to check that the instance boundary provides the
+-- group interface's methods.  Returns [] when the value's shape is not
+-- a recognizable struct (the check is then skipped).
+findIfcFieldNames :: HExpr -> G [String]
+findIfcFieldNames e = do
+  e' <- evaleUH e
+  case e' of
+    IAps (ICon _ (ICTuple { fieldIds = fs })) _ _ ->
+        return (map getIdBaseString fs)
+    _ -> return []
 
 -----------------------------------------------------------------------------
 
