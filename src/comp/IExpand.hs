@@ -65,7 +65,8 @@ import CSyntax
 import qualified TIMonad as TM
 import TypeCheck(topExpr)
 import VModInfo
-import ContractCheck(readContract, imposeDeclared, contractIdForIfc)
+import ContractCheck(readContract, imposeDeclared, contractIdForIfc,
+                     signatureIdForIfc, readSignatureKinds, pinoutErrs)
 import Pragma
 import Changed(changedOrId)
 import ISyntax
@@ -1447,6 +1448,32 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimMkGroup
                                EGeneric ("mkOneOf: contract `" ++
                                          getIdString cid ++ "': " ++ msg))
              Right ss -> return ss
+  -- the structure's kinds drive the sealed self-relations (A100);
+  -- the signature def is emitted by the package that compiled the
+  -- implementations, so fall back to a base-name scan when the
+  -- interface's own package doesn't carry one
+  let sid = signatureIdForIfc ifc_con
+      sig_base = getIdBaseString sid
+  sig_body <-
+      case M.lookup sid denv of
+        Just b -> return b
+        Nothing ->
+          case [ b | (i, b) <- M.toList denv,
+                     getIdBaseString i == sig_base ] of
+            (b:_) -> return b
+            [] -> errG (err_pos,
+                        EGeneric ("mkOneOf: no signature def `" ++
+                                  sig_base ++ "' found for interface `" ++
+                                  getIdBaseString ifc_con ++
+                                  "'; an implementation group requires " ++
+                                  "one (are the implementations compiled " ++
+                                  "with this compiler version?)"))
+  kinds <- case readSignatureKinds sig_body of
+             Left msg -> errG (err_pos,
+                               EGeneric ("mkOneOf: " ++ msg ++
+                                         " for interface `" ++
+                                         getIdBaseString ifc_con ++ "'"))
+             Right ks -> return ks
   (_, uid, vmi) <- findBoundaryInstance "mkOneOf" err_pos e_ifc
   -- port arguments are interface arguments in degenerate form: what an
   -- implementation may assume about such an input (stability, read
@@ -1464,25 +1491,35 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimMkGroup
                                "contracts are not yet expressible, so " ++
                                "implementation groups over them are " ++
                                "not supported"))
-  -- impose the declaration on the recorded boundary: the parent
-  -- schedules against the contract, not this member's accidents.
-  -- No conformance check happens here (the checkless inversion):
-  -- every member was checked against the same declaration at its own
-  -- compile
-  case imposeDeclared stmts vmi of
+  -- seal the recorded boundary at the declaration: the parent
+  -- schedules against the contract, not this member's accidents;
+  -- self-relations get declaration-derived defaults keyed by the
+  -- signature kinds (A100).  No schedule refinement happens here
+  -- (the checkless inversion): every member was checked against the
+  -- same declaration at its own compile
+  case imposeDeclared stmts kinds vmi of
     Left msg -> errG (err_pos, EGeneric ("mkOneOf: contract `" ++
                                          getIdString cid ++ "': " ++ msg))
     Right sched -> setStateVarSchedInfo uid sched
   -- record the alternates by name: each must be a separately
   -- synthesized module (its compiled form carries the one Verilog
-  -- boundary we point the emitted ifdef chain at); alternates are
-  -- never instantiated and never inspected beyond their names
+  -- boundary we point the emitted ifdef chain at).  Alternates are
+  -- never instantiated; the one thing checked here is pinout
+  -- equality with the root -- a mechanism precondition (the emitted
+  -- instantiation is reused verbatim), not contract checking
   let nameOne (key, e_mod) = do
         r <- findModuleBoundary e_mod
         case r of
           Left msg -> errG (err_pos, EGeneric ("mkOneOf alternate `" ++
                                                key ++ "': " ++ msg))
-          Right (vnm, _) -> return (key, VName vnm)
+          Right (vnm, alt_vmi) ->
+              case pinoutErrs vmi alt_vmi of
+                [] -> return (key, VName vnm)
+                errs -> errG (err_pos,
+                              EGeneric ("mkOneOf alternate `" ++ key ++
+                                        "' (module `" ++ vnm ++ "') does " ++
+                                        "not match the group pinout: " ++
+                                        intercalate "; " errs))
   impls <- mapM nameOne alts
   setStateVarAlternates uid impls
   return (P p (icUndet itPrimUnit UNotUsed))

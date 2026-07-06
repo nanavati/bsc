@@ -150,7 +150,7 @@ import Classic(SyntaxMode(..), setSyntax)
 import ILift(iLift)
 import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
-import ContractCheck(checkDeclaredContract)
+import ContractCheck(checkDeclaredContract, pinoutSummary)
 import SchedInfo(methodConflictInfo)
 import ADumpSchedule (MethodDumpInfo, aDumpSchedule, aDumpScheduleErr,
                       dumpMethodInfo, dumpMethodBVIInfo)
@@ -1050,9 +1050,14 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                      dflt = getVNameString (vName vmi)
                      altJson (k, vn) =
                          quo k ++ ": " ++ quo (getVNameString vn)
+                     pinoutJson =
+                         intercalate ", "
+                             [ quo k ++ ": " ++ quo v
+                             | (k, v) <- pinoutSummary vmi ]
                  in  "    {\n" ++
                      "      \"instance\": " ++ quo inst ++ ",\n" ++
                      "      \"default\": " ++ quo dflt ++ ",\n" ++
+                     "      \"pinout\": { " ++ pinoutJson ++ " },\n" ++
                      "      \"alternates\": { " ++
                      intercalate ", " (map altJson (vImpls vmi)) ++
                      " },\n" ++
