@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 module VModInfo(VModInfo, mkVModInfo,
                 vName, vClk, vRst, vArgs, vFields, vSched, vPath,
+                vImpls, setVImpls, setVSched, setVName,
                 VName(..), VPort, VSchedInfo, VMethodConflictInfo,
                 VPathInfo(..), VeriPortProp(..),
                 VArgInfo(..), isParam, isPort, isClock, isReset, isInout,
@@ -45,7 +46,7 @@ import IdPrint()
 import Position
 import SchedInfo
 import Util
-import Eval(NFData(..), rnf, rnf2, rnf3, rnf4, rnf7)
+import Eval(NFData(..), rnf, rnf2, rnf3, rnf4, rnf7, rnf8)
 import PPrint
 
 -- VMODINFO AND SUBSIDIARIES:
@@ -566,9 +567,26 @@ data VModInfo = VModInfo {
         vArgs  :: [VArgInfo],
         vFields :: [VFieldInfo],
         vSched :: VSchedInfo,
-        vPath  :: VPathInfo
+        vPath  :: VPathInfo,
+        -- named alternate implementations sharing this boundary
+        -- (selection key, Verilog module name); the Verilog backend
+        -- emits a macro-selected instantiation per alternate
+        vImpls :: [(String, VName)]
         }
         deriving (Show, Ord, Eq, Generic.Data, Generic.Typeable)
+
+setVImpls :: [(String, VName)] -> VModInfo -> VModInfo
+setVImpls impls vmi = vmi { vImpls = impls }
+
+-- replace the recorded schedule of a boundary (used when a declared
+-- contract is imposed on a module instance by primImposeContract)
+setVSched :: VSchedInfo -> VModInfo -> VModInfo
+setVSched sched vmi = vmi { vSched = sched }
+
+-- replace the module name of a boundary (used by link-time alternate
+-- selection, -use-impl)
+setVName :: VName -> VModInfo -> VModInfo
+setVName vn vmi = vmi { vName = vn }
 
 mkVModInfo :: VName -> VClockInfo -> VResetInfo ->
               [VArgInfo] -> [VFieldInfo] ->
@@ -580,7 +598,7 @@ mkVModInfo vName vClk vRst
                                                      ppReadable sched_pairs ++
                                                      ppReadable meth_pairs)
 
- where vm = VModInfo vName vClk vRst vArgs vFields vSched vPath
+ where vm = VModInfo vName vClk vRst vArgs vFields vSched vPath []
        -- ----------
        -- check the method conflict info for consistency and completeness
        -- XXX check the rest of the SchedInfo fields?
@@ -639,10 +657,13 @@ instance PPrint VModInfo where
             pPrint d 10 (vArgs v),
             pPrint d 10 (vFields v),
             pPrint d 10 (vSched v),
-            pShowVPathInfo d 10 (vPath v)])
+            pShowVPathInfo d 10 (vPath v)] <>
+         (if null (vImpls v)
+          then empty
+          else sep [text " vImpls", pPrint d 10 (vImpls v)]))
 
 instance NFData VModInfo where
-    rnf x@(VModInfo x1 x2 x3 x4 x5 x6 x7) = rnf7 x1 x2 x3 x4 x5 x6 x7
+    rnf x@(VModInfo x1 x2 x3 x4 x5 x6 x7 x8) = rnf8 x1 x2 x3 x4 x5 x6 x7 x8
 
 
 -- ===============
@@ -671,8 +692,8 @@ instance PPrint VWireInfo where
 -- #############################################################################
 
 getIfcIdPosition :: VModInfo -> Position
-getIfcIdPosition (VModInfo _ clk _ _ [] _ _) = getPosition clk
-getIfcIdPosition (VModInfo mod_name clk reset args fields schedule path)
+getIfcIdPosition (VModInfo _ clk _ _ [] _ _ _) = getPosition clk
+getIfcIdPosition (VModInfo mod_name clk reset args fields schedule path impls)
                                              = getPosition fields
 
 -- #############################################################################

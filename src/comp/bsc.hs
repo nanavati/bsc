@@ -13,7 +13,7 @@ import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
 import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
-import Data.Char(isSpace, toLower, ord)
+import Data.Char(isSpace, toLower, ord, isAlphaNum)
 import Data.List(intersect, nub, partition, intersperse, sort,
             isPrefixOf, isSuffixOf, unzip5, intercalate)
 import Data.Time.Clock.POSIX(getPOSIXTime)
@@ -77,7 +77,7 @@ import CVPrint
 import Id
 import Backend
 import Pragma
-import VModInfo(VPathInfo, VPort)
+import VModInfo(VPathInfo, VPort, vImpls, vName, getVNameString)
 import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
@@ -105,7 +105,7 @@ import IInline(iInline)
 import IInlineFmt(iInlineFmt)
 import Params(iParams)
 import ASyntax(APackage(..), ASPackage(..),
-               ppeAPackage,
+               ppeAPackage, AVInst(..),
                getAPackageFieldInfos)
 import ASyntaxUtil(getForeignCallNames)
 import ACheck(aMCheck, aSMCheck, aSignalCheck, aSMethCheck)
@@ -1032,6 +1032,50 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
            abin = ABinMod modinfo (bscVersionStr True)
        genABinFile errh afilename abin
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
+
+       -- write a selection manifest beside the .ba when any instance
+       -- records alternate implementations (mkOneOf_), so external
+       -- flows can discover the design's selection points, keys, and
+       -- the macros/flags that exercise them
+       let sel_insts = [ avi | avi <- apkg_state_instances amod_for_abin,
+                         not (null (vImpls (avi_vmi avi))) ]
+       when (not (null sel_insts)) $ do
+           let sane c = if (isAlphaNum c) then c else '_'
+               esc = concatMap (\ c -> if c == '"' || c == '\\'
+                                       then ['\\', c] else [c])
+               quo str = "\"" ++ esc str ++ "\""
+               selJson avi =
+                 let inst = getIdBaseString (avi_vname avi)
+                     vmi = avi_vmi avi
+                     dflt = getVNameString (vName vmi)
+                     altJson (k, vn) =
+                         quo k ++ ": " ++ quo (getVNameString vn)
+                 in  "    {\n" ++
+                     "      \"instance\": " ++ quo inst ++ ",\n" ++
+                     "      \"default\": " ++ quo dflt ++ ",\n" ++
+                     "      \"alternates\": { " ++
+                     intercalate ", " (map altJson (vImpls vmi)) ++
+                     " },\n" ++
+                     "      \"verilog_macro_instance\": " ++
+                     quo ("BSV_IMPL_" ++ map sane inst ++ "_<key>") ++ ",\n" ++
+                     "      \"verilog_macro_module\": " ++
+                     quo ("BSV_IMPL_" ++ map sane dflt ++ "_<key>") ++ ",\n" ++
+                     "      \"link_flag_instance\": " ++
+                     quo ("-use-impl " ++ inst ++ "=<key>") ++ ",\n" ++
+                     "      \"link_flag_module\": " ++
+                     quo ("-use-impl " ++ dflt ++ "=<key>") ++ "\n" ++
+                     "    }"
+               manifest = "{\n  \"module\": " ++ quo modstr ++
+                          ",\n  \"selections\": [\n" ++
+                          intercalate ",\n" (map selJson sel_insts) ++
+                          "\n  ]\n}\n"
+               -- afilename ends in .ba; the manifest sits beside it
+               mfilename = (take (length afilename - 2) afilename) ++
+                           "impls.json"
+           writeFileCatch errh mfilename manifest
+           unless (quiet flags) $ putStrLnF $
+               "Selection manifest created: " ++ getRelativeFilePath mfilename
+
        dump errh flags t DFwriteABin dumpnames afilename
 
 
@@ -1883,7 +1927,7 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     mhier0 <- runExceptT $
               getABIHierarchy errh
                   (verbose flags) (ifcPath flags) (Just Verilog)
-                  prim_names topmod_name user_abis
+                  prim_names [] topmod_name user_abis
 
     mhier <- case mhier0 of
                   Left msgs -> return (Left msgs)

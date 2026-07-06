@@ -34,6 +34,7 @@ module AVerilogUtil (
 import Data.List(nub, partition, genericLength, union, intersect, (\\),
                  uncons)
 import Data.Maybe
+import Data.Char(isAlphaNum)
 
 import FStringCompat(FString, getFString)
 import ErrorUtil
@@ -45,7 +46,8 @@ import PreIds( idInout_, idSVA )
 import Position( Position )
 
 import VModInfo(vArgs, vName, vFields, VName(..), VeriPortProp(..),
-                getIfcIdPosition, VArgInfo(..), VFieldInfo(..))
+                getIfcIdPosition, VArgInfo(..), VFieldInfo(..),
+                vImpls, getVNameString)
 import Prim
 import ASyntax
 import ASyntaxUtil
@@ -800,6 +802,7 @@ type InstInfo = ([(VId, VExpr)],  -- parameter exprs
 -- will be thrown out (see use in AVerilog.hs)
 wiredInstance :: VMItem -> Bool
 wiredInstance inst@(VMInst {}) = (not . null) (vi_inst_ports inst)
+wiredInstance (VMIfDef _ inst) = wiredInstance inst
 wiredInstance item = internalError ("wiredInstance - not instance: " ++ ppReadable item)
 
 -- this also takes a "rewiring" map for those special wires
@@ -1012,12 +1015,35 @@ vState  flags rewire_map avinst =
         -- debug_tymap = traces ("\n\nDBG tyMap:\n" ++ ppReadable tyMap ++ "\n")
         -- debug_vminst = traces ("\n\nDBG vState vminst=\n" ++ ppReadable vminst ++ "\n\n")
 
+        -- if alternate implementations are attached to this boundary,
+        -- emit a preprocessor-selected chain: per-instance macros are
+        -- tested first (surgical selection), then module-wide macros
+        -- (keyed by the default module's name), else the default
+        vminst_final =
+            case (vImpls vi, vminst) of
+              ([], _) -> vminst
+              (impls, VMInst _ i_nm i_params i_ports) ->
+                let sane c = if (isAlphaNum c) then c else '_'
+                    instStr = map sane (getIdBaseString v_inst_name)
+                    rootStr = map sane (getVNameString (vName vi))
+                    swapTo vnm = VMInst (vIdV vnm) i_nm i_params i_ports
+                    instBranches =
+                        [ ("BSV_IMPL_" ++ instStr ++ "_" ++ map sane key,
+                           swapTo (VName vnm))
+                          | (key, VName vnm) <- impls ]
+                    modBranches =
+                        [ ("BSV_IMPL_" ++ rootStr ++ "_" ++ map sane key,
+                           swapTo (VName vnm))
+                          | (key, VName vnm) <- impls ]
+                in  VMIfDef (instBranches ++ modBranches) vminst
+              (_, _) -> vminst
+
     in
         -- debug_inputs $ debug_arges $ debug_vminst $
         if (length (vArgs vi)) /= (length es)
         then internalError "AVerilog.vState: # args differs from expected"
         else (v_inst_name,
-              vminst,
+              vminst_final,
               inst_info)
 
 -- ------------------------------

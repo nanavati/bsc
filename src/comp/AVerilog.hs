@@ -1473,6 +1473,7 @@ getInsts s (VMInst (VId s' _ _) _ _ _) = match s s'
         match (c:cs) (d:ds) | c == d = match cs ds
         match _ _ = []
 getInsts s (VMComment _ i) = getInsts s i
+getInsts s (VMIfDef _ i) = getInsts s i
 getInsts s (VMGroup _ iss) = concatMap (concatMap (getInsts s)) iss
 getInsts _ _ = []
 

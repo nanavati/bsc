@@ -139,6 +139,7 @@ data Flags = Flags {
         unSpecTo :: String,
         updCheck :: Bool,
         useDPI :: Bool,
+        useImpl :: [String],
         useNegate :: Bool,
         usePrelude :: Bool,
         useProvisoSAT :: Bool,

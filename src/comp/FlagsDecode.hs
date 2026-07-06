@@ -540,7 +540,7 @@ defaultFlags bluespecdir = Flags {
         expandIf = False,
         fdir = Nothing,
         finalcleanup = 1,
-        genABin = False,
+        genABin = True,
         genABinVerilog = False,
         genName = [],
         genSysC = False,
@@ -637,6 +637,7 @@ defaultFlags bluespecdir = Flags {
         unSpecTo = "A",
         updCheck = False,
         useDPI = False,
+        useImpl = [],
         useNegate = True,
         usePrelude = True,
         useProvisoSAT = True,
@@ -1643,6 +1644,11 @@ externalFlags = [
          (Toggle (\f x -> f {useDPI=x}) (showIfTrue useDPI),
           "use DPI instead of VPI in generated Verilog", Visible)),
 
+        ("use-impl",
+         (Arg "name=key" (\f s -> Left (f {useImpl = useImpl f ++ [s]}))
+              (Just (FRTListString useImpl)),
+          "select an alternate implementation when linking (instance or module name = key)", Visible)),
+
         ("use-negate",
          (Toggle (\f x -> f {useNegate=x}) (showIfTrue useNegate),
           "use negate in Verilog code", Hidden)),
@@ -1943,6 +1949,7 @@ showFlagsRaw flags =
           ("unSpecTo", show (unSpecTo flags)),
           ("updCheck", show (updCheck flags)),
           ("useDPI", show (useDPI flags)),
+          ("useImpl", show (useImpl flags)),
           ("useNegate", show (useNegate flags)),
           ("usePrelude", show (usePrelude flags)),
           ("useProvisoSAT", show (useProvisoSAT flags)),

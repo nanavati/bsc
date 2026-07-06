@@ -64,10 +64,21 @@ simExpand errh flags topname fabis = do
     -- (to put in the list of mods we don't need .ba for)
     let prim_names = map sb_name primBlocks
 
+    -- parse the -use-impl selectors (name=key)
+    let parseSel s = case (span (/= '=') s) of
+                       (nm@(_:_), ('=':key@(_:_))) -> Right (nm, key)
+                       _ -> Left s
+    use_impls <- case (mapM parseSel (useImpl flags)) of
+                   Right sels -> return sels
+                   Left bad -> bsError errh
+                       [(noPosition,
+                         EGeneric ("-use-impl " ++ bad ++ ": expected " ++
+                                   "an argument of the form name=key"))]
+
     (topmodId, hiermap, instmap, ffuncmap, filemap, _, emodinfos_used_by_name)
         <- convExceptTToIO errh $
            getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
-                           prim_names topname fabis
+                           prim_names use_impls topname fabis
 
     modinfos_used_by_name <- convExceptTToIO errh $
                              assertNoSchedErr emodinfos_used_by_name

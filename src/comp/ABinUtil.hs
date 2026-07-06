@@ -26,7 +26,7 @@ import Position(cmdPosition, noPosition, getPosition)
 import PPrint
 import ASyntax
 import ASyntaxUtil(getForeignCallNames)
-import VModInfo(vName, getVNameString)
+import VModInfo(vName, getVNameString, vImpls, setVName)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap)
 import ABin
 import GenABin(readABinFile)
@@ -82,6 +82,11 @@ data MState = MState {
        , m_foundmod_map :: HierMap
        , m_foundffunc_map :: ForeignFuncMap
        , m_abmi_file_map :: ABinMap
+       -- link-time alternate selection (-use-impl):
+       -- (instance or default-module name, selection key), and the
+       -- selector names that have matched some instance so far
+       , m_use_impls :: [(String, String)]
+       , m_impls_used :: [String]
      }
 
 addMod :: String -> ABinEitherModInfo -> String -> M ()
@@ -124,13 +129,14 @@ putHierMap m = get >>= \s -> put (s { m_foundmod_map = m })
 
 
 -- prim_names = list of primtives which don't need .ba files
+-- use_impls = link-time alternate selections (-use-impl name=key)
 getABIHierarchy ::
     ErrorHandle -> Bool -> [String] -> (Maybe Backend) ->
-    [String] -> String -> [(String, ABin)] ->
+    [String] -> [(String, String)] -> String -> [(String, ABin)] ->
     ExceptT EMsgs IO
         (Id, HierMap, InstModMap, ForeignFuncMap, ABinMap, [String],
          [(String, (ABinEitherModInfo, String))])
-getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
+getABIHierarchy errh be_verbose ifc_path backend prim_names use_impls topname fabis = do
     -- pair the abis with their module name
     let
         pair_with_name (f,abi) = (getIdString (getABIName abi), (f,abi))
@@ -147,7 +153,9 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
                      m_abis_unused = fabis_by_name,
                      m_foundmod_map = start_hiermap,
                      m_foundffunc_map = start_ffuncmap,
-                     m_abmi_file_map = start_filemap
+                     m_abmi_file_map = start_filemap,
+                     m_use_impls = use_impls,
+                     m_impls_used = []
                  }
         existing_mods = prim_names
         no_mod_children m = (m,([],[]))
@@ -185,6 +193,19 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
         remaining_fnames = map (fst . snd) remaining_mods
     when (not (null remaining_mods)) $
         lift $ bsWarning errh [(cmdPosition, WExtraABinFiles remaining_fnames)]
+
+    -- a selector that matched nothing is an error: silently building
+    -- the default implementation is the failure mode -use-impl exists
+    -- to prevent
+    let impls_used = m_impls_used end_state
+        unused_sels = [ nm ++ "=" ++ key | (nm, key) <- use_impls,
+                        nm `notElem` impls_used ]
+    when (not (null unused_sels)) $
+        throwError (EMsgs [(cmdPosition,
+                            EGeneric ("-use-impl " ++
+                                      unwords unused_sels ++ ": no instance " ++
+                                      "or module with alternate " ++
+                                      "implementations matches this name"))])
 
     -- this is a mapping from a hierarchical instance name
     -- to the name of the module of which it is an instance
@@ -355,12 +376,62 @@ followABMIHierarchy curpkg = do
 
 -- ---------------
 
+-- substitute selected alternate implementations (-use-impl) into a
+-- module's instantiations: for each state instance whose boundary
+-- records alternates (vImpls), a selector may match the instance name
+-- or the default module's name; the instantiated module is then
+-- replaced by the alternate (the link-side analogue of the Verilog
+-- BSV_IMPL_ macros).  Conformance of alternates to the recorded
+-- boundary was already checked when the alternates were recorded.
+substAlternates :: ABinModInfo -> M ABinModInfo
+substAlternates abmi = do
+    s <- get
+    let sels = m_use_impls s
+    if null sels
+      then return abmi
+      else do
+        let apkg = abmi_apkg abmi
+            substOne avi =
+                let vmi = avi_vmi avi
+                    inst = getIdString (avi_vname avi)
+                    dflt = getVNameString (vName vmi)
+                    impls = vImpls vmi
+                    msel = case (lookup inst sels) of
+                             Just k -> Just (inst, k)
+                             Nothing -> case (lookup dflt sels) of
+                                          Just k -> Just (dflt, k)
+                                          Nothing -> Nothing
+                in  case (impls, msel) of
+                      ([], _) -> Right (Nothing, avi)
+                      (_, Nothing) -> Right (Nothing, avi)
+                      (_, Just (nm, key)) ->
+                          case (lookup key impls) of
+                            Just vnm ->
+                                Right (Just nm,
+                                       avi { avi_vmi = setVName vnm vmi })
+                            Nothing -> Left (nm, key, map fst impls)
+        case (mapM substOne (apkg_state_instances apkg)) of
+          Left (nm, key, keys) ->
+              throwError (EMsgs [(cmdPosition,
+                  EGeneric ("-use-impl " ++ nm ++ "=" ++ key ++ ": unknown " ++
+                            "implementation key; the alternates recorded " ++
+                            "on this boundary are: " ++ unwords keys))])
+          Right subst_avis -> do
+              let used = [ nm | (Just nm, _) <- subst_avis ]
+                  avis' = map snd subst_avis
+              when (not (null used)) $ do
+                  s' <- get
+                  put (s' { m_impls_used = used ++ m_impls_used s' })
+              return (abmi { abmi_apkg =
+                                 apkg { apkg_state_instances = avis' } })
+
 findModABI :: Maybe String -> String -> M ABinEitherModInfo
 findModABI mparent modname = do
     mod <- findABI True mparent modname
     case (mod) of
-        (ABinMod modinfo ver) -> do addMod modname (Right modinfo) ver
-                                    return (Right modinfo)
+        (ABinMod modinfo ver) -> do modinfo' <- substAlternates modinfo
+                                    addMod modname (Right modinfo') ver
+                                    return (Right modinfo')
         (ABinModSchedErr modinfo ver) ->
             -- only the top module can have a schedule error
             case mparent of

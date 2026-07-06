@@ -318,6 +318,11 @@ data VMItem
         --          if no spaces needed, use a list of one list.
         | VMGroup { vg_translate_off :: Bool, vg_body :: [[VMItem]]}
         | VMFunction VFunction
+        -- VMIfDef: a preprocessor-selected chain of alternatives;
+        -- each entry is (macro name, item emitted when the macro is
+        -- defined), tested in order with `ifdef/`elsif, and the final
+        -- item is the `else (default) branch
+        | VMIfDef [(String, VMItem)] VMItem
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
 instance Ord VMItem where
@@ -327,6 +332,11 @@ instance Ord VMItem where
          compare (VMComment _ x) (VMComment _ y)    = compare x y
          compare (VMComment _ x) y                  = compare x y
          compare x               (VMComment _ y)    = compare x y
+
+         -- ifdef chains sort as their default (else) item
+         compare (VMIfDef _ x) (VMIfDef _ y)        = compare x y
+         compare (VMIfDef _ x) y                    = compare x y
+         compare x             (VMIfDef _ y)        = compare x y
 
          compare (VMRegGroup _ _ _ x) (VMRegGroup _ _ _ y) = compare x y
          compare (VMRegGroup _ _ _ x) y                    = compare x y
@@ -382,6 +392,17 @@ instance PPrint VMItem where
                                                           Nothing -> text "")) cs) (text ","))
                  <> text ";"
         pPrint d p (VMComment cs stmt) = ppComment cs $+$ pPrint d p stmt
+        pPrint d p (VMIfDef alts dflt) =
+            let ppBranch kw (mac, item) =
+                    text ("`" ++ kw ++ " " ++ mac) $+$ pPrint d p item
+            in  case alts of
+                  [] -> pPrint d p dflt
+                  (a:as) ->
+                      ppBranch "ifdef" a $+$
+                      foldr ($+$) empty (map (ppBranch "elsif") as) $+$
+                      text "`else" $+$
+                      pPrint d p dflt $+$
+                      text "`endif"
         pPrint d p g@(VMGroup _ stmtss)
                 | vg_translate_off g = mkSynthPragma "translate_off" $$
                                        vsepEmptyLine (map (ppLines d) stmtss) $$
@@ -404,6 +425,7 @@ instance NFData VMItem where
     rnf (VMRegGroup vid s cmt item) = rnf4 vid s cmt item
     rnf (VMGroup toff body) = rnf2 toff body
     rnf (VMFunction vfun) = rnf vfun
+    rnf (VMIfDef alts dflt) = rnf2 alts dflt
 
 pv95params :: PDetail -> (Maybe String, VExpr) -> Doc
 pv95params d (Nothing,x)  =  pPrint d 0 x
@@ -424,6 +446,7 @@ groupVMItems vmis =
         needsSpace (VMGroup _ _)        = True
         needsSpace (VMComment _ vmi)    = needsSpace vmi
         needsSpace (VMRegGroup _ _ _ vmi) = needsSpace vmi
+        needsSpace (VMIfDef _ vmi)      = needsSpace vmi
         needsSpace _                    = False
 
         groupNeedsSpace [v] = needsSpace v
