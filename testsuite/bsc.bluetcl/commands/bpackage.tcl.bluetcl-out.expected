@@ -18,6 +18,8 @@ Test mkT
 
 Search Reg:
 Test InoutRegIFC
+Test signature_InoutRegIFCBool_
+Test signature_RegBool_
 Vector readVReg
 Vector writeVReg
 RegFile RegFile
@@ -58,6 +60,9 @@ PreludeBSV mkCRegA
 PreludeBSV _PreludeBSV.CReg5713
 PreludeBSV _PreludeBSV.CReg5809
 PreludeBSV _PreludeBSV.CReg5904
+PreludeBSV signature__PreludeBSV_CReg5693
+PreludeBSV signature__PreludeBSV_CReg5789
+PreludeBSV signature__PreludeBSV_CReg5884
 Prelude Reg
 Prelude VReg
 Prelude vMkReg

@@ -37,7 +37,13 @@ Command: browsepackage list 9
 15 mkM {}
 16 mkS {}
 17 mkT {}
-18 x {}
+18 signature_IfcWithVec_ {}
+19 signature_InoutIFC_ {}
+20 signature_InoutRegIFCBool_ {}
+21 signature_RWireBool_ {}
+22 signature_RegBool_ {}
+23 signature__Test_Foo134 {}
+24 x {}
 ---------
 Command: browsepackage detail 9
 Functions
@@ -108,145 +114,193 @@ Command: browsepackage list 18
 ---------
 Command: browsepackage detail 18
 function
+Test.signature_IfcWithVec_
+result {{Prelude.List (Prelude.String, Prelude.List (Prelude.String, Prelude.String))}}
+position {Test.bsv 176 40}
+---------
+Command: browsepackage list 19
+---------
+Command: browsepackage detail 19
+function
+Test.signature_InoutIFC_
+result {{Prelude.List (Prelude.String, Prelude.List (Prelude.String, Prelude.String))}}
+position {Test.bsv 129 30}
+---------
+Command: browsepackage list 20
+---------
+Command: browsepackage detail 20
+function
+Test.signature_InoutRegIFCBool_
+result {{Prelude.List (Prelude.String, Prelude.List (Prelude.String, Prelude.String))}}
+position {Test.bsv 88 30}
+---------
+Command: browsepackage list 21
+---------
+Command: browsepackage detail 21
+function
+Test.signature_RWireBool_
+result {{Prelude.List (Prelude.String, Prelude.List (Prelude.String, Prelude.String))}}
+position {Test.bsv 156 12}
+---------
+Command: browsepackage list 22
+---------
+Command: browsepackage detail 22
+function
+Test.signature_RegBool_
+result {{Prelude.List (Prelude.String, Prelude.List (Prelude.String, Prelude.String))}}
+position {Test.bsv 102 12}
+---------
+Command: browsepackage list 23
+---------
+Command: browsepackage detail 23
+function
+Test.signature__Test_Foo134
+result {{Prelude.List (Prelude.String, Prelude.List (Prelude.String, Prelude.String))}}
+position {Test.bsv 53 11}
+---------
+Command: browsepackage list 24
+---------
+Command: browsepackage detail 24
+function
 Test.x
 result Prelude.Bool
 position {Test.bsv 81 6}
 ---------
 Command: browsepackage list 10
-19 Bar {}
-20 BarSet {}
-21 Baz {}
-22 Foo {}
-23 IfcWithVec {}
-24 InoutIFC {}
-25 InoutRegIFC {}
-26 SubIFC {}
-27 Sz {}
-28 T {}
-29 TopIFC {}
-30 U {}
-31 U2 {}
-32 V2 {}
+25 Bar {}
+26 BarSet {}
+27 Baz {}
+28 Foo {}
+29 IfcWithVec {}
+30 InoutIFC {}
+31 InoutRegIFC {}
+32 SubIFC {}
+33 Sz {}
+34 T {}
+35 TopIFC {}
+36 U {}
+37 U2 {}
+38 V2 {}
 ---------
 Command: browsepackage detail 10
 Types
 ---------
-Command: browsepackage list 19
+Command: browsepackage list 25
 ---------
-Command: browsepackage detail 19
+Command: browsepackage detail 25
 Enum
 {(Test.Bar :: *)}
 members {Red Yellow Blue}
 width 2
 position {Test.bsv 11 36}
 ---------
-Command: browsepackage list 20
+Command: browsepackage list 26
 ---------
-Command: browsepackage detail 20
+Command: browsepackage detail 26
 Enum
 {(Test.BarSet :: *)}
 members {Red2 Yellow2 Blue2}
 width 2
 position {Test.bsv 12 43}
 ---------
-Command: browsepackage list 21
+Command: browsepackage list 27
 ---------
-Command: browsepackage detail 21
+Command: browsepackage detail 27
 Struct
 {(Test.Baz :: * -> # -> *) t n}
 polymorphic
 members {{Prelude.Bool  f1  -- width 1} {Prelude.Bit n  f2  } {Vector.Vector n t  v  }}
 position {Test.bsv 17 18}
 ---------
-Command: browsepackage list 22
+Command: browsepackage list 28
 ---------
-Command: browsepackage detail 22
+Command: browsepackage detail 28
 Interface
 {(Test.Foo :: * -> *) a}
 polymorphic
 members {{method  Prelude.ActionValue ()  Test.wset  (a)} {method  a  Test.wget  ()} {method  Prelude.Bool  Test.whas  ()} {interface  Prelude.Inout Prelude.Bool  Test.io_out}}
 position {Test.bsv 53 11}
 ---------
-Command: browsepackage list 23
+Command: browsepackage list 29
 ---------
-Command: browsepackage detail 23
+Command: browsepackage detail 29
 Interface
 {(Test.IfcWithVec :: *)}
 members {{interface  Vector.Vector 2 (Prelude.Reg Prelude.Bool)  Test.vec1} {interface  Vector.Vector 2 (Vector.Vector 2 (Prelude.Reg Prelude.Bool))  Test.vec2} {interface  Vector.Vector 2 (Vector.Vector 2 (Vector.Vector 2 (Prelude.Reg Prelude.Bool)))  Test.vec3} {method  Vector.Vector 2 Prelude.Bool  Test.data1  ()} {method  Vector.Vector 2 (Vector.Vector 2 Prelude.Bool)  Test.data2  ()} {method  Vector.Vector 2 (Vector.Vector 2 (Vector.Vector 2 Prelude.Bool))  Test.data3  ()} {interface  Vector.Vector 2 Prelude.Clock  Test.clks1} {interface  Vector.Vector 2 Prelude.Reset  Test.rsts1} {interface  Vector.Vector 2 (Prelude.Inout Test.Bar)  Test.ios1}}
 position {Test.bsv 65 11}
 ---------
-Command: browsepackage list 24
+Command: browsepackage list 30
 ---------
-Command: browsepackage detail 24
+Command: browsepackage detail 30
 Interface
 {(Test.InoutIFC :: *)}
 members {{interface  Prelude.Inout Test.Bar  Test.b}}
 position {Test.bsv 31 11}
 ---------
-Command: browsepackage list 25
+Command: browsepackage list 31
 ---------
-Command: browsepackage detail 25
+Command: browsepackage detail 31
 Interface
 {(Test.InoutRegIFC :: * -> *) a}
 polymorphic
 members {{interface  Prelude.Reg a  Test.r} {interface  Prelude.Inout Test.Bar  Test.b}}
 position {Test.bsv 35 11}
 ---------
-Command: browsepackage list 26
+Command: browsepackage list 32
 ---------
-Command: browsepackage detail 26
+Command: browsepackage detail 32
 Interface
 {(Test.SubIFC :: * -> *) a}
 polymorphic
 members {{interface  Prelude.Reg a  Test.r}}
 position {Test.bsv 27 11}
 ---------
-Command: browsepackage list 27
+Command: browsepackage list 33
 ---------
-Command: browsepackage detail 27
+Command: browsepackage detail 33
 Alias
 {(Test.Sz :: #)}
 Definition 9
 position {Test.bsv 7 11}
 ---------
-Command: browsepackage list 28
+Command: browsepackage list 34
 ---------
-Command: browsepackage detail 28
+Command: browsepackage detail 34
 Alias
 {(Test.T :: * -> * -> *) a b}
 Definition {{(b, a)}}
 position {Test.bsv 9 22}
 ---------
-Command: browsepackage list 29
+Command: browsepackage list 35
 ---------
-Command: browsepackage detail 29
+Command: browsepackage detail 35
 Interface
 {(Test.TopIFC :: * -> *) a}
 polymorphic
 members {{method  Prelude.Bool  Test.f  (a,  a)} {interface  Prelude.Clock  Test.clk_out} {interface  Prelude.Reset  Test.rst_out} {method  Prelude.Bool  Test.g  (a)} {interface  Test.SubIFC a  Test.s}}
 position {Test.bsv 19 11}
 ---------
-Command: browsepackage list 30
+Command: browsepackage list 36
 ---------
-Command: browsepackage detail 30
+Command: browsepackage detail 36
 TaggedUnion
 {(Test.U :: * -> *) a}
 polymorphic
 members {{()  F1  -- width 0} {a  F2  } {Prelude.List a  F3  } {Prelude.Bool -> Prelude.Bool  F4  }}
 position {Test.bsv 45 3}
 ---------
-Command: browsepackage list 31
+Command: browsepackage list 37
 ---------
-Command: browsepackage detail 31
+Command: browsepackage detail 37
 TaggedUnion
 {(Test.U2 :: * -> *) a}
 polymorphic
 members {{()  F1  -- width 0} {a  F2  }}
 position {Test.bsv 50 3}
 ---------
-Command: browsepackage list 32
+Command: browsepackage list 38
 ---------
-Command: browsepackage detail 32
+Command: browsepackage detail 38
 Alias
 {(Test.V2 :: * -> *) t}
 Definition {{Vector.Vector 2 t}}
