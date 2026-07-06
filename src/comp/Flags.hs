@@ -157,7 +157,12 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- whether the user explicitly requested .ba generation (-elab),
+        -- as opposed to the default-on .ba write for codegen backends;
+        -- gates the "Elaborated module file created" progress message
+        -- (kept last so the Bin instance's positional prefix is stable)
+        genABinExplicit :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

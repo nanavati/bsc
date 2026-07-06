@@ -659,7 +659,8 @@ defaultFlags bluespecdir = Flags {
         verilogFilter = [],
         warnActionShadowing = True,
         warnMethodUrgency = True,
-        warnUndetPred = False
+        warnUndetPred = False,
+        genABinExplicit = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1157,7 +1158,8 @@ externalFlags = [
           "top-level module for simulation", Visible)),
 
         ("elab",
-         (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
+         (Toggle (\f x -> f {genABin=x, genABinExplicit=x})
+                 (showIfTrue genABinExplicit),
           "generate a .ba file after elaboration and scheduling", Visible)),
 
         ("elab-verilog",

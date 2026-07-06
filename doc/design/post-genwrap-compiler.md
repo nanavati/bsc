@@ -3522,6 +3522,38 @@ be reproduced at the boundary surface (module-pragma and
 interface-pragma `always_enabled` both drop the EN port identically);
 it is left alone rather than guess-fixed.
 
+**2 — `.ba`-by-default reconciled with the upstream suite.** The first
+full upstream-testsuite run (increment 0's baseline: 18238 passes,
+348 unexpected failures) exposed that phase 3's `.ba`-by-default
+violated the byte-identical-default-output gate in two ways, both
+previously unseen because the old session ran only the behavioral
+suites. (i) ~268 golden diffs: every codegen compile now printed
+"Elaborated module file created". The message is now gated on the
+`.ba` being what the flags asked for — the Bluesim backend or an
+explicit `-elab` (new `genABinExplicit` flag field; `-elab` under
+Verilog keeps its message, per `bsc.driver/depend`'s golden) — while
+the default-on write that carries boundaries and manifests stays
+silent. (ii) Worse than cosmetic: a `.ba` written under the Verilog
+backend satisfied `-u`'s Bluesim freshness check by timestamp, so a
+verilog-then-sim sequence in one directory skipped Bluesim codegen
+entirely — G0058-class checks (dynamic arguments, MCD/Inout
+primitives) never ran, negatives flipped to passes, and Bluesim links
+consumed `.ba`s lacking Bluesim-specific processing (parameter
+inlining), crashing at runtime ("child process exited abnormally", 20+
+suite failures). The artifact-level fact "which backend's processing
+was applied" was never recorded distinctly: link-time checks compare
+`apkg_backend`, which is `Nothing` for backend-neutral designs and
+therefore matches everything. The written-backend is now read from
+the already-serialized `abmi_flags` at the `-u` freshness check: under
+the Bluesim backend, a timestamp-fresh module `.ba` counts only if
+written by a Bluesim compile (decode failures, including older format
+tags, count as stale). `.ba` header tag bumped
+(`bsc-ba-20260706-1`, the `Flags` record grew a field). Residual,
+recorded: link-time consumers still accept a wrong-processing `.ba`
+if handed one directly — the same written-backend check belongs in
+`decodeABin`'s compatibility test; deferred with the note that the
+Depend fix removes every path the suite exercises.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)

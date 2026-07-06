@@ -1062,6 +1062,15 @@ genModule
     return (def)
 
 
+-- The .ba progress message matches the pre-default-.ba surface: it is
+-- printed when .ba generation is what the flags asked for (the Bluesim
+-- backend, or an explicit -elab), not for the default-on write that
+-- carries boundaries and manifests in Verilog flows.
+abinMsgVisible :: Flags -> Bool
+abinMsgVisible flags =
+    not (quiet flags) &&
+    (backend flags == Just Bluesim || genABinExplicit flags)
+
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
              AScheduleInfo -> MethodDumpInfo -> VPathInfo ->
@@ -1103,7 +1112,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                      }
            abin = ABinMod modinfo (bscVersionStr True)
        genABinFile errh afilename abin
-       unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
+       when (abinMsgVisible flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
 
        -- write a selection manifest beside the .ba when any instance
        -- records alternate implementations (mkOneOf_), so external
@@ -1179,7 +1188,7 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
                      }
            abin = ABinModSchedErr modinfo (bscVersionStr True)
        genABinFile errh afilename abin
-       unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
+       when (abinMsgVisible flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
        dump errh flags t DFwriteABin dumpnames afilename
 
 

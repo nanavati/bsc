@@ -32,13 +32,15 @@ import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
-                  removeFileCatch)
+                  removeFileCatch, readBinaryFileCatch)
 import Id
 import PreIds(idPrelude, idPreludeBSV)
 import Parser.Classic(pPackage, errSyntax, classicWarnings)
 import Parser.BSV(bsvParseString)
 import CSyntax
 import GenFuncWrap(makeGenFuncId)
+import ABin(ABin(..), ABinModInfo(..))
+import GenABin(readABinFile)
 import IOUtil(getEnvDef, progArgs)
 import TopUtils
 --import Debug.Trace
@@ -106,7 +108,7 @@ chkDeps errh flags name = do
                     --genfs = concatMap (getGenFs flags) pis'
                 -- the pkginfos with "recompile" marked for any files whose
                 -- source is newer than any of its related files
-                pis'' <- chkUpd flags DM.empty [] pis'
+                pis'' <- chkUpd errh flags DM.empty [] pis'
                 -- extract the files to recompile with their parsed packages and warnings, in dependency order
                 return (reverse [ (fileName pi, pkg, warns) | pi@(PkgInfo { compileStatus = Recompile pkg warns }) <- pis'' ])
             Left [] -> internalError "Depend.chkDeps: tsort empty cycle"
@@ -232,7 +234,7 @@ getGenFs flags pi =
         foreign_abin_files = map mkABinFileName (foreigns pi)
     in case backend flags of
          Just Bluesim ->
-            let mod_abin_files = map mkABinFileName (gens pi)
+            let mod_abin_files = getModABinFs flags pi
             in  foreign_abin_files ++ mod_abin_files
          Just Verilog ->
             let mod_ver_files = map mkVerFileName (gens pi)
@@ -248,12 +250,40 @@ getGenFs flags pi =
          Nothing ->
             foreign_abin_files
 
+-- The .ba files a package's generated modules produce (used both for
+-- freshness stats and for the backend-compatibility check below)
+getModABinFs :: Flags -> PkgInfo -> [String]
+getModABinFs flags pi =
+    let prefix = dirName (fileName pi) ++ "/"
+        getName = getIdString . unQualId
+        mkABinFileName i = mkAName (bdir flags) prefix (getName i)
+    in  map mkABinFileName (gens pi)
+
+-- Whether an existing .ba file was written by a Bluesim-backend
+-- compile.  A .ba written by default under another backend (to carry
+-- boundaries and manifests) has not had the Bluesim-specific
+-- processing (parameter inlining, MCD/Inout/dynamic-argument checks)
+-- applied, so it does not satisfy Bluesim codegen: a fresh timestamp
+-- alone must not let -u skip the recompile.  Any read or decode
+-- failure (missing, corrupt, older format tag) counts as stale.
+baWrittenByBluesim :: ErrorHandle -> String -> IO Bool
+baWrittenByBluesim errh fn = do
+    r <- CE.try (do bytes <- readBinaryFileCatch errh noPosition fn
+                    let (abin, _) = readABinFile errh fn bytes
+                    case abin of
+                      ABinMod mi _ ->
+                          CE.evaluate (backend (abmi_flags mi) == Just Bluesim)
+                      _ -> return False)
+    return (either handler id r)
+  where handler :: CE.SomeException -> Bool
+        handler _ = False
+
 -- Update the compile status in all the PkgInfo.
 -- Transforms UpToDate -> Recompile when dependencies require it.
 -- Uses both a Map (for efficient import lookups) and a List (to preserve dependency order).
-chkUpd :: Flags -> DM.Map PkgName PkgInfo -> [PkgInfo] -> [PkgInfo] -> IO [PkgInfo]
-chkUpd flags doneMap resultList [] = return resultList
-chkUpd flags doneMap resultList (pi:pis) = do
+chkUpd :: ErrorHandle -> Flags -> DM.Map PkgName PkgInfo -> [PkgInfo] -> [PkgInfo] -> IO [PkgInfo]
+chkUpd errh flags doneMap resultList [] = return resultList
+chkUpd errh flags doneMap resultList (pi:pis) = do
     --putStrLn ("chkUpd " ++ show pi)
     case compileStatus pi of
       UpToDate pkg warns | not (isPreludePkg flags (fileName pi)) -> do
@@ -268,14 +298,25 @@ chkUpd flags doneMap resultList (pi:pis) = do
         --putStrLn (show (fileName pi, genfs, map (srcMod pi >) genfsClks))
         --putStr (ppReadable (pkgName pi, imports pi, DM.keys doneMap))
             lastCompTime = minimum ((lastMod pi) : genfsClks)
-        if any (needsUpd lastCompTime doneMap) (imports pi) || needGenUpd || needIncUpd then
+        needUpd <-
+            if any (needsUpd lastCompTime doneMap) (imports pi)
+               || needGenUpd || needIncUpd
+            then return True
+            else if (backend flags == Just Bluesim)
+            then do -- timestamps are fresh; the .ba files must also
+                    -- have been written by a Bluesim-backend compile
+                    oks <- mapM (baWrittenByBluesim errh)
+                                (getModABinFs flags pi)
+                    return (not (and oks))
+            else return False
+        if needUpd then
           let pi' = pi { compileStatus = Recompile pkg warns }
-          in chkUpd flags (DM.insert (pkgName pi') pi' doneMap) (pi' : resultList) pis
+          in chkUpd errh flags (DM.insert (pkgName pi') pi' doneMap) (pi' : resultList) pis
         else
-          chkUpd flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
+          chkUpd errh flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
       _ ->
         -- Binary, Recompile, or Prelude packages: no change needed
-        chkUpd flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
+        chkUpd errh flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
 
 -- Is this an installed library?
 isPreludePkg :: Flags -> FilePath -> Bool
