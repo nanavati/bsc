@@ -1,0 +1,47 @@
+# Retractable ready/valid across the Verilog boundary (A91/A99)
+#
+# A method tagged conventionReadyValid exports a boundary where the
+# request (EN) may be asserted while the method is not ready; the
+# transfer happens on request AND ready.  aAddScheduleDefs gates the
+# tagged method's execute condition with its own RDY (gateRV), so a
+# garbage request during a not-ready period must not move state.
+#
+# All expected outputs in this file were frozen against a live run of
+# this tree's compiler (inst/bin/bsc) with iverilog.
+
+# ----------
+# The stream producer: deq is ready one cycle in four (guard ph == 0);
+# the generated Verilog gates the state update with the guard, so
+# fire = request AND ready.
+
+compile_verilog_pass StreamRV.bsv mkRVStream
+if { $vtest == 1 } {
+    find_regexp mkRVStream.v {RDY_deq = ph == 2'd0 ;}
+    find_regexp mkRVStream.v {data\$EN = EN_deq && ph == 2'd0 ;}
+}
+
+# ----------
+# HEADLINE: a hand-written Verilog master that ties EN_deq high on
+# every cycle -- garbage requests during every not-ready period.  The
+# state must HOLD when RDY_deq is low and advance by exactly one when
+# it is high; the testbench $displays the observed sequence (and a
+# FAIL line on any violation), compared against the frozen expected
+# output.
+# (Frozen from a direct run of the built simulator; the harness's
+# verilog output filtering for non-iverilog simulators is untested.)
+
+if { $vtest == 1 } {
+    link_verilog_pass {tbRVGarbage.v mkRVStream.v} tbRVGarbage
+    sim_verilog tbRVGarbage
+    move tbRVGarbage.out tbRVGarbage.v.out
+    compare_file tbRVGarbage.v.out tbRVGarbage.out.expected
+}
+
+# ----------
+# The consumer side is untouched: a classic BSV parent calls deq under
+# its implicit condition (EN implies ready), so the gate is a no-op
+# for a well-behaved caller.  Bluesim cannot drive garbage requests --
+# this checks that the same gated package compiles, links and runs
+# with the same logical output on both backends.
+
+test_c_veri_bsv_multi TbRVConsumer sysERVConsumer {mkRVStream}

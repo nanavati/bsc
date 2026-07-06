@@ -1,0 +1,76 @@
+# Declared interface contracts: contractAlwaysEnabled (design doc A90)
+#
+# contractAlwaysEnabled is a consumer assumption, not a member
+# obligation: nothing is checked at the member's own compile
+# (ContractCheck.checkStmt records-and-ignores CAlwaysEnabled).  The
+# clause takes effect when a member's boundary is SEALED at group
+# formation (mkOneOf / primMkGroup): IExpand's PrimMkGroup handler
+# calls imposeDeclared and stamps VPmusthigh on the method's enable
+# port (ContractCheck.markMustHigh), which keys the existing
+# always-enabled ProveEq obligation at the instantiating parent's own
+# compile (AAddScheduleDefs.handleSubmodAlwaysEnabled): an
+# inconclusive proof is warning G0015 (EEnableNotHigh).
+#
+# All expected outputs and message fragments in this file were frozen
+# against a live run of this tree's compiler (inst/bin/bsc).
+
+# ----------
+# A parent that forms a group over mkPulseA (alternate mkPulseB) and
+# drives tick on every cycle: the obligation is provable, so the
+# compile is clean (no G0015, no other warnings).
+
+compile_verilog_pass_no_warning TopGood.bsv sysCTopGood
+
+if { $vtest == 1 } {
+    # the sealed boundary records the caller obligation on the enable
+    # port (VPmusthigh), visible in the group's selection manifest
+    find_regexp sysCTopGood.impls.json {enable-props:musthigh}
+    # the Verilog backend emits a macro-selected instantiation for the
+    # recorded alternate
+    find_regexp sysCTopGood.v {`ifdef BSV_IMPL_p_b}
+    find_regexp sysCTopGood.v {`elsif BSV_IMPL_mkPulseA_b}
+}
+
+# and it simulates identically on both backends
+# (expected output frozen from a live run; the harness's verilog
+# output filtering for non-iverilog simulators is untested here)
+test_c_veri_bsv_multi TopGood sysCTopGood {mkPulseA}
+
+# ----------
+# NEGATIVE: a parent that drives tick only conditionally cannot prove
+# the sealed obligation -> warning G0015 at the parent's compile
+
+compile_verilog_pass_warning TopCond.bsv G0015
+
+# and the warning is promotable to an error
+# (a distinct source file/module, because bsc -u skips code
+# generation when the generated files are already up to date)
+
+compile_verilog_fail_error TopCondErr.bsv G0015 1 "" "-promote-warnings G0015"
+
+# ----------
+# The stamp happens at group formation ONLY (verified: markMustHigh is
+# called only from IExpand's PrimMkGroup handler): a DIRECT
+# instantiation of the same member, driven conditionally, carries no
+# obligation and compiles without G0015
+
+compile_verilog_pass_no_warning TopDirect.bsv sysCTopDirect
+
+# ----------
+# NEGATIVE member-side validations of the declaration itself, raised
+# where the declaration is consumed (sealing, at the mkOneOf caller's
+# elaboration), as positioned generic errors (S0015):
+
+# contractAlwaysEnabled without contractAlwaysReady for the same
+# method (an unconditionally used method must be unconditionally
+# offered)
+compile_verilog_fail_error PulseNoAR.bsv S0015 1
+if { $vtest == 1 } {
+    find_regexp [make_bsc_vcomp_output_name PulseNoAR.bsv] {requires contractAlwaysReady tick in the same contract}
+}
+
+# contractAlwaysEnabled on a value method (reads have no enable)
+compile_verilog_fail_error PulseValAE.bsv S0015 1
+if { $vtest == 1 } {
+    find_regexp [make_bsc_vcomp_output_name PulseValAE.bsv] {which is not an action method}
+}

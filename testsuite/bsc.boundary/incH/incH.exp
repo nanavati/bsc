@@ -1,0 +1,64 @@
+# Increment H: -suggest-contract (the A25 migration aid).
+#
+# The flag (FlagsDecode.hs "suggest-contract") makes module generation
+# print a paste-able contract_<Ifc> literal derived from the inferred
+# schedule (bsc.hs -> ContractCheck.suggestContractText): the
+# declarable freedoms (CF/SB/SBR; ME/P pairs are omitted, read by the
+# contract as conflicting) plus constant-readiness facts.  RDY_* faces
+# never appear.
+#
+# NOTE: the suggestion is printed at module GENERATION, and bsc -u
+# skips codegen when the generated files are up to date -- so each
+# source is compiled exactly once here (nodeps=1 keeps the compile
+# unconditional; both files depend only on installed libraries).
+#
+# This suite is a reconstruction of a lost behavioral suite; all
+# expectations below are frozen from live runs.
+
+# ----------
+# 1. Suggestion: a module with a distinctive inferred schedule (two CF
+# pairs, three SB pairs, an omitted C pair, and exactly three
+# constant-ready methods).  The suggestion is printed with putStrLnF
+# (not word-wrapped), so whole-line regexps are safe.
+
+compile_backend_pass Stats.bsv {-suggest-contract} 1
+
+set stats_out [make_bsc_output_name Stats.bsv]
+
+find_regexp $stats_out {suggested contract for module `mkStats':}
+find_regexp $stats_out {List#\(ContractStmt\) contract_Stats =}
+
+# the declarable relations (frozen from a live run; symmetric CF pairs
+# are reported once)
+find_regexp $stats_out {contractCF\("total", "busy"\)}
+find_regexp $stats_out {contractCF\("total", "clear"\)}
+find_regexp $stats_out {contractSB\("total", "add"\)}
+find_regexp $stats_out {contractSB\("busy", "add"\)}
+find_regexp $stats_out {contractSB\("busy", "clear"\)}
+
+# constant-readiness facts: exactly the unguarded methods
+find_regexp $stats_out {contractAlwaysReady\("total"\)}
+find_regexp $stats_out {contractAlwaysReady\("busy"\)}
+find_regexp $stats_out {contractAlwaysReady\("clear"\)}
+find_regexp_fail $stats_out {contractAlwaysReady\("add"\)}
+
+# the add/clear pair is C (not declarable) and must be omitted
+find_regexp_fail $stats_out {"add", "clear"}
+find_regexp_fail $stats_out {"clear", "add"}
+
+# ----------
+# 2. ROUND-TRIP: StatsFrozen.bsv contains the suggested contract
+# pasted beside (a package-local copy of) the interface, and a member
+# identical to mkStats.  The compile is green -- the member conforms
+# to its own suggestion (extract-then-freeze checks clean by
+# construction; checkDeclaredContract runs at the same codegen).
+# Compiling with -suggest-contract again also shows the suggestion did
+# not drift while freezing.
+
+compile_backend_pass StatsFrozen.bsv {-suggest-contract} 1
+
+set frozen_out [make_bsc_output_name StatsFrozen.bsv]
+
+find_regexp $frozen_out {suggested contract for module `mkStatsFrozen':}
+find_regexp $frozen_out {contractSB\("busy", "clear"\)}
+find_regexp $frozen_out {contractAlwaysReady\("busy"\)}

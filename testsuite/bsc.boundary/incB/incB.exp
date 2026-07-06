@@ -1,0 +1,109 @@
+# --------------------------------------------------
+# Boundary architecture, increment B: sealing soundness (A100).
+# Sealing a group member's boundary at the declared contract must
+# drop the member's accidental freedoms (the parent schedules against
+# the declaration), members whose boundaries cannot be sealed soundly
+# must be rejected, alternates must match the group pinout exactly,
+# and the selection manifest carries a normalized pinout record.
+
+# start from a clean slate (stale .bo/.ba files could satisfy -u)
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "*.vexe"
+erase_many "*.cexe"
+erase_many "*.cexe.so"
+erase_many "*.out"
+erase_many "*.impls.json"
+erase_many "*.sched"
+
+# ----------
+# (1) Sealing drops member self-relation accidents.
+#
+# mkCounterLoose's inferred schedule has value CF incr (an accident:
+# value reads a register incr never touches), but the declaration only
+# promises value SB incr.  The counterfactual TbDirect (no group)
+# schedules against the accident and keeps the rules in definition
+# order; the sealed TbSealing must flip them to the declared order.
+
+if { $vtest == 1 } {
+    compile_verilog_pass TbDirect.bsv mkTbDirect {-show-schedule}
+    find_regexp mkTbDirect.sched {Logical execution order: count_up, show}
+
+    compile_verilog_pass TbSealing.bsv mkTbSealing {-show-schedule}
+    find_regexp mkTbSealing.sched {Logical execution order: show, count_up}
+
+    # ... and the parent simulates under both selections
+    # (default = loose: value stuck at 0; tight: value counts)
+    link_verilog_pass {mkTbSealing.v mkCounterLoose.v mkCounterTight.v} mkTbSealing
+    sim_verilog mkTbSealing
+    move mkTbSealing.out mkTbSealing.v.loose.out
+    compare_file mkTbSealing.v.loose.out mkTbSealing.loose.out.expected
+
+    link_verilog_pass {mkTbSealing.v mkCounterLoose.v mkCounterTight.v} mkTbSealing \
+        {-o mkTbSealing_tight.vexe -Xv -DBSV_IMPL_c_tight=1}
+    sim_verilog mkTbSealing_tight
+    move mkTbSealing_tight.out mkTbSealing.v.tight.out
+    compare_file mkTbSealing.v.tight.out mkTbSealing.tight.out.expected
+}
+
+if { $ctest == 1 } {
+    compile_object_pass TbSealing.bsv mkTbSealing
+
+    link_objects_pass {mkTbSealing} mkTbSealing
+    sim_output mkTbSealing
+    move mkTbSealing.out mkTbSealing.c.loose.out
+    compare_file mkTbSealing.c.loose.out mkTbSealing.loose.out.expected
+
+    link_objects_pass {mkTbSealing} mkTbSealing \
+        {-o mkTbSealing_tight.cexe -use-impl c=tight}
+    sim_output mkTbSealing_tight
+    move mkTbSealing_tight.out mkTbSealing.c.tight.out
+    compare_file mkTbSealing.c.tight.out mkTbSealing.tight.out.expected
+}
+
+# ----------
+# (2) NEGATIVE: a member with a nonempty external-conflict set (sEXT)
+#     cannot be sealed soundly and must be rejected from group
+#     formation with:
+#       "carries an external-conflict marker; such a boundary cannot
+#        join a group yet"
+#
+# TOFREEZE: not currently constructible from source.  The only surface
+# for sEXT is a BVI `schedule EXT (m)' annotation, and the BSV
+# parser's schedule auto-completion does not recognize EXT as covering
+# the (m, m) self pair: it adds its own conflict annotation on top,
+# and the doubly-annotated pair trips the VModInfo consistency check
+# (an internal compiler error in the parser, before the group
+# machinery runs).  GroupExtMember.bsv is the intended test input;
+# enable the lines below once EXT annotations survive BVI parsing.
+#
+# compile_verilog_fail_error GroupExtMember.bsv S0015
+# if { $vtest == 1 } {
+#     set out [make_bsc_vcomp_output_name GroupExtMember.bsv]
+#     find_regexp $out {carries an external-conflict marker}
+#     find_regexp $out {cannot join a group yet}
+# }
+
+# ----------
+# (3) NEGATIVE: pinout equality -- an alternate with an extra module
+#     argument gets a positioned error at the group site.
+
+compile_verilog_fail_error GroupPinoutMismatch.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name GroupPinoutMismatch.bsv]
+    find_regexp $out {mkOneOf alternate `step' \(module `mkCounterStep'\) does not match}
+    find_regexp $out {its module arguments differ from the group's}
+}
+
+# ----------
+# (4) The selection manifest carries a normalized pinout record:
+#     module arguments by wire, and per-method port shapes.
+
+if { $vtest == 1 || $ctest == 1 } {
+    set mf mkTbSealing.impls.json
+    find_regexp $mf {"pinout": }
+    find_regexp $mf {"arguments": "clock Just}
+    find_regexp $mf {"incr": "\(args , enable EN_incr, mult 1\)"}
+    find_regexp $mf {"value": "\(args , result value, mult 1\)"}
+}

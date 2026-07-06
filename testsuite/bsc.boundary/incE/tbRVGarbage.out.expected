@@ -1,0 +1,13 @@
+cycle 0 rdy 1 first 0
+cycle 1 rdy 0 first 1
+cycle 2 rdy 0 first 1
+cycle 3 rdy 0 first 1
+cycle 4 rdy 1 first 1
+cycle 5 rdy 0 first 2
+cycle 6 rdy 0 first 2
+cycle 7 rdy 0 first 2
+cycle 8 rdy 1 first 2
+cycle 9 rdy 0 first 3
+cycle 10 rdy 0 first 3
+cycle 11 rdy 0 first 3
+done

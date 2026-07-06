@@ -1,0 +1,88 @@
+# Declared method conventions: convention_<Ifc> (design doc A96)
+#
+# A convention def is a sparse literal list beside the interface
+# declaration (convention_<Ifc> = cons(conventionReadyValid("m"), nil))
+# choosing how methods are realized at module boundaries.  It is read
+# at each member's own compile (bsc.hs: declaredConventions before the
+# schedule-defs pass): the tagged method's execute condition is gated
+# with its own ready (AAddScheduleDefs.gateRV -- the transfer happens
+# on request AND ready) and VPreadyvalid is stamped on the enable port
+# for wrapper generation.
+#
+# All expected outputs and message fragments in this file were frozen
+# against a live run of this tree's compiler (inst/bin/bsc).
+
+# ----------
+# A member with a ReadyValid-tagged Action method compiles; the
+# generated Verilog gates the state update with the method's own
+# readiness: the register enable is EN_req AND the guard, where the
+# classic (default-convention) rendering is EN_req alone.
+# (The RDY_req def is inlined into the gate by the optimizer, so the
+# observable structure is the guard expression, not the RDY name.)
+
+compile_verilog_pass DeclRV.bsv mkPusher
+if { $vtest == 1 } {
+    find_regexp mkPusher.v {RDY_req = !ph ;}
+    find_regexp mkPusher.v {v\$EN = EN_req && !ph ;}
+}
+
+# the contrast member: same body, no convention def -> classic enable
+# (the caller's word is trusted; no gating)
+compile_verilog_pass DeclClassic.bsv mkPusherClassic
+if { $vtest == 1 } {
+    find_regexp mkPusherClassic.v {RDY_req = !ph ;}
+    find_regexp mkPusherClassic.v {v\$EN = EN_req ;}
+}
+
+# ----------
+# A group of two members from the one declaration: every member of the
+# interface is stamped from the same convention def, so conformance
+# across the group holds by construction.  Compile both members and
+# the group; simulate on both backends.
+
+test_c_veri_bsv_multi TopDeclPair sysDDeclPair {mkCounterOnes}
+
+if { $vtest == 1 } {
+    # the stamped convention is recorded in the group's pinout record
+    find_regexp sysDDeclPair.impls.json {enable-props:readyvalid}
+}
+
+# the alternate member conforms by construction: select it at
+# simulator compile time and re-simulate (Verilog: the emitted
+# BSV_IMPL_<inst>_<key> macro; Bluesim: -use-impl <inst>=<key>).
+# Relinking reuses the executable name; the earlier runs are complete.
+if { $vtest == 1 } {
+    link_verilog_pass {sysDDeclPair.v mkCounterOnes.v mkCounterTwos.v} sysDDeclPair {-D BSV_IMPL_c_twos}
+    sim_verilog sysDDeclPair
+    move sysDDeclPair.out sysDDeclPair.twos.v.out
+    compare_file sysDDeclPair.twos.v.out sysDDeclPair.twos.out.expected
+}
+if { $ctest == 1 } {
+    link_objects_pass {sysDDeclPair mkCounterOnes mkCounterTwos} sysDDeclPair {-use-impl c=twos}
+    sim_output sysDDeclPair
+    move sysDDeclPair.out sysDDeclPair.twos.c.out
+    compare_file sysDDeclPair.twos.c.out sysDDeclPair.twos.out.expected
+}
+
+# ----------
+# NEGATIVE validations, at the member's own compile, as positioned
+# generic errors (S0015) on the module definition:
+
+# a convention for a method the interface doesn't have
+compile_verilog_fail_error DeclUnknown.bsv S0015 1
+if { $vtest == 1 } {
+    find_regexp [make_bsc_vcomp_output_name DeclUnknown.bsv] {convention: unknown method `nosuch' for module `mkDeclUnknown'}
+}
+
+# conventionReadyValid on a value method (no request wire to retract)
+compile_verilog_fail_error DeclValue.bsv S0015 1
+if { $vtest == 1 } {
+    find_regexp [make_bsc_vcomp_output_name DeclValue.bsv] {conventionReadyValid is declared for `look', which has no enable}
+}
+
+# conventionReadyValid combined with always_enabled (a tied-high
+# request is a different convention)
+compile_verilog_fail_error DeclAE.bsv S0015 1
+if { $vtest == 1 } {
+    find_regexp [make_bsc_vcomp_output_name DeclAE.bsv] {conventionReadyValid cannot be combined with always_enabled for method `req'}
+}

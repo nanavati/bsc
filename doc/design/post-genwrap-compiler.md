@@ -3472,10 +3472,36 @@ mixed group with an always_ready generated member and simulates under
 both selections; a BVI whose schedule doesn't grant a declared CF is
 rejected with the clause named.
 
-Remaining residuals after A–G: alternates' RDY relations beyond the
+**H — `-suggest-contract` (A25's migration aid).** Module generation
+under the flag prints a paste-able `contract_<Ifc>` literal derived
+from the inferred schedule: the declarable freedoms (CF/SB/SBR — ME/P
+pairs are omitted, read back by the contract as conflicting) plus
+constant-readiness facts, `RDY_*` faces folded. Suggestion is
+extract-then-freeze: pasting the output beside the interface and
+recompiling checks clean by construction. Printed at generation time
+(so `-u` skips it when artifacts are up to date, deliberately).
+
+Remaining residuals after A–H: alternates' RDY relations beyond the
 root guard; the parent-side sealed-constant readiness fold; port-name
 directives and the full declared-rendering equality check;
 BVI-declared conventions; vector/aggregate paths.
+
+### As built, continued: the dissolution round (increments 0–…)
+
+**0 — suites into the repository.** The behavioral suites verifying
+everything above, previously session-resident and lost with it, are
+reconstructed from this section's record as native DejaGnu
+directories under `testsuite/bsc.boundary/` (`p3`, `incB`–`incH`),
+auto-discovered by `make check`. All expectations are frozen from
+live runs (242 passes at the reconstructing commit); two spec items
+are recorded as not currently constructible — a nonempty-`sEXT`
+group rejection (the BSV parser's schedule completion does not
+accept `EXT` self-pairs; the doubly-annotated pair ICEs
+`mkVModInfo` before the group machinery runs — a pre-existing
+parser bug, kept as a commented block in `incB.exp`) and Bluesim
+selection of a raw-Verilog BVI alternate (`substAlternates` loads
+alternates by `.ba` name; exercised under iverilog instead). The
+compiler is untouched by this increment.
 
 ---
 

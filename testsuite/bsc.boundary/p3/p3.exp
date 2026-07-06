@@ -1,0 +1,185 @@
+# --------------------------------------------------
+# Boundary architecture, phases 1-3:
+#   * signature_<flatifc> defs are ordinary introspectable data
+#   * declared interface contracts (contract_<Ifc>) checked at each
+#     implementation's own compile
+#   * implementation groups (mkOneOf/primMkGroup): Verilog macro
+#     selection, Bluesim -use-impl selection, and the impls.json
+#     selection manifest
+
+# start from a clean slate (stale .bo/.ba files could satisfy -u)
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "*.vexe"
+erase_many "*.cexe"
+erase_many "*.cexe.so"
+erase_many "*.out"
+erase_many "*.impls.json"
+erase_many "*.sched"
+
+# ----------
+# (1) The members conform to the declared contract: compiles green.
+# (2) signature_ introspection: a probe module in another package
+#     reads signature_Counter_ and messageM's a formatted rendering.
+
+if { $vtest == 1 } {
+    compile_verilog_pass CounterDefs.bsv
+
+    compile_verilog_pass SigProbe.bsv mkSigProbe
+    set sigout [make_bsc_vcomp_output_name SigProbe.bsv]
+    find_regexp $sigout {Counter signature:}
+    find_regexp $sigout {incr kind=action type=Action prefix=incr result=incr}
+    find_regexp $sigout {value kind=value type=Bit#\(8\) prefix=value result=value}
+}
+
+# ----------
+# (3) NEGATIVE: a member whose schedule violates the declared relation
+#     is rejected with a positioned error naming the relation.
+#     (Contract errors are EGeneric, tag S0015, so the distinctive
+#     message fragments are checked with find_regexp.)
+
+compile_verilog_fail_error ContractViolation.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name ContractViolation.bsv]
+    find_regexp $out {module `mkCounterBad' does not satisfy the declared contract}
+    find_regexp $out {value SB incr is declared but the module schedules them}
+}
+
+# NEGATIVE: RDY_* names never appear in contracts
+compile_verilog_fail_error RdyInContract.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name RdyInContract.bsv]
+    find_regexp $out {RDY_\* names do not appear in contracts}
+}
+
+# NEGATIVE: a computed (non-literal) contract def is rejected
+compile_verilog_fail_error ComputedContract.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name ComputedContract.bsv]
+    find_regexp $out {a contract must be a literal list of contract}
+}
+
+# NEGATIVE: a group over an interface with no declared contract
+compile_verilog_fail_error GroupNoContract.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name GroupNoContract.bsv]
+    find_regexp $out {mkOneOf: the interface `Plain' does not declare a contract}
+}
+
+# NEGATIVE: a non-synthesized alternate has no Verilog boundary
+compile_verilog_fail_error GroupUnsynthAlt.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name GroupUnsynthAlt.bsv]
+    find_regexp $out {the alternate is not a separately synthesized}
+}
+
+# NEGATIVE: an inlined (non-synthesized) root is not a boundary
+compile_verilog_fail_error GroupInlineRoot.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name GroupInlineRoot.bsv]
+    find_regexp $out {the interface is not the boundary of a synthesized}
+    find_regexp $out {does not provide method\(s\) incr, value}
+}
+
+# NEGATIVE: a boundary with port arguments cannot form a group
+compile_verilog_fail_error GroupPortArgRoot.bsv S0015
+if { $vtest == 1 } {
+    set out [make_bsc_vcomp_output_name GroupPortArgRoot.bsv]
+    find_regexp $out {mkOneOf: the boundary has port argument\(s\) start}
+}
+
+# ----------
+# (4a) The group, Verilog backend: the parent instantiates the default
+#      through a macro-selected chain; -D selects an alternate at
+#      Verilog compile (link) time, per instance or per module.
+
+if { $vtest == 1 } {
+    compile_verilog_pass TbGroupSelect.bsv mkTbGroupSelect
+    find_regexp [make_bsc_vcomp_output_name TbGroupSelect.bsv] \
+        {Selection manifest created: mkTbGroupSelect.impls.json}
+
+    # default: the counter counts
+    link_verilog_pass {mkTbGroupSelect.v mkCounterA.v mkCounterStub.v} mkTbGroupSelect
+    sim_verilog mkTbGroupSelect
+    move mkTbGroupSelect.out mkTbGroupSelect.v.default.out
+    compare_file mkTbGroupSelect.v.default.out mkTbGroupSelect.out.expected
+
+    # per-instance macro: the stub is instantiated instead
+    link_verilog_pass {mkTbGroupSelect.v mkCounterA.v mkCounterStub.v} mkTbGroupSelect \
+        {-o mkTbGroupSelect_stub.vexe -Xv -DBSV_IMPL_c_stub=1}
+    sim_verilog mkTbGroupSelect_stub
+    move mkTbGroupSelect_stub.out mkTbGroupSelect.v.inst_stub.out
+    compare_file mkTbGroupSelect.v.inst_stub.out mkTbGroupSelect.stub.out.expected
+
+    # module-keyed macro (keyed by the default module's name)
+    link_verilog_pass {mkTbGroupSelect.v mkCounterA.v mkCounterStub.v} mkTbGroupSelect \
+        {-o mkTbGroupSelect_stub2.vexe -Xv -DBSV_IMPL_mkCounterA_stub=1}
+    sim_verilog mkTbGroupSelect_stub2
+    move mkTbGroupSelect_stub2.out mkTbGroupSelect.v.mod_stub.out
+    compare_file mkTbGroupSelect.v.mod_stub.out mkTbGroupSelect.stub.out.expected
+}
+
+# ----------
+# (4b) The group, Bluesim backend: -use-impl selects the alternate at
+#      link time; a selector that matches nothing is an error.
+
+if { $ctest == 1 } {
+    compile_object_pass TbGroupSelect.bsv mkTbGroupSelect
+
+    link_objects_pass {mkTbGroupSelect} mkTbGroupSelect
+    sim_output mkTbGroupSelect
+    move mkTbGroupSelect.out mkTbGroupSelect.c.default.out
+    compare_file mkTbGroupSelect.c.default.out mkTbGroupSelect.out.expected
+
+    link_objects_pass {mkTbGroupSelect} mkTbGroupSelect \
+        {-o mkTbGroupSelect_stub.cexe -use-impl c=stub}
+    sim_output mkTbGroupSelect_stub
+    move mkTbGroupSelect_stub.out mkTbGroupSelect.c.stub.out
+    compare_file mkTbGroupSelect.c.stub.out mkTbGroupSelect.stub.out.expected
+
+    # an unknown implementation key is an error, not a silent default
+    link_objects_fail_error {mkTbGroupSelect} mkTbGroupSelect S0015 1 \
+        {-o mkTbGroupSelect_bad.cexe -use-impl c=nosuch}
+
+    # a selector matching no instance or module is an error too
+    link_objects_fail_error {mkTbGroupSelect} mkTbGroupSelect S0015 1 \
+        {-o mkTbGroupSelect_bad.cexe -use-impl nomatch=stub}
+}
+
+# ----------
+# (4c) The selection manifest: instance, default, alternates, pinout,
+#      and the macros/flags that exercise the selection.
+
+if { $vtest == 1 || $ctest == 1 } {
+    set mf mkTbGroupSelect.impls.json
+    find_regexp $mf {"module": "mkTbGroupSelect",}
+    find_regexp $mf {"instance": "c",}
+    find_regexp $mf {"default": "mkCounterA",}
+    find_regexp $mf {"stub": "mkCounterStub"}
+    find_regexp $mf {"pinout": }
+    find_regexp $mf {"verilog_macro_instance": "BSV_IMPL_c_<key>",}
+    find_regexp $mf {"verilog_macro_module": "BSV_IMPL_mkCounterA_<key>",}
+    find_regexp $mf {"link_flag_instance": "-use-impl c=<key>",}
+    find_regexp $mf {"link_flag_module": "-use-impl mkCounterA=<key>"}
+}
+
+# ----------
+# (5) Cross-package group: interface+contract in one package, members
+#     in a second, the group in a third -- compiles and simulates.
+
+if { $vtest == 1 } {
+    compile_verilog_pass TbCross.bsv mkTbCross
+    link_verilog_pass {mkTbCross.v mkCounterX.v mkCounterXStub.v} mkTbCross
+    sim_verilog mkTbCross
+    move mkTbCross.out mkTbCross.v.default.out
+    compare_file mkTbCross.v.default.out mkTbCross.out.expected
+}
+
+if { $ctest == 1 } {
+    compile_object_pass TbCross.bsv mkTbCross
+    link_objects_pass {mkTbCross} mkTbCross
+    sim_output mkTbCross
+    move mkTbCross.out mkTbCross.c.default.out
+    compare_file mkTbCross.c.default.out mkTbCross.out.expected
+}
