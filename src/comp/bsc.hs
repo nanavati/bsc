@@ -152,7 +152,8 @@ import ILift(iLift)
 import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
 import ContractCheck(checkDeclaredContract, pinoutSummary,
-                     declaredConventions, bviImportErrs)
+                     declaredConventions, bviImportErrs,
+                     suggestContractText, cqtIfcCon)
 import SchedInfo(methodConflictInfo)
 import ADumpSchedule (MethodDumpInfo, aDumpSchedule, aDumpScheduleErr,
                       dumpMethodInfo, dumpMethodBVIInfo)
@@ -933,6 +934,15 @@ genModule
         boundary_meths = [ i | IEFace i _ _ _ _ _ <- ifc ]
     checkDeclaredContract errh alldefs (orig_cqt wi) (mod_nm wi) def_pos
                           inferred_mci rdy_true_ids boundary_meths
+    -- A25 migration aid: print a paste-able contract_<Ifc> literal
+    -- derived from the inferred schedule
+    when (suggestContract flags) $
+      case cqtIfcCon (orig_cqt wi) of
+        Just ifcId -> putStrLnF $
+            "-- suggested contract for module `" ++
+            getIdBaseString (mod_nm wi) ++ "':\n" ++
+            suggestContractText ifcId inferred_mci rdy_true_ids boundary_meths
+        Nothing -> return ()
 
     -- move assumption actions into rule bodies
     start flags DFremoveAssumps

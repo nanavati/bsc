@@ -4,6 +4,7 @@ module ContractCheck(checkDeclaredContract,
                      readSignatureKinds,
                      imposeDeclared, markMustHigh,
                      declaredConventions, bviImportErrs,
+                     suggestContractText, cqtIfcCon,
                      pinoutErrs, pinoutSummary) where
 
 -- Declared interface contracts, checked at each implementation's own
@@ -332,6 +333,39 @@ checkDeclaredContract errh alldefs cqt modId modPos mci rdyTrue meths =
                                 "' does not satisfy the declared contract `"
                                 ++ getIdBaseString cid ++ "': " ++ e))
                    | e <- errs ]
+
+-- The A25 migration aid: from a module's inferred schedule, produce a
+-- paste-able `contract_<Ifc>` literal (the declarable freedoms plus
+-- constant-readiness facts).  This is extract-then-freeze with no
+-- evaluator work: pasting the output and recompiling checks clean by
+-- construction.  Only the declarable relations are reported -- pairs
+-- the schedule relates as ME or P (not expressible in the contract
+-- language) are omitted, read by the contract as conflicting.
+suggestContractText :: Id -> VMethodConflictInfo -> [Id] -> [Id] -> String
+suggestContractText ifcId mci rdyTrue meths =
+  let base = getIdBaseString
+      real = [ m | m <- meths, take 4 (base m) /= "RDY_" ]
+      isTrueRdy m = m `elem` rdyTrue ||
+                    any (\ r -> base r == ("RDY_" ++ base m)) rdyTrue
+      -- RDY_* faces are not contract vocabulary (readiness is the
+      -- method's own offer aspect, reported as contractAlwaysReady);
+      -- exclude any relation touching one
+      notRdy i = take 4 (base i) /= "RDY_"
+      keep (a, b) = notRdy a && notRdy b && a /= b
+      -- CF is symmetric: report each unordered pair once
+      cf   = nub [ ordPair p | p <- sCF mci, keep p ]
+      rels = [ (base a, "CF",  base b) | (a, b) <- cf ] ++
+             [ (base a, "SB",  base b) | (a, b) <- sSB  mci, keep (a, b) ] ++
+             [ (base a, "SBR", base b) | (a, b) <- sSBR mci, keep (a, b) ]
+      relStmt (a, r, b) =
+          "contract" ++ r ++ "(" ++ show a ++ ", " ++ show b ++ ")"
+      arStmt m = "contractAlwaysReady(" ++ show (base m) ++ ")"
+      stmts = map relStmt rels ++ [ arStmt m | m <- real, isTrueRdy m ]
+      body = case stmts of
+               [] -> "nil"
+               _  -> foldr (\ s acc -> "cons(" ++ s ++ ",\n     " ++ acc)
+                           "nil" stmts ++ replicate (length stmts) ')'
+  in "List#(ContractStmt) contract_" ++ base ifcId ++ " =\n   " ++ body ++ ";"
 
 checkStmt :: VMethodConflictInfo -> [Id] -> [Id] -> ContractStmt -> [String]
 checkStmt mci rdyTrue meths stmt =

@@ -622,6 +622,7 @@ defaultFlags bluespecdir = Flags {
         showModuleUse = False,
         showRangeConflict = False,
         showSchedule = False,
+        suggestContract = False,
         showStats = False,
         showUpds = True,
         simplifyCSyntax = False,
@@ -1517,6 +1518,11 @@ externalFlags = [
          (Toggle (\f x -> f {showSchedule = x}) (showIfTrue showSchedule),
           "show generated schedule", Visible)),
 
+        ("suggest-contract",
+         (Toggle (\f x -> f {suggestContract = x}) (showIfTrue suggestContract),
+          "print a paste-able contract_<Ifc> literal from the " ++
+          "inferred schedule", Visible)),
+
         ("show-stats",
          (Toggle (\f x -> f {showStats=x}) (showIfTrue showStats),
           "show package statistics", Visible)),
@@ -1934,6 +1940,7 @@ showFlagsRaw flags =
           ("showModuleUse", show (showModuleUse flags)),
           ("showRangeConflict", show (showRangeConflict flags)),
           ("showSchedule", show (showSchedule flags)),
+          ("suggestContract", show (suggestContract flags)),
           ("showStats", show (showStats flags)),
           ("showUpds", show (showUpds flags)),
           ("showVersion", show (showVersion flags)),

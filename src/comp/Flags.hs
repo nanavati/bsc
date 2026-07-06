@@ -124,6 +124,7 @@ data Flags = Flags {
         showModuleUse :: Bool,
         showRangeConflict :: Bool,
         showSchedule :: Bool,
+        suggestContract :: Bool,
         showStats :: Bool,
         showUpds :: Bool,
         simplifyCSyntax :: Bool,
