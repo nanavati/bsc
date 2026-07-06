@@ -9,7 +9,7 @@ module GenWrap(
 import Prelude hiding ((<>))
 #endif
 
-import Data.Char(isDigit)
+import Data.Char(isDigit, isAlphaNum)
 import Data.List(nub, (\\), find)
 import Control.Monad(when, foldM, filterM, zipWithM)
 import Control.Monad.Except(ExceptT, runExceptT, throwError)
@@ -33,7 +33,8 @@ import Pred hiding (name)
 import qualified Pred(name)
 import Scheme
 import Assump
-import CType(cTNum, cTStr, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId)
+import CType(cTNum, cTStr, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId,
+             getActionValueArg)
 import VModInfo(VSchedInfo, VPathInfo(..), VeriPortProp(..), VArgInfo(..),
                 VFieldInfo(..), VName(..), VWireInfo(..), VPort)
 -- GenWrap defines its own versions that expand synonyms and use qualEq
@@ -354,11 +355,17 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        -- XXX we don't update the symbol table with the new instances
        -- XXX we rely on the symbol table being rebuilt
 
+       -- boundary description defs: one literal value def per generated
+       -- interface, carrying the structural half of the boundary
+       -- (entries with their port renderings) as ordinary data in the .bo
+       boundaryDefs <- mapM mkBoundaryDef finalIfcTRecs
+
        let finalDefs = reverse fixedDefs ++
                        ifcdefns ++
                        newModule_s ++
                        ifcConversionDefs ++
-                       instanceDefs
+                       instanceDefs ++
+                       boundaryDefs
 
        gens <- mapM (genWrapInfo newFlatIfcs) moduledefs
 
@@ -2178,6 +2185,95 @@ saveTopModPortTypeStmt i t =
   in  CSExpr Nothing $
         cVApply idSavePortType
           [mkMaybe Nothing, stringLiteralAt noPosition s, typeLiteral t]
+
+-- ====================
+-- Boundary description defs
+--
+-- For each generated (flattened) interface, emit one ordinary literal
+-- value definition carrying the structural half of the boundary as
+-- data: one entry per leaf field of the original interface, with its
+-- flattened path name and (slot, value) facts -- kind, reified type,
+-- port-naming inputs (prefix, argN, result).  The def lands in the
+-- .bo like any other def; declared contracts and inferred schedules
+-- are deliberately NOT here (contracts are declared at the interface,
+-- schedules stay in the .ba).
+--
+--   boundary_<flatifc> :: List (String, List (String, String))
+
+mkBoundaryDef :: IfcTRec -> GWMonad CDefn
+mkBoundaryDef rec =
+ do let ifcId = rec_rootid rec
+        pos = getPosition ifcId
+    entries <- boundaryEntries ifcId (rec_finfs rec)
+    let sane c = if isAlphaNum c then c else '_'
+        defId = mkId pos (concatFString
+                            [mkFString "boundary_",
+                             mkFString (map sane (getIdBaseString (rec_id rec)))])
+        tString = cTCon idString
+        tSlot = mkPairType tString tString
+        tSlots = TAp (cTCon idList) tSlot
+        tEntry = mkPairType tString tSlots
+        tBoundary = TAp (cTCon idList) tEntry
+        eStr = stringLiteralAt pos
+        slotE (k, v) = mkTuple pos [eStr k, eStr v]
+        entryE (path, slots) =
+            mkTuple pos [eStr path, mkList pos (map slotE slots)]
+        body = mkList pos (map entryE entries)
+    return (CValueSign (CDef defId (CQType [] tBoundary) [CClause [] [] body]))
+
+-- the same traversal discipline as mkFieldSavePortTypeStmts: recurse
+-- through subinterfaces (extending prefixes) and vector interfaces,
+-- and at each leaf compute the flattened path and naming inputs
+boundaryEntries :: Id -> [FInf] -> GWMonad [(String, [(String, String)])]
+boundaryEntries topIfcId = concatMapM (ent noPrefixes topIfcId)
+ where
+   ent :: IfcPrefixes -> Id -> FInf -> GWMonad [(String, [(String, String)])]
+   ent prefixes ifcIdIn (FInf f as r aIds) =
+    do
+      ciPrags <- getInterfaceFieldPrags ifcIdIn f
+      mi <- chkInterface r
+      case (mi, as) of
+        (Just (ti, _, fts), []) -> do
+          newprefixes <- extendPrefixes prefixes ciPrags r f
+          concatMapM (ent newprefixes ti) fts
+        _ -> do
+          isVec <- isVectorInterfaces r
+          case (isVec, as) of
+            (Just (n, tVec, isListN), []) -> do
+               let nums = [0..(n-1)] :: [Integer]
+               let recurse num = do
+                     newprefixes <- extendPrefixes prefixes ciPrags r f
+                     ent newprefixes ifcIdIn (FInf (mkNumId num) [] tVec [])
+               concatMapM recurse nums
+            _ -> do
+              let methodStr = getIdBaseString f
+                  currentPre = ifcp_renamePrefixes prefixes
+                  localPrefix1 = fromMaybe methodStr (lookupPrefixIfcPragma ciPrags)
+                  localPrefix = joinStrings_ currentPre localPrefix1
+                  resultName = case lookupResultIfcPragma ciPrags of
+                                 Just str -> joinStrings_ currentPre str
+                                 Nothing -> joinStrings_ currentPre methodStr
+                  path = getFString (fieldPathName prefixes f)
+              isClk <- isClockType r
+              isRst <- isResetType r
+              mIno <- isInoutType r
+              let kind | isClk = "clock"
+                       | isRst = "reset"
+                       | isJust mIno = "inout"
+                       -- Action is a synonym for ActionValue#(void)
+                       | leftCon r == Just idActionValue =
+                           if leftCon (getActionValueArg r) == Just idPrimUnit
+                           then "action" else "actionvalue"
+                       | leftCon r == Just idPrimAction = "action"
+                       | leftCon r == Just idAction = "action"
+                       | otherwise = "value"
+                  tyStr = pfpString (foldr arrow r as)
+                  argSlots = [ ("arg" ++ show n, getIdString i)
+                             | (n, i) <- zip [(1 :: Integer)..] aIds ]
+                  slots = [("kind", kind), ("type", tyStr),
+                           ("prefix", localPrefix), ("result", resultName)]
+                          ++ argSlots
+              return [(path, slots)]
 
 -- saveFieldPortTypes v "prefix" ["arg1", "arg2"] "result"
 mkFieldSavePortTypeStmts :: Maybe CExpr -> Id -> [FInf] -> GWMonad [CStmt]
