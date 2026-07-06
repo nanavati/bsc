@@ -17,6 +17,12 @@ module ContractCheck(checkDeclaredContract) where
 -- Unlisted method pairs are conflicting; self-pairs are outside the
 -- language; RDY_* names never appear (readiness is the method's own
 -- offer aspect, not a sibling method).
+--
+-- DURABILITY (design doc A86): this string grammar is a v0 input
+-- format, deliberately frozen at the three statement forms above --
+-- do NOT grow it.  Future contract features wait for the typed
+-- carrier; DeclaredContract/ContractStmt is the stable interface and
+-- replacing the surface is a parser swap.
 
 import qualified Data.Map as M
 import Data.Char(isSpace)
