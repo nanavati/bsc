@@ -3579,6 +3579,24 @@ introspection), all nine behavioral suites green (271), and a
 100-file golden-Verilog corpus comparison against the increment-0
 snapshot: byte-identical — the layer is codegen-inert.
 
+**4 — the de-closure (the increment-I precondition).** GenWrap's
+wrapper continuation (`DefFun`, a closure over the GenWrap-time monad
+state and pragma snapshot, invoked by `genModule` after scheduling)
+becomes `GenBoundary.renderWrapperCDefn`: `mkDef` now returns a pure
+`BoundarySpec` (wrapper def id/type, ifc-declaration pragmas as
+per-type facts, module pragmas as data, the state snapshot), and the
+module-pragma input is an explicit parameter chosen at the call site.
+`bsc.hs` currently passes the same GenWrap-time set — verified
+byte-identical against the full 542-file golden corpus (zero diffs),
+271 boundary-suite passes, 2353 passes across the naming/codegen/MCD
+matrix. The staleness that ICEd the original increment-I attempt is
+now structurally reachable: the RDY filter, `fixupVeriField`, and the
+readiness guards all read the parameter, so `genModule` can hand them
+the same pragma set the scheduler sees. Type-level naming
+(`flatTypeId`) deliberately stays on the GenWrap-time snapshot — the
+flat type's identity must not change when post-typecheck pragmas
+arrive (renderings never fork nominal types, A98).
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
