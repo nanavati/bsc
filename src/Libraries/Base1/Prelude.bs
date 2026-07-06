@@ -62,6 +62,9 @@ package Prelude(
         primGetParamName,
         setStateName, primGetModuleName, primSavePortType,
         primMkGroup, mkOneOf,
+        SynthPort(..), SynthMethod(..), SynthField(..),
+        Synthesizable'(..), Synthesizable(..),
+        WrapIfc'(..), MediateField(..), genericWrapIfc, genericUnwrapIfc,
         Attributes__, setStateAttrib,
         primJoinActions, primNoActions, toPrimAction, fromPrimAction,
         primJoinRules, primNoRules, emptyRules,
@@ -4854,6 +4857,147 @@ instance WrapPorts () () where
   packPorts _ = ()
   unpackPorts _ = ()
   savePortTypes _ _ _ = return ()
+
+
+-- ================================================================
+-- The typed layer over synthesized boundaries (increment 3 of the
+-- GenWrap-dissolution round; ported from the era-1 MVP branch).
+--
+-- An interface is Synthesizable when it is a flat collection of
+-- primitive, port-shaped methods -- the boundary is then the
+-- interface itself.  The classes mirror the evaluator's own wrapper
+-- machinery level for level (SynthPort ~ any Bits value, per
+-- WrapMethod's value instance; SynthMethod ~ WrapMethod's instance
+-- heads; SynthField adds the boundary-legal non-method fields,
+-- mirroring WrapField), so resolution failures name the exact leaf
+-- that cannot cross a boundary.  genericWrapIfc/genericUnwrapIfc
+-- convert between two interfaces sharing a boundary by walking the
+-- paired generic representations; fields pair by type-level name and
+-- convert through MediateField, which mirrors WrapField's instance
+-- heads but attaches no port-name decoration (mediation is not a
+-- synthesis boundary; toWrapField's primMethod decoration is only
+-- consumable there).
+
+-- a port: a value that crosses a synthesized boundary as wires.
+-- Anything in Bits is a port
+class SynthPort a where
+  portShape :: a -> String
+
+instance (Bits a n) => SynthPort a where
+  portShape _ = "Bit " +++ integerToString (valueOf n)
+
+-- a primitive method shape at a boundary
+class SynthMethod m where
+  methodShape :: m -> String
+
+instance SynthMethod Action where
+  methodShape _ = "Action"
+
+instance (SynthPort r) => SynthMethod (ActionValue r) where
+  methodShape _ = "ActionValue (" +++ portShape (_ :: r) +++ ")"
+
+instance (SynthPort a, SynthMethod m) => SynthMethod (a -> m) where
+  methodShape _ = portShape (_ :: a) +++ " -> " +++ methodShape (_ :: m)
+
+instance (SynthPort v) => SynthMethod v where
+  methodShape _ = portShape (_ :: v)
+
+-- a primitive field at a boundary: a primitive method, or one of the
+-- boundary-legal non-method fields (Clock, Reset, Inout)
+class SynthField f where
+  fieldShape :: f -> String
+
+instance (SynthMethod m) => SynthField m where
+  fieldShape = methodShape
+
+instance SynthField Clock where
+  fieldShape _ = "Clock"
+
+instance SynthField Reset where
+  fieldShape _ = "Reset"
+
+instance (Bits a n) => SynthField (Inout a) where
+  fieldShape _ = "Inout (Bit " +++ integerToString (valueOf n) +++ ")"
+
+-- generic traversal over the interface's representation: every field
+-- must be a primitive field
+class Synthesizable' r where
+  synthShape' :: r -> List String
+
+instance (Synthesizable' a, Synthesizable' b) => Synthesizable' (a, b) where
+  synthShape' _ = listPrimAppend (synthShape' (_ :: a)) (synthShape' (_ :: b))
+
+instance Synthesizable' () where
+  synthShape' _ = Nil
+
+instance (Synthesizable' r) => Synthesizable' (Meta m r) where
+  synthShape' _ = synthShape' (_ :: r)
+
+instance (SynthField t) => Synthesizable' (Conc t) where
+  synthShape' _ = Cons (fieldShape (_ :: t)) Nil
+
+-- an interface is synthesizable when its generic representation is a
+-- flat collection of primitive fields; synthShape reports the
+-- decomposition
+class Synthesizable a where
+  synthShape :: a -> List String
+
+instance (Generic a r, Synthesizable' r) => Synthesizable a where
+  synthShape _ = synthShape' (_ :: r)
+
+-- how a field of one interface converts to the corresponding field of
+-- another interface sharing the same boundary: methods mediate
+-- through their common boundary method type (WrapMethod), and the
+-- boundary-legal non-method fields convert directly
+class MediateField f g where
+  mediateField :: f -> g
+
+instance (WrapMethod f w, WrapMethod g w) => MediateField f g where
+  mediateField = fromWrapMethod ∘ toWrapMethod
+
+instance MediateField Clock Clock where
+  mediateField = id
+
+instance MediateField Reset Reset where
+  mediateField = id
+
+instance (Bits a n, Bits b n) => MediateField (Inout a) (Inout b) where
+  mediateField = primInoutUncast0 ∘ primInoutCast0
+
+-- generic conversion between two interfaces that share a boundary:
+-- each field of a and the positionally corresponding field of b must
+-- mediate to the same boundary type; a field pair with different
+-- boundaries fails as an unresolved WrapMethod proviso naming the
+-- two field types
+class WrapIfc' ra rb where
+  wrapIfc' :: ra -> rb
+  unwrapIfc' :: rb -> ra
+
+instance (WrapIfc' a1 b1, WrapIfc' a2 b2) => WrapIfc' (a1, a2) (b1, b2) where
+  wrapIfc' (x, y) = (wrapIfc' x, wrapIfc' y)
+  unwrapIfc' (x, y) = (unwrapIfc' x, unwrapIfc' y)
+
+instance WrapIfc' () () where
+  wrapIfc' _ = ()
+  unwrapIfc' _ = ()
+
+instance (WrapIfc' ra rb) => WrapIfc' (Meta ma ra) (Meta mb rb) where
+  wrapIfc' (Meta x) = Meta (wrapIfc' x)
+  unwrapIfc' (Meta x) = Meta (unwrapIfc' x)
+
+-- the leaf: fields pair by name (the same type-level name in both
+-- MetaFields), and convert by boundary mediation
+instance (MediateField f g, MediateField g f) =>
+         WrapIfc' (Meta (MetaField name ia) (Conc f))
+                  (Meta (MetaField name ib) (Conc g)) where
+  wrapIfc' (Meta (Conc x)) = Meta (Conc (mediateField x))
+  unwrapIfc' (Meta (Conc x)) = Meta (Conc (mediateField x))
+
+genericWrapIfc :: (Generic a ra, Generic b rb, WrapIfc' ra rb) => a -> b
+genericWrapIfc = to ∘ wrapIfc' ∘ from
+
+genericUnwrapIfc :: (Generic a ra, Generic b rb, WrapIfc' ra rb) => b -> a
+genericUnwrapIfc = to ∘ unwrapIfc' ∘ from
 
 -- Compute the list port names for type 'a' given a base name.
 -- Check that the number of port names matches the number of ports.
