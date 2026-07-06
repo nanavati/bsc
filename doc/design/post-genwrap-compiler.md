@@ -3558,6 +3558,27 @@ environmental (SystemC headers not installed; permission-denied
 negatives that cannot fire as root), at 2:07 wall against the 2:13
 baseline — the freshness decode is free at suite scale.
 
+**3 — the typed layer, re-ported (project step 1).** The era-1 MVP's
+library half lands in the Prelude: `SynthPort` (anything in `Bits`),
+`SynthMethod`/`SynthField` (instance heads mirroring
+`WrapMethod`/`WrapField`, plus Clock/Reset/Inout), `Synthesizable`
+via the derived `Generic` representation, `MediateField`
+(WrapMethod-mediated field conversion with no port-name decoration —
+the era-1 ICE finding holds), `WrapIfc'` over paired representations
+(leaves pair by `MetaField` name), and
+`genericWrapIfc`/`genericUnwrapIfc`. Deliberately not ported:
+`IfcContract` triples, `primImposeContract`/`primContractOf`,
+`WireMapping`, `synthesize_`/`synthesizeIfc`, `primSetAlternates`,
+and era-1's contract-argument `mkOneOf` — all superseded by the
+declaration-first substrate; `WrapInterface` returns later as the
+`wrapModule` constraint, designed against descriptions. Verified by
+the new `bsc.boundary/typed` suite (25 tests: round trips on both
+backends with writes landing through converted views, mixed shapes,
+proviso negatives naming the offending leaf, `synthShape`
+introspection), all nine behavioral suites green (271), and a
+100-file golden-Verilog corpus comparison against the increment-0
+snapshot: byte-identical — the layer is codegen-inert.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
