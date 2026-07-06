@@ -1,0 +1,101 @@
+# --------------------------------------------------
+# The typed layer over synthesized boundaries (Prelude: SynthPort,
+# SynthMethod, SynthField, Synthesizable/synthShape, MediateField,
+# WrapIfc', genericWrapIfc/genericUnwrapIfc).
+#
+# genericWrapIfc converts between two interfaces sharing a boundary by
+# walking the paired generic representations; fields pair by type-level
+# name and mediate through their common WrapMethod boundary type.
+# Everything is exported from the Prelude, so the BSV sources need no
+# imports (except List, for folding synthShape's List#(String)).
+#
+# DRAFT SUITE: every hand-computed expectation below is marked
+# "# compiler build completes.
+
+# start from a clean slate (stale .bo/.ba files could satisfy -u)
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
+erase_many "*.out"
+
+# ----------
+# 1. Round trip: Alpha and Beta are distinct interface types with
+# identical field names and shapes.  Wrap a synthesized Alpha instance
+# to Beta, drive it, unwrap back to Alpha, and check that both views
+# hit the same state.
+
+if {$ctest == 1} {
+  compile_object_pass WrapRT.bsv mkWrapRT
+  link_objects_pass {mkWrapRT mkAlphaImpl} mkWrapRT
+  sim_output mkWrapRT
+  # wrapped poke; 99 after unwrapped poke)
+  compare_file mkWrapRT.out mkWrapRT.out.expected
+}
+
+if {$vtest == 1} {
+  compile_verilog_pass WrapRT.bsv mkWrapRT
+  link_verilog_pass {mkWrapRT.v mkAlphaImpl.v} mkWrapRT
+  sim_verilog mkWrapRT
+  compare_file mkWrapRT.out mkWrapRT.out.expected
+}
+
+# ----------
+# 2. Mixed fields: a Maybe#(Bit#(7)) value method (mediating to a
+# Bit#(8) view through the shared 8-bit boundary), a two-argument
+# Action method, and an ActionValue#(Bit#(4)) method.
+
+if {$ctest == 1} {
+  compile_object_pass WrapMix.bsv mkWrapMix
+  link_objects_pass {mkWrapMix mkMixImpl} mkWrapMix
+  sim_output mkWrapMix
+  # bump counts 0,1,2 across the two views)
+  compare_file mkWrapMix.out mkWrapMix.out.expected
+}
+
+if {$vtest == 1} {
+  compile_verilog_pass WrapMix.bsv mkWrapMix
+  link_verilog_pass {mkWrapMix.v mkMixImpl.v} mkWrapMix
+  sim_verilog mkWrapMix
+  compare_file mkWrapMix.out mkWrapMix.out.expected
+}
+
+# ----------
+# 2b. Clock/Reset fields mediate by identity: compile-only (using the
+# wrapped clock would need clocked_by plumbing).  compile_backend_pass
+# forces full elaboration, so the MediateField Clock/Reset instances
+# are actually resolved, without being gated on $ctest/$vtest.
+
+compile_backend_pass ClkField.bsv
+
+# ----------
+# 3. Negative: a non-Bits leaf (Integer value method).  The value
+# catch-all boundary instance requires Bits, so the failure should be
+# a T-error naming the Integer leaf.
+
+compile_fail NonBits.bsv
+# should name the leaf type ...
+find_regexp [make_bsc_output_name NonBits.bsv] {Integer}
+find_regexp [make_bsc_output_name NonBits.bsv] {(Bits|WrapMethod|WrapIfc)}
+
+# ----------
+# 4. Negative: corresponding fields with different boundary shapes
+# (Delta.poke takes Bit#(8), Gamma.poke takes Bit#(16)).  Per the
+# Prelude comment this fails as an unresolved WrapMethod proviso
+# naming the two field types.
+
+compile_fail ShapeMismatch.bsv
+# surface at WrapMethod itself or at a helper constraint)
+find_regexp [make_bsc_output_name ShapeMismatch.bsv] {(WrapMethod|MediateField|WrapIfc|Curry)}
+find_regexp [make_bsc_output_name ShapeMismatch.bsv] {Bit#\(16\)}
+
+# ----------
+# 5. synthShape probe: messageM the folded boundary decomposition of a
+# three-method interface.  messageM output appears only at codegen, so
+# compile with a backend (ungated).
+
+compile_backend_pass ShapeProbe.bsv
+# instance bodies (portShape = "Bit " +++ n; methodShape for arrows is
+# "arg -> res"; ActionValue wraps its port in parens), joined in field
+# declaration order
+find_regexp [make_bsc_output_name ShapeProbe.bsv] {shape: Bit 8 \| Bit 8 -> Action \| ActionValue \(Bit 4\)}
