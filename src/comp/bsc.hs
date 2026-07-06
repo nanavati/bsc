@@ -1064,12 +1064,14 @@ genModule
             | (vn, ps) <- veriPortProps ] ++
             [ e | e@(evn, _) <- rv_props,
                   evn `notElem` map fst veriPortProps ]
-    -- the module pragmas are passed explicitly (currently the same
-    -- pragmas that GenWrap saw; the ifc-declaration pragmas are
+    -- the wrapper renders against the module's EFFECTIVE pragmas --
+    -- the same set the schedule and proofs used above -- so the field
+    -- filter and the readiness guards agree with the recorded
+    -- schedule by construction (the ifc-declaration pragmas are
     -- per-type facts, carried in the BoundarySpec)
     let bspec = wi_boundary wi
     def <- renderWrapperCDefn bspec
-                 (bs_pps bspec)
+                 pps
                  fwrapper
                  wireinfo
                  (asi_v_sched_info schedule_info)
