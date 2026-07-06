@@ -43,7 +43,7 @@ compile_pass PolyLam.bs -let-gen
 # own split point.  Without -let-gen, the binding is monomorphic and
 # the contradictory uses are a type error.
 compile_pass SplitLetGen.bs -let-gen
-compile_fail SplitLetGen.bs
+compile_fail_error SplitLetGen.bs T0031
 
 compile_fail PackedString.bs
 
