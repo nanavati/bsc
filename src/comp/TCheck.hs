@@ -846,8 +846,16 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
                 case fieldnames \\ fs of
                   i:_ -> err (getIdPosition i, EForeignModNotField
                                                    (pfpString ti) (pfpString i))
-                  [] -> -- now check for missing fields
-                      case fs \\ fieldnames of
+                  [] -> -- now check for missing fields.  A missing
+                        -- RDY_<m> for a declared method m reads as
+                        -- constant readiness -- the boundary
+                        -- collapsed the ready port (ready-less BVI
+                        -- declarations, contract-collapsed generated
+                        -- wrappers); nothing may select it, and the
+                        -- generated conversions never do
+                      case [ i | i <- fs \\ fieldnames,
+                                 not (isRdyId i &&
+                                      any (\ m -> mkRdyId m == i) methnames) ] of
                         i:_ -> err (getIdPosition i,
                                     EForeignModMissingField (pfpString i)
                                         name_str name_pos_str)
