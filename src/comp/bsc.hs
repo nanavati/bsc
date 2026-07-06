@@ -152,7 +152,7 @@ import ILift(iLift)
 import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
 import ContractCheck(checkDeclaredContract, pinoutSummary,
-                     declaredConventions)
+                     declaredConventions, bviImportErrs)
 import SchedInfo(methodConflictInfo)
 import ADumpSchedule (MethodDumpInfo, aDumpSchedule, aDumpScheduleErr,
                       dumpMethodInfo, dumpMethodBVIInfo)
@@ -516,6 +516,19 @@ compilePackage
     start flags DFfixup
     let (imodf, alldefsList) = fixupDefs imod binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
+
+    -- BVI member-side checks (increment G): an imported Verilog
+    -- module is a hand-declared boundary; its declaration is checked
+    -- against the interface's declared contract here, at its own
+    -- package's compile (the obligation site).  Generated wrappers
+    -- are not yet ICVerilog at this point, so the current package's
+    -- ICVerilog defs are exactly the BVI imports.
+    let bvi_errs = [ (getPosition i,
+                      EGeneric ("imported module `" ++
+                                getIdBaseString i ++ "' " ++ e))
+                   | IDef i it b _ <- ipkg_defs imodf
+                   , e <- bviImportErrs alldefs it b ]
+    when (not (null bvi_errs)) $ bsError errh bvi_errs
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 

@@ -3452,10 +3452,30 @@ group-site inline-root protection recognizes flattened subtrees.
 Vector-index paths (`[_]` placeholders) remain future work with
 aggregate clauses.
 
-Remaining residuals after A–F: BVI members' member-side checks;
-alternates' RDY relations beyond the root guard; the parent-side
-sealed-constant readiness fold; port-name directives and the full
-declared-rendering equality check; vector/aggregate paths.
+**G — BVI member-side checks (A90/A98).** "Feature 1 = feature 2"
+completed for contracts: an `import "BVI"` is a hand-declared
+boundary, so the actual-refines-declared check runs at the importing
+package's own compile, reading the declared `VModInfo` in place of an
+inferred schedule. The pass sits beside the post-`fixupDefs`
+integrity check, where the current package's `ICVerilog` defs are
+exactly the BVI imports and the full def map (including imported
+contract defs) first coexists with them. Readiness is judged on
+declarations: a method without a `ready` clause has no `RDY_<m>`
+field (constant readiness, satisfying `contractAlwaysReady`); a
+declared ready port is readiness NOT promised constant, and is
+rejected against the clause. A BVI claiming a convention-tagged
+interface is rejected (v0 — a BVI-side convention annotation lifts
+this later). Declared boundaries remain trusted about their own
+wires; the check is declaration-vs-contract consistency, never
+declaration-vs-Verilog. Verified: a conforming ready-less BVI joins a
+mixed group with an always_ready generated member and simulates under
+both selections; a BVI whose schedule doesn't grant a declared CF is
+rejected with the clause named.
+
+Remaining residuals after A–G: alternates' RDY relations beyond the
+root guard; the parent-side sealed-constant readiness fold; port-name
+directives and the full declared-rendering equality check;
+BVI-declared conventions; vector/aggregate paths.
 
 ---
 

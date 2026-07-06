@@ -3,7 +3,7 @@ module ContractCheck(checkDeclaredContract,
                      contractIdForIfc, signatureIdForIfc,
                      readSignatureKinds,
                      imposeDeclared, markMustHigh,
-                     declaredConventions,
+                     declaredConventions, bviImportErrs,
                      pinoutErrs, pinoutSummary) where
 
 -- Declared interface contracts, checked at each implementation's own
@@ -41,7 +41,8 @@ import Data.Char(isAlphaNum)
 import Data.List(nub, intercalate, group, sort, (\\))
 
 import Error(ErrorHandle, ErrMsg(..), bsError)
-import Position(Position)
+import Position(Position, noPosition)
+import PreIds(idArrow)
 import Id
 import Util(ordPair, uniquePairs)
 import FStringCompat(mkFString, concatFString)
@@ -587,6 +588,84 @@ markMustHigh ms vmi = vmi { vFields = map upd (vFields vmi) }
         | n `elem` ms && VPmusthigh `notElem` props =
             f { vf_enable = Just (vn, VPmusthigh : props) }
     upd f = f
+
+-- ==================================================
+-- BVI member-side checks (A90/A98, "feature 1 = feature 2"): an
+-- import "BVI" is a hand-declared boundary, so the same
+-- actual-refines-declared check applies at the importing package's
+-- own compile, reading the declared VModInfo in place of an inferred
+-- schedule.  Declared boundaries are trusted about their own wires;
+-- they are checked for consistency with the interface's declared
+-- contract.  A method without a ready clause has no RDY_<m> field --
+-- readiness constant true; a declared ready port means readiness is
+-- NOT promised constant.
+
+-- the interface tycon of a module def's IType
+-- (forall m c . ctx -> ... -> m Ifc)
+itIfcCon :: IType -> Maybe Id
+itIfcCon t0 = go (strip t0)
+  where
+    strip (ITForAll _ _ t) = strip t
+    strip t = t
+    go (ITAp (ITAp c _) r) | isArr c = go (strip r)
+    go (ITAp _ ifcT) = itLeft ifcT
+    go _ = Nothing
+    isArr (ITCon i _ _) = i == idArrow noPosition
+    isArr _ = False
+    itLeft (ITAp f _) = itLeft f
+    itLeft (ITCon i _ _) = Just i
+    itLeft _ = Nothing
+
+-- the user-import boundaries in a def body (no descent into ICDef
+-- unfoldings: the fixed-up def graph is cyclic, and referenced
+-- modules were or will be checked at their own defs)
+bviVmis :: IExpr a -> [VModInfo]
+bviVmis (ICon _ (ICVerilog { isUserImport = True, vInfo = vi })) = [vi]
+bviVmis (IAps f _ es) = concatMap bviVmis (f:es)
+bviVmis (ILam _ _ b) = bviVmis b
+bviVmis (ILAM _ _ b) = bviVmis b
+bviVmis _ = []
+
+-- check one top-level def: if it is a BVI import of an interface with
+-- a declared contract (or declared conventions), check the
+-- declaration; returns full messages, to be positioned by the caller
+bviImportErrs :: M.Map Id (IExpr a) -> IType -> IExpr a -> [String]
+bviImportErrs alldefs dtype body =
+  case (itIfcCon dtype, bviVmis body) of
+    (Just ifcId, [vmi]) ->
+        let cid = contractIdForIfc ifcId
+            ctx e = "does not satisfy the declared contract `" ++
+                    getIdBaseString cid ++ "': " ++ e
+            conv_errs =
+              case M.lookup (conventionIdForIfc ifcId) alldefs of
+                Just cb ->
+                  case readConventions cb of
+                    Right ns@(_:_) ->
+                        ["claims interface `" ++ getIdBaseString ifcId ++
+                         "', which declares conventionReadyValid for " ++
+                         intercalate ", " ns ++ "; a BVI cannot yet " ++
+                         "declare the retractable ready/valid convention"]
+                    _ -> []
+                Nothing -> []
+            contract_errs =
+              case M.lookup cid alldefs of
+                Nothing -> []
+                Just b ->
+                  case readContract b of
+                    Left m -> [ctx m]
+                    Right stmts ->
+                      let meths = [ n | Method { vf_name = n }
+                                        <- vFields vmi ]
+                          names = map getIdBaseString meths
+                          rdyTrue = [ m | m <- meths,
+                                      let s = getIdBaseString m,
+                                      take 4 s /= "RDY_",
+                                      ("RDY_" ++ s) `notElem` names ]
+                          mci = methodConflictInfo (vSched vmi)
+                      in map ctx
+                             (concatMap (checkStmt mci rdyTrue meths) stmts)
+        in conv_errs ++ contract_errs
+    _ -> []
 
 -- ==================================================
 -- Pinout equality (A100): the group mechanism reuses one emitted
