@@ -96,7 +96,8 @@ import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
-import GenWrap(genWrap, WrapInfo(..))
+import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..))
+import GenBoundary(renderWrapperCDefn)
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
 import IExpand(iExpand)
@@ -1047,7 +1048,12 @@ genModule
             | (vn, ps) <- veriPortProps ] ++
             [ e | e@(evn, _) <- rv_props,
                   evn `notElem` map fst veriPortProps ]
-    def <- (deffun wi)
+    -- the module pragmas are passed explicitly (currently the same
+    -- pragmas that GenWrap saw; the ifc-declaration pragmas are
+    -- per-type facts, carried in the BoundarySpec)
+    let bspec = wi_boundary wi
+    def <- renderWrapperCDefn bspec
+                 (bs_pps bspec)
                  fwrapper
                  wireinfo
                  (asi_v_sched_info schedule_info)

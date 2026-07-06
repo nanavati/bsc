@@ -2,7 +2,17 @@
 {-# OPTIONS_GHC -fwarn-name-shadowing #-}
 module GenWrap(
                genWrap,
-               WrapInfo(..)
+               WrapInfo(..),
+               BoundarySpec(..),
+               -- for GenBoundary (rendering the final wrapper)
+               GWMonad, GenState(..),
+               runGWMonadNoFail, runGWMonadGetNoFail,
+               chkInterface, flatTypeId,
+               isClockType, isResetType, isParamType,
+               isInoutType, isVectorType,
+               genFromBody, mkArgPortTypes,
+               isRdyToRemoveField, fixupVeriField,
+               ePack, ePrimInoutCast0
               ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -11,7 +21,7 @@ import Prelude hiding ((<>))
 
 import Data.Char(isDigit, isAlphaNum)
 import Data.List(nub, (\\), find)
-import Control.Monad(when, foldM, filterM, zipWithM)
+import Control.Monad(when, foldM, filterM)
 import Control.Monad.Except(ExceptT, runExceptT, throwError)
 import Control.Monad.State(StateT, runStateT, lift, gets, get, put)
 import PFPrint
@@ -35,7 +45,7 @@ import Scheme
 import Assump
 import CType(cTNum, cTStr, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId,
              getActionValueArg)
-import VModInfo(VSchedInfo, VPathInfo(..), VeriPortProp(..), VArgInfo(..),
+import VModInfo(VeriPortProp(..), VArgInfo(..),
                 VFieldInfo(..), VName(..), VWireInfo(..), VPort)
 -- GenWrap defines its own versions that expand synonyms and use qualEq
 import Type hiding (isPrimAction, isActionValue, getAVType,
@@ -135,9 +145,20 @@ instance (HasPosition) FInf where
 
 -- ====================
 
-type DefFun = Bool -> VWireInfo -> VSchedInfo -> VPathInfo ->
-              [VPort] -> SymTab -> [VFieldInfo] -> [Id] ->
-              IO CDefn
+-- The data needed to render the final wrapper definition once the
+-- back end has computed the schedule, wire and path information.
+-- This is pure data (no captured computation); the rendering itself
+-- is done by GenBoundary.renderWrapperCDefn, so that the pragmas in
+-- effect at that point can be supplied as explicit arguments.
+data BoundarySpec = BoundarySpec
+ {
+   bs_id     :: Id,       -- name of the wrapper def
+   bs_qt     :: CType,    -- type of the wrapper def (sans provisos)
+   bs_cqt    :: CQType,   -- qualified type of the wrapper def
+   bs_iprags :: [PProp],  -- pragmas from the ifc declaration
+   bs_pps    :: [PProp],  -- module pragmas as seen at GenWrap time
+   bs_state  :: GenState  -- snapshot of the GenWrap monad state
+ }
 
 data WrapInfo = WrapInfo
  {
@@ -146,7 +167,7 @@ data WrapInfo = WrapInfo
    wrapper_ifc :: Id,           -- munged interface name
    wrapped_mod :: Id,           -- Id of wrapped module eg.  mkTest_
    wi_prags    :: [PProp],
-   deffun      :: DefFun
+   wi_boundary :: BoundarySpec
  }
 
 instance PPrint WrapInfo where
@@ -607,8 +628,9 @@ fixupPolyModType ty =
 
 -- This takes the ModDefInfo (computed by getDef) for each module to be
 -- synthesized and generates the WrapInfo structure which is returned
--- from GenWrap (info about the module and a DefFun continuation which is
--- used at the end of synthesis to make the final wrapper).
+-- from GenWrap (info about the module and a BoundarySpec which is
+-- used at the end of synthesis to make the final wrapper, by
+-- GenBoundary.renderWrapperCDefn).
 -- It also takes the list of generated interfaces, in which it will find
 -- the info for the interface of the current module.
 
@@ -632,13 +654,13 @@ genWrapInfo genifcs (d@(CDef modName oqt@(CQType _ t) cls), cqt, _, pps) =
    let newModName = modIdRename pps modName
    --traceM ("genWrapInfo" ++ ppReadable ifcName_ ++ ppReadable newModName)
    --traceM ("genWrapInfo" ++ ppReadable genifcs)
-   namefun <- mkDef iprops pps d cqt -- pass down the pragma for the wrapper gen state
+   spec <- mkDef iprops pps d cqt -- pass down the pragma for the wrapper gen state
    return WrapInfo { mod_nm      = modName,
                      orig_cqt    = oqt,
                      wrapper_ifc = ifcName_,
                      wrapped_mod = newModName,
                      wi_prags    = (pps ++ iprops),-- combine pragmas
-                     deffun      = namefun }
+                     wi_boundary = spec }
  where
    --Get interface name from module XXX make disappear
    -- XXX this was already done, but we did not keep the name !
@@ -1455,85 +1477,19 @@ mkNewModDef _ (def,_,_,_) =
 -- ==============================
 -- The wrapper continuation
 
--- This is the part of "genWrapInfo" which makes the DefFun,
--- a continuation function which does the final wrapper computation.
+-- This is the part of "genWrapInfo" which makes the BoundarySpec,
+-- the data used at the end of synthesis to do the final wrapper
+-- computation (see GenBoundary.renderWrapperCDefn).
 
--- type DefFun = Bool -> VWireInfo -> VSchedInfo -> VPathInfo -> [VPort] -> SymTab -> [VFieldInfo] -> [Id] -> IO CDefn
--- XXX: alwaysEnabled is dropped and broken (not propagated to {inhigh})
-mkDef :: [PProp] -> [PProp] -> CDef -> CQType -> GWMonad DefFun
+mkDef :: [PProp] -> [PProp] -> CDef -> CQType -> GWMonad BoundarySpec
 mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
  st0 <- get
- return (\fmod wire_info sch pathinfo ips symt fields true_ifc_ids -> do
-  let
-      (ts, tr) = case getArrows qt of
-                   (ats, TAp _ r) -> (ats, r)
-                   _ -> internalError "GenWrap.mkDef: ts, tr"
-      st1 = st0 { symtable = symt }
-  -- do not use ifc prags here
-  (st2, ti_) <- runGWMonadGetNoFail (flatTypeId pps tr) st1
-  let vs =  take (length ts) tmpVarIds
-  (st3, Just (ifcId, _, finfs)) <- runGWMonadGetNoFail (chkInterface tr) st2
-  let
-      -- return an expression for creating the arg (from the wrapper's args)
-      -- and the type of the internal module's arg (for port-type saving)
-      genArg :: CExpr -> Type -> GWMonad [(CExpr, CType)]
-      genArg vexpr t =
-       do
-         --traceM( "In genArg: " ++ ppReadable v ++ " " ++ ppReadable t ) ;
-         cint <- chkInterface t
-         case cint of
-           Just x -> -- interface arguments are not supported and should
-                     -- already have generated an error
-                     internalError ("mkDef: ifc arg: " ++ ppReadable (t,x))
-           Nothing -> do
-             isInout <- isInoutType t
-             case isInout of
-              Just _ -> return [(CApply ePrimInoutCast0 [vexpr], t)]
-              _ ->
-               do
-                 isClock <- isClockType t
-                 isReset <- isResetType t
-                 isParam <- isParamType t
-                 if (isClock || isReset || isParam)
-                   then return [(vexpr,t)]
-                   else do isVector <- isVectorType t
-                           case isVector of
-                             Just (n,tVec,_) -> genVecArg vexpr n tVec
-                             _ -> return [(CApply ePack [vexpr], t)]
-      genVecArg :: CExpr -> Integer -> Type -> GWMonad [(CExpr, CType)]
-      genVecArg vexpr sz tVec = do
-         -- make the expression for each port
-         let nums = [0..(sz-1)]
-             primselect = idPrimSelectFn noPosition
-             lit k = CLit $ num_to_cliteral_at noPosition k
-             selector n = cVApply primselect [posLiteral noPosition,
-                                              vexpr, lit n]
-             elem_sels = map selector nums
-         elem_exprs <- mapM (`genArg` tVec) elem_sels
-         return (concat elem_exprs)
-
-  (st4, argss) <- runGWMonadGetNoFail (zipWithM genArg (map CVar vs) ts) st3
-  let (arg_exprs, arg_ts) = unzip $ concat argss
-      -- make the arg port-types, for saving in the module
-      arg_pts = mkArgPortTypes wire_info arg_ts
-  let
-      fields' = filter (not . (isRdyToRemoveField (iprags ++ pps))) fields
-      veriFields = (map (fixupVeriField (iprags ++ pps) ips) fields')
-      vexp = xWrapperModuleVerilog
-             fmod
-             pps
-             (CLit(CLiteral noPosition(LString( getIdBaseString i) )))
-             wire_info
-             arg_exprs
-             veriFields
-             sch
-             pathinfo
-      vlift = (cVApply idLiftModule [vexp])
-  body <- runGWMonadNoFail
-              (genFromBody arg_pts vlift true_ifc_ids ti_ ifcId finfs)
-              st4
-  let cls = CClause (map CPVar vs) [] body
-  return $ CValueSign (CDef i cqt [cls]))
+ return (BoundarySpec { bs_id     = i,
+                        bs_qt     = qt,
+                        bs_cqt    = cqt,
+                        bs_iprags = iprags,
+                        bs_pps    = pps,
+                        bs_state  = st0 })
 
 mkDef _ _ def _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
 
