@@ -25,11 +25,15 @@ erase_many "*.impls.json"
 # ----------
 # (1) Simple flat interface: value + action + actionvalue methods
 
-compile_verilog_pass Flat.bsv mkFlatDut
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass Flat.bsv mkFlatDut {-check-wrap-shadow}
 
 if { $ctest == 1 } {
-    compile_object_pass Flat.bsv mkFlatTb
+    erase_many "*.bo"
+    erase_many "*.ba"
     compile_object_pass Flat.bsv mkFlatTb {-check-wrap-shadow}
     link_objects_pass {mkFlatTb} mkFlatTb
     sim_output mkFlatTb
@@ -42,27 +46,39 @@ if { $ctest == 1 } {
 # (2) Hierarchical interface: sub-interface methods flatten to
 #     underscore-joined boundary names
 
-compile_verilog_pass HierShadow.bsv mkHierShadow
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass HierShadow.bsv mkHierShadow {-check-wrap-shadow}
 
 # ----------
 # (3) Vector-of-subinterface: numeric-leaf traversal of the
 #     description (subs_0_*, subs_1_*)
 
-compile_verilog_pass VecShadow.bsv mkVecShadow
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass VecShadow.bsv mkVecShadow {-check-wrap-shadow}
 
 # ----------
 # (4) Renamed ports: prefix/result attributes fill the description's
 #     prefix/result slots; the checker compares the renamed names
 
-compile_verilog_pass Renamed.bsv mkRenamed
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass Renamed.bsv mkRenamed {-check-wrap-shadow}
 
 # ----------
 # (5) always_ready pragma: RDY twins absent on both sides
 
-compile_verilog_pass AlwaysReadyShadow.bsv mkAlwaysReadyShadow
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass AlwaysReadyShadow.bsv mkAlwaysReadyShadow {-check-wrap-shadow}
 
 # ----------
@@ -70,11 +86,15 @@ compile_verilog_pass AlwaysReadyShadow.bsv mkAlwaysReadyShadow {-check-wrap-shad
 #     the member's own boundary, pause keeps RDY_pause; the shadow
 #     must describe the effective (collapsed) boundary
 
-compile_verilog_pass TickShadow.bsv mkTickShadow
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass TickShadow.bsv mkTickShadow {-check-wrap-shadow}
 
 if { $ctest == 1 } {
-    compile_object_pass TickShadow.bsv mkTickShadowTb
+    erase_many "*.bo"
+    erase_many "*.ba"
     compile_object_pass TickShadow.bsv mkTickShadowTb {-check-wrap-shadow}
     link_objects_pass {mkTickShadowTb} mkTickShadowTb
     sim_output mkTickShadowTb
@@ -87,7 +107,10 @@ if { $ctest == 1 } {
 # (7) Clock/Reset output fields: opaque entries in the description,
 #     matched by name against the assembled boundary; compile only
 
-compile_verilog_pass ClkFieldShadow.bsv mkClkFieldShadow
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass ClkFieldShadow.bsv mkClkFieldShadow {-check-wrap-shadow}
 
 # ----------
@@ -95,5 +118,8 @@ compile_verilog_pass ClkFieldShadow.bsv mkClkFieldShadow {-check-wrap-shadow}
 #     must not trip the per-generated-module check; the generated
 #     mkBviUser that instantiates it compiles green with the flag
 
-compile_verilog_pass BviShadow.bsv mkBviUser
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "sys*.v"
 compile_verilog_pass BviShadow.bsv mkBviUser {-check-wrap-shadow}

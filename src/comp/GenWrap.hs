@@ -2224,6 +2224,10 @@ boundaryEntries topIfcId = concatMapM (ent noPrefixes topIfcId)
               isClk <- isClockType r
               isRst <- isResetType r
               mIno <- isInoutType r
+              -- classify the kind on the synonym-expanded type
+              -- (a method type computed by a type function or
+              -- alias must not read as a value method)
+              rx <- expandSynSym r
               if isClk || isRst || isJust mIno
                 then let kind | isClk = "clock"
                               | isRst = "reset"
@@ -2231,11 +2235,11 @@ boundaryEntries topIfcId = concatMapM (ent noPrefixes topIfcId)
                      in  return [cVApply idPrimMkOpaqueEntry
                                      [eStr pathStr, eStr kind]]
                 else do
-                  let kind | leftCon r == Just idActionValue =
-                               if leftCon (getActionValueArg r) == Just idPrimUnit
+                  let kind | leftCon rx == Just idActionValue =
+                               if leftCon (getActionValueArg rx) == Just idPrimUnit
                                then "action" else "actionvalue"
-                           | leftCon r == Just idPrimAction = "action"
-                           | leftCon r == Just idAction = "action"
+                           | leftCon rx == Just idPrimAction = "action"
+                           | leftCon rx == Just idAction = "action"
                            | otherwise = "value"
                       tyStr = pfpString (foldr arrow r as)
                       argSlots = [ ("arg" ++ show n, getIdString i)

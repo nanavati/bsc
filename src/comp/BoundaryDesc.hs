@@ -50,12 +50,13 @@ data BoundaryEntryR a
     }
 
 -- the (package-qualified) id of an interface's compiler-emitted
--- boundary def: named after the flattened interface, sanitized
--- exactly as GenWrap's mkBoundaryDef does
+-- boundary def, from the FLAT interface id (whose gen suffix
+-- sanitizes to the trailing underscore), matching GenWrap's
+-- mkBoundaryDef exactly
 boundaryIdForIfc :: Id -> Id
 boundaryIdForIfc ifcId =
     let sane c = if isAlphaNum c then c else '_'
-        base = "boundary_" ++ map sane (getIdBaseString ifcId ++ "_")
+        base = "boundary_" ++ map sane (getIdBaseString ifcId)
     in  setIdBase ifcId (mkFString base)
 
 readBoundaryEntries :: IExpr a -> Either String [BoundaryEntryR a]
@@ -115,27 +116,65 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
 shadowBoundaryErrs :: [PProp] -> [BoundaryEntryR a] -> [VFieldInfo]
                    -> [String]
 shadowBoundaryErrs pps entries fields =
-    let dotsToUnders = map (\ c -> if c == '.' then '_' else c)
+    let -- a described path renders to the boundary with dots joined
+        -- as underscores; a vector position renders as `[_]' in the
+        -- description (one parametric entry, one shared codec, per
+        -- the WrapField index-erasure upstream) but as a concrete
+        -- index at the boundary.  Match parametrically; whether the
+        -- boundary has the RIGHT NUMBER of indices is not yet
+        -- description data (A97 aggregate clauses).
+        comps = foldr split [""]
+          where split '.' acc = "" : acc
+                split c (h:t) = (c:h) : t
+                split _ [] = [""]
+        matchPath dpath aname =
+            go (comps dpath) aname
+          where
+            go [] rest = null rest
+            go (d:ds) rest =
+                case d of
+                  "[_]" -> or [ stepSep ds rest'
+                              | (idx, rest') <- splitsOf rest,
+                                not (null idx), all isDigitC idx ]
+                  _ -> case stripPre d rest of
+                         Just rest' -> stepSep ds rest'
+                         Nothing -> False
+            stepSep [] rest = null rest
+            stepSep ds rest = case rest of
+                                ('_':rest') -> go ds rest'
+                                _ -> False
+            splitsOf str = [ (take k str, drop k str) | k <- [1 .. length str] ]
+            stripPre pre str = let n = length pre
+                               in  if take n str == pre
+                                   then Just (drop n str) else Nothing
+            isDigitC c = c >= '0' && c <= '9'
 
-        -- expected method leaves (underscore rendering) and their kinds
-        methEnts = [ (dotsToUnders (bf_path e), kindOf e)
-                   | e@(BFieldR {}) <- entries ]
+        -- expected method leaves (described paths) and their kinds
+        methEnts = [ (bf_path e, kindOf e) | e@(BFieldR {}) <- entries ]
         kindOf e = case lookup "kind" (bf_slots e) of
                      Just k -> k
                      Nothing -> "value"
 
-        -- a method's ready twin is expected unless the effective
-        -- pragmas collapse it
-        expRdys = [ rdyName m | (m, _) <- methEnts,
-                    not (isAlwaysRdy pps (mkRdyId (mk_dangling_id m noPosition))) ]
         rdyName m = getIdBaseString (mkRdyId (mk_dangling_id m noPosition))
 
-        expMeths = map fst methEnts ++ expRdys
+        -- does an assembled method name match a described leaf (or
+        -- its ready twin, when the effective pragmas keep it)?
+        matchesLeaf aname =
+            [ k | (d, k) <- methEnts, matchPath d aname ]
+        matchesRdy aname =
+            case stripRdy aname of
+              Just base ->
+                  not (null (matchesLeaf base)) &&
+                  not (isAlwaysRdy pps (mkRdyId (mk_dangling_id base noPosition)))
+              Nothing -> False
+        stripRdy a = let rdy = rdyName "" -- "RDY_"
+                         n = length rdy
+                     in  if take n a == rdy then Just (drop n a) else Nothing
         expClks  = [ bo_path e | e@(BOpaqueR {}) <- entries,
                      bo_kind e == "clock" ]
         expRsts  = [ bo_path e | e@(BOpaqueR {}) <- entries,
                      bo_kind e == "reset" ]
-        expInos  = [ dotsToUnders (bo_path e) | e@(BOpaqueR {}) <- entries,
+        expInos  = [ bo_path e | e@(BOpaqueR {}) <- entries,
                      bo_kind e == "inout" ]
 
         actMeths = [ getIdBaseString n | Method { vf_name = n } <- fields ]
@@ -143,22 +182,40 @@ shadowBoundaryErrs pps entries fields =
         actRsts  = [ getIdBaseString n | Reset { vf_name = n } <- fields ]
         actInos  = [ getIdBaseString n | Inout { vf_name = n } <- fields ]
 
+        -- every assembled method must match a described leaf or a
+        -- kept ready twin; every described leaf must cover at least
+        -- one assembled method
+        extraMeths =
+            [ "method `" ++ a ++ "' assembled but not described"
+            | a <- actMeths,
+              null (matchesLeaf a), not (matchesRdy a) ]
+        missingMeths =
+            [ "method `" ++ d ++ "' described but not assembled"
+            | (d, _) <- methEnts,
+              not (or [ matchPath d a | a <- actMeths ]) ]
+
+        -- opaque members (clocks, resets, inouts) match their
+        -- described paths parametrically, like methods
         missing what exp act =
-            [ what ++ " `" ++ x ++ "' described but not assembled"
-            | x <- exp \\ act ]
+            [ what ++ " `" ++ d ++ "' described but not assembled"
+            | d <- exp, not (or [ matchPath d a | a <- act ]) ]
         extra what exp act =
-            [ what ++ " `" ++ x ++ "' assembled but not described"
-            | x <- act \\ exp ]
+            [ what ++ " `" ++ a ++ "' assembled but not described"
+            | a <- act, not (or [ matchPath d a | d <- exp ]) ]
 
         -- per-kind port shape for the leaves present on both sides
         shapeErrs =
             [ err
             | Method { vf_name = n, vf_enable = en, vf_output = out }
                   <- fields,
-              Just k <- [lookup (getIdBaseString n) methEnts],
+              k : _ <- [matchesLeaf (getIdBaseString n)],
               err <- let hasEn = maybe False (const True) en
                          hasOut = maybe False (const True) out
                          m = getIdBaseString n
+                     -- output-port presence is deliberately not
+                     -- required: a zero-width result drops its port
+                     -- (the floor's empty member), and widths are not
+                     -- description data
                      in case k of
                           "action" ->
                               [ "method `" ++ m ++ "': action without an enable"
@@ -166,16 +223,16 @@ shadowBoundaryErrs pps entries fields =
                               [ "method `" ++ m ++ "': action with an output"
                               | hasOut ]
                           "actionvalue" ->
-                              [ "method `" ++ m ++ "': actionvalue lacking enable/output"
-                              | not (hasEn && hasOut) ]
-                          "value" ->
-                              [ "method `" ++ m ++ "': value method with an enable"
-                              | hasEn ] ++
-                              [ "method `" ++ m ++ "': value method without an output"
-                              | not hasOut ]
+                              [ "method `" ++ m ++ "': actionvalue without an enable"
+                              | not hasEn ]
+                          -- "value" is the emission's catch-all: a
+                          -- method type GenWrap cannot classify
+                          -- pre-typecheck (a type-function type, the
+                          -- #313/#383 hole) also lands here, so the
+                          -- fallback kind asserts nothing
                           _ -> [] ]
-    in  missing "method" expMeths actMeths ++
-        extra "method" expMeths actMeths ++
+    in  missingMeths ++
+        extraMeths ++
         missing "clock" expClks actClks ++
         extra "clock" expClks actClks ++
         missing "reset" expRsts actRsts ++
