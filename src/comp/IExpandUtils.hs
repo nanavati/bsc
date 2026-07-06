@@ -20,7 +20,7 @@ module IExpandUtils(
         saveRules, getSavedRules, clearSavedRules, replaceSavedRules,
         setBackendSpecific, cacheDef, lookupCExprCache, insertCExprCache,
         addStateVar, setStateVarAlternates, getStateVarVModInfo,
-        setStateVarSchedInfo,
+        setStateVarSchedInfo, updateStateVarVModInfo,
         step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getCross, getErrHandle, getModuleName,
         getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer,
@@ -2448,6 +2448,16 @@ getStateVarVModInfo :: Int -> G (Maybe VModInfo)
 getStateVarVModInfo uid = do
   s <- get
   return $ listToMaybe [ isv_vmi hsv | (_, hsv) <- vars s, isv_uid hsv == uid ]
+
+-- apply an arbitrary update to the recorded boundary of an
+-- already-created state variable (identified by its unique number)
+updateStateVarVModInfo :: Int -> (VModInfo -> VModInfo) -> G ()
+updateStateVarVModInfo uid f = do
+  s <- get
+  let upd (i, hsv) | isv_uid hsv == uid =
+          (i, hsv { isv_vmi = f (isv_vmi hsv) })
+      upd x = x
+  put (s { vars = map upd (vars s) })
 
 -- replace the recorded schedule of an already-created state variable
 -- (identified by its unique number); the parent is then scheduled

@@ -338,7 +338,7 @@ handleSubmodAlwaysEnabled mumap insts =
             let i = avi_vname avinst,
             let vi = avi_vmi avinst,
             (Method m _ _ _ _ _ (Just (_, vps))) <- vFields vi,
-            VPinhigh `elem` vps,
+            (VPinhigh `elem` vps) || (VPmusthigh `elem` vps),
             -- For some primitives, the user sees a different ifc
             -- than what is imported, because of a wrapper
             -- XXX right now we just handle BypassWire

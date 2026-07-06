@@ -2,7 +2,8 @@ module ContractCheck(checkDeclaredContract,
                      ContractStmt(..), readContract,
                      contractIdForIfc, signatureIdForIfc,
                      readSignatureKinds,
-                     imposeDeclared, pinoutErrs, pinoutSummary) where
+                     imposeDeclared, markMustHigh,
+                     pinoutErrs, pinoutSummary) where
 
 -- Declared interface contracts, checked at each implementation's own
 -- compile (design doc A78/A83: no inference across boundaries; the
@@ -48,6 +49,7 @@ import CSyntax(CQType(..))
 import ISyntax
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import VModInfo(VModInfo, VSchedInfo, VMethodConflictInfo, VArgInfo(..),
+                VeriPortProp(..),
                 vSched, vFields, vArgs, VFieldInfo(..), VName(..),
                 getVNameString, lookupInputClockWires, lookupInputResetWire)
 
@@ -387,8 +389,12 @@ checkStmt mci rdyTrue meths stmt =
 -- No other refinement check happens here: the member was already
 -- checked against this same declaration at its own compile (the
 -- design's A78/A83 inversion).
+-- Returns the sealed schedule together with the resolved ids of the
+-- contractAlwaysEnabled methods (the caller stamps their enable ports
+-- with VPmusthigh so the existing proof machinery enforces the
+-- consumer obligation at each parent's compile).
 imposeDeclared :: [ContractStmt] -> [(String, String)] -> VModInfo
-               -> Either String VSchedInfo
+               -> Either String (VSchedInfo, [Id])
 imposeDeclared stmts kinds vmi =
   let old = vSched vmi
       omci = methodConflictInfo old
@@ -456,6 +462,24 @@ imposeDeclared stmts kinds vmi =
     let self_cf = [ m | (m, k) <- self_kinds, k == "value" ] ++ rdys
         self_c  = [ m | (m, k) <- self_kinds,
                         k == "action" || k == "actionvalue" ]
+    -- a sealed contractAlwaysEnabled is a caller obligation on an
+    -- effectful method, and an unconditionally used method must be
+    -- unconditionally offered (bsc's own always_enabled implies
+    -- always_ready)
+    ae_ids <- mapM resolve (nub [ m | CAlwaysEnabled m <- stmts ])
+    let ar_names = [ m | CAlwaysReady m <- stmts ]
+    case [ m | CAlwaysEnabled m <- stmts, m `notElem` ar_names ] of
+      [] -> Right ()
+      (n:_) -> Left ("contractAlwaysEnabled " ++ n ++ " requires " ++
+                     "contractAlwaysReady " ++ n ++ " in the same " ++
+                     "contract (an unconditionally used method must be " ++
+                     "unconditionally offered)")
+    case [ i | i <- ae_ids,
+               kindOf i `notElem` [Just "action", Just "actionvalue"] ] of
+      [] -> Right ()
+      (i:_) -> Left ("contractAlwaysEnabled is declared for `" ++
+                     getIdBaseString i ++ "', which is not an action " ++
+                     "method (reads have no enable)")
     -- guard the value-method default like the readiness fold: the
     -- member's own schedule must grant the imposed freedom
     case [ m | m <- self_cf, not (isRdyI m),
@@ -477,7 +501,19 @@ imposeDeclared stmts kinds vmi =
             sC   = [ (a, b) | (a, "C", b) <- decls ] ++ unlisted ++
                    [ (m, m) | m <- self_c ],
             sEXT = [] }
-    return (old { methodConflictInfo = new_mci })
+    return (old { methodConflictInfo = new_mci }, ae_ids)
+
+-- stamp the caller obligation on the enable ports of the given
+-- methods (sealed contractAlwaysEnabled clauses): VPmusthigh keys the
+-- existing always-enabled proof obligation without changing the
+-- instantiation wiring (unlike VPinhigh, the port stays connected)
+markMustHigh :: [Id] -> VModInfo -> VModInfo
+markMustHigh ms vmi = vmi { vFields = map upd (vFields vmi) }
+  where
+    upd f@(Method { vf_name = n, vf_enable = Just (vn, props) })
+        | n `elem` ms && VPmusthigh `notElem` props =
+            f { vf_enable = Just (vn, VPmusthigh : props) }
+    upd f = f
 
 -- ==================================================
 -- Pinout equality (A100): the group mechanism reuses one emitted

@@ -1238,6 +1238,7 @@ instance Bin VeriPortProp where
     writeBytes VPreset = putI 6
     writeBytes VPclockgate = putI 7
     writeBytes VPinout = putI 8
+    writeBytes VPmusthigh = putI 9
     readBytes = do
         i <- getI
         case i of
@@ -1250,6 +1251,7 @@ instance Bin VeriPortProp where
           6 -> return VPreset
           7 -> return VPclockgate
           8 -> return VPinout
+          9 -> return VPmusthigh
           n -> internalError $ "GenABin.Bin(VeriPortProp).readBytes: " ++ show n
 
 {-

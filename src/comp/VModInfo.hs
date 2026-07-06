@@ -88,6 +88,11 @@ data VeriPortProp = VPreg
                   | VPclockgate
                   | VPreset
                   | VPinout
+                  | VPmusthigh   -- the caller is obligated to drive this
+                                 -- enable high on every cycle (a sealed
+                                 -- contractAlwaysEnabled clause); unlike
+                                 -- VPinhigh the port physically exists
+                                 -- and stays connected
                   | VPunused
         deriving (Show, Eq, Ord, Generic.Data, Generic.Typeable)
 
@@ -100,6 +105,7 @@ instance NFData VeriPortProp where
     rnf VPclockgate = ()
     rnf VPreset = ()
     rnf VPinout = ()
+    rnf VPmusthigh = ()
     rnf VPunused = ()
 
 instance PPrint VeriPortProp where
@@ -111,6 +117,7 @@ instance PPrint VeriPortProp where
     pPrint _ _ VPunused = text "unused"
     pPrint _ _ VPreset  = text "reset"
     pPrint _ _ VPinout  = text "inout"
+    pPrint _ _ VPmusthigh = text "musthigh"
     pPrint _ _ VPclockgate = text "clock gate"
 
 

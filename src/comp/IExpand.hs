@@ -66,7 +66,8 @@ import qualified TIMonad as TM
 import TypeCheck(topExpr)
 import VModInfo
 import ContractCheck(readContract, imposeDeclared, contractIdForIfc,
-                     signatureIdForIfc, readSignatureKinds, pinoutErrs)
+                     signatureIdForIfc, readSignatureKinds, pinoutErrs,
+                     markMustHigh)
 import Pragma
 import Changed(changedOrId)
 import ISyntax
@@ -1451,7 +1452,10 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimMkGroup
   -- the structure's kinds drive the sealed self-relations (A100);
   -- the signature def is emitted by the package that compiled the
   -- implementations, so fall back to a base-name scan when the
-  -- interface's own package doesn't carry one
+  -- interface's own package doesn't carry one.  Pragma-affected
+  -- wrappers flatten to suffixed variants (e.g. Pulse_AR_ for an
+  -- always_ready module), whose kinds are identical -- accept any
+  -- signature def whose flattened name extends this interface's
   let sid = signatureIdForIfc ifc_con
       sig_base = getIdBaseString sid
   sig_body <-
@@ -1459,7 +1463,7 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimMkGroup
         Just b -> return b
         Nothing ->
           case [ b | (i, b) <- M.toList denv,
-                     getIdBaseString i == sig_base ] of
+                     sig_base `isPrefixOf` getIdBaseString i ] of
             (b:_) -> return b
             [] -> errG (err_pos,
                         EGeneric ("mkOneOf: no signature def `" ++
@@ -1497,10 +1501,16 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimMkGroup
   -- signature kinds (A100).  No schedule refinement happens here
   -- (the checkless inversion): every member was checked against the
   -- same declaration at its own compile
-  case imposeDeclared stmts kinds vmi of
+  ae_ids <- case imposeDeclared stmts kinds vmi of
     Left msg -> errG (err_pos, EGeneric ("mkOneOf: contract `" ++
                                          getIdString cid ++ "': " ++ msg))
-    Right sched -> setStateVarSchedInfo uid sched
+    Right (sched, aes) -> do setStateVarSchedInfo uid sched
+                             return aes
+  -- sealed contractAlwaysEnabled clauses become caller obligations:
+  -- VPmusthigh on the enable ports keys the existing always-enabled
+  -- proof machinery (EEnableNotHigh at the parent's own compile)
+  when (not (null ae_ids)) $
+      updateStateVarVModInfo uid (markMustHigh ae_ids)
   -- record the alternates by name: each must be a separately
   -- synthesized module (its compiled form carries the one Verilog
   -- boundary we point the emitted ifdef chain at).  Alternates are
