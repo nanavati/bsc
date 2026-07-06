@@ -1451,19 +1451,26 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimMkGroup
              Right ss -> return ss
   -- the structure's kinds drive the sealed self-relations (A100);
   -- the signature def is emitted by the package that compiled the
-  -- implementations, so fall back to a base-name scan when the
-  -- interface's own package doesn't carry one.  Pragma-affected
-  -- wrappers flatten to suffixed variants (e.g. Pulse_AR_ for an
-  -- always_ready module), whose kinds are identical -- accept any
-  -- signature def whose flattened name extends this interface's
+  -- implementations, so fall back to a scan when the interface's own
+  -- package doesn't carry one (the exact id is qualified with the
+  -- interface's package; a member package's def has the same base
+  -- under a different qualifier).  Pragma-affected wrappers flatten
+  -- to marker-suffixed variants (ifcIdRename: the extension begins
+  -- with AR/AE/EWR), whose method kinds are identical -- accept the
+  -- same base or a marker extension only, so a signature def of an
+  -- unrelated interface whose name merely extends this one's
+  -- (e.g. Pulse_Foo for Pulse) cannot be read as a variant of it
   let sid = signatureIdForIfc ifc_con
       sig_base = getIdBaseString sid
+      isVariantOf base i =
+        case stripPrefix base (getIdBaseString i) of
+          Just ext -> null ext || any (`isPrefixOf` ext) ["AR_", "AE_", "EWR_"]
+          Nothing -> False
   sig_body <-
       case M.lookup sid denv of
         Just b -> return b
         Nothing ->
-          case [ b | (i, b) <- M.toList denv,
-                     sig_base `isPrefixOf` getIdBaseString i ] of
+          case [ b | (i, b) <- M.toList denv, isVariantOf sig_base i ] of
             (b:_) -> return b
             [] -> errG (err_pos,
                         EGeneric ("mkOneOf: no signature def `" ++

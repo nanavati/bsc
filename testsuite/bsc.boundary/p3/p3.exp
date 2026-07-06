@@ -183,3 +183,21 @@ if { $ctest == 1 } {
     move mkTbCross.out mkTbCross.c.default.out
     compare_file mkTbCross.c.default.out mkTbCross.out.expected
 }
+
+# ----------
+# (6) Signature-variant scan: when a member is compiled with a pragma
+#     (always_ready), its package emits only the marker-suffixed
+#     variant signature def (signature_Pulse_AR_), and group formation
+#     falls back to a scan for it.  The scan must not read an
+#     unrelated interface whose name merely extends this one's
+#     (Pulse_AB, alphabetically before the AR variant) as a variant --
+#     doing so blamed the contract with "method has no entry in the
+#     interface's signature def".
+
+if { $ctest == 1 } {
+    compile_object_pass ScanTb.bsv mkScanTb
+    link_objects_pass {mkScanTb} mkScanTb
+    sim_output mkScanTb
+    move mkScanTb.out mkScanTb.c.default.out
+    compare_file mkScanTb.c.default.out mkScanTb.out.expected
+}

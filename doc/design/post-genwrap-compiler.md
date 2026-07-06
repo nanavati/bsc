@@ -3503,6 +3503,25 @@ selection of a raw-Verilog BVI alternate (`substAlternates` loads
 alternates by `.ba` name; exercised under iverilog instead). The
 compiler is untouched by this increment.
 
+**1 — hygiene: the signature-variant scan is marker-gated.** Group
+formation's fallback scan for pragma-variant signature defs
+(`signature_<Ifc>_` absent, `signature_<Ifc>_AR_…` emitted by an
+`always_ready` member's package) accepted any def whose name merely
+extended the interface's — an unrelated interface named `Pulse_AB`
+(alphabetically before the `AR` variant) was read as a variant of
+`Pulse`, and sealing then blamed the contract with "method has no
+entry in the interface's signature def" (reproduced live). The scan
+now requires the extension to begin with a rename marker
+(`AR_`/`AE_`/`EWR_`, exactly `ifcIdRename`'s vocabulary). Residual:
+underscore-mangling ambiguity (a user interface literally named
+`Pulse_AR_x`) remains until names stop being strings. Two other
+planned hygiene items dissolved on inspection: the BVI fixup-time
+check already keys on `isUserImport` structurally (not pipeline
+phase), and the `GenWrap.hs` `alwaysEnabled`/`inhigh` XXX could not
+be reproduced at the boundary surface (module-pragma and
+interface-pragma `always_enabled` both drop the EN port identically);
+it is left alone rather than guess-fixed.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)

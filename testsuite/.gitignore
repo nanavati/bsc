@@ -76,3 +76,6 @@ obj_dir*/
 
 # Editor backup files
 *~
+
+# Selection-group manifests (generated)
+*.impls.json
