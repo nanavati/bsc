@@ -1,31 +1,37 @@
-module ContractCheck(checkDeclaredContract) where
+module ContractCheck(checkDeclaredContract,
+                     ContractStmt(..), readContract) where
 
 -- Declared interface contracts, checked at each implementation's own
 -- compile (design doc A78/A83: no inference across boundaries; the
 -- check direction is always "actual refines declared").
 --
 -- A contract is declared beside its interface by naming convention,
--- as a single string literal in a small normalized language:
+-- as a literal list of typed statement values (the carrier lives in
+-- the Prelude):
 --
---   String contract_Counter = "value SB incr; always_ready value";
+--   List#(ContractStmt) contract_Counter =
+--      cons(contractSB("value", "incr"),
+--      cons(contractAlwaysReady("value"), nil));
 --
--- Statements, separated by ';':
---   <m1> CF|SB|SBR|C <m2>   -- scheduling relation (SB: m1 before m2)
---   always_ready <m>        -- the method's offer is constant
---   always_enabled <m>      -- consumer assumption (recorded; the
---                           -- obligation binds callers, not members)
+-- Statements:
+--   contractCF/contractSB/contractSBR/contractC m1 m2
+--                             -- scheduling relation (SB: m1 before m2)
+--   contractAlwaysReady m     -- the method's offer is constant
+--   contractAlwaysEnabled m   -- consumer assumption (recorded; the
+--                             -- obligation binds callers, not members)
 -- Unlisted method pairs are conflicting; self-pairs are outside the
 -- language; RDY_* names never appear (readiness is the method's own
 -- offer aspect, not a sibling method).
 --
--- DURABILITY (design doc A86): this string grammar is a v0 input
--- format, deliberately frozen at the three statement forms above --
--- do NOT grow it.  Future contract features wait for the typed
--- carrier; DeclaredContract/ContractStmt is the stable interface and
--- replacing the surface is a parser swap.
+-- DURABILITY (design doc A87): there is deliberately NO textual
+-- grammar for contracts -- a string surface would be a durable
+-- artifact committed to before we have experience with contracts.
+-- The typed carrier is the only surface; it evolves through ordinary
+-- typed deprecation.  This module's ContractStmt is the compiler-side
+-- image of that carrier, and readContract is a purely structural
+-- reader (literal lists only, no evaluation).
 
 import qualified Data.Map as M
-import Data.Char(isSpace)
 import Data.List(nub, intercalate)
 
 import Error(ErrorHandle, ErrMsg(..), bsError)
@@ -78,27 +84,93 @@ mciClassify mci a b
   where symIn f = (a, b) `elem` f mci || (b, a) `elem` f mci
 
 -- ==================================================
--- The contract language
+-- The contract statements (compiler-side image of the Prelude carrier)
 
 data ContractStmt = CRel String String String     -- m1 rel m2
                   | CAlwaysReady String
                   | CAlwaysEnabled String
 
-parseContract :: String -> Either String [ContractStmt]
-parseContract s = mapM stmt (filter (not . null) (map trim (splitOn ';' s)))
+-- ==================================================
+-- Reading a declared contract from a def body
+--
+-- The body must be a literal list of statement values:
+-- cons/Cons/nil/Nil spines (Prelude or List) whose elements are
+-- applications of the Prelude statement constructors (or their
+-- lower-case builder functions) to string literals.  Purely
+-- structural -- referenced definitions are never unfolded, so any
+-- computation is rejected.
+
+readContract :: IExpr a -> Either String [ContractStmt]
+readContract = readSpine M.empty
   where
-    trim = dropWhile isSpace . reverse . dropWhile isSpace . reverse
-    splitOn c str = case break (== c) str of
-                      (a, []) -> [a]
-                      (a, _:rest) -> a : splitOn c rest
-    stmt t = case words t of
-      [m1, rel, m2] | rel `elem` ["CF", "SB", "SBR", "C"] ->
-          Right (CRel m1 rel m2)
-      ["always_ready", m] -> Right (CAlwaysReady m)
-      ["always_enabled", m] -> Right (CAlwaysEnabled m)
-      _ -> Left ("cannot parse contract statement `" ++ t ++ "'; " ++
-                 "expected `<m1> CF|SB|SBR|C <m2>', `always_ready <m>', " ++
-                 "or `always_enabled <m>'")
+    notLiteral = Left ("a contract must be a literal list of contract " ++
+                       "statements (cons/nil of contractCF, contractSB, " ++
+                       "contractSBR, contractC, contractAlwaysReady, " ++
+                       "contractAlwaysEnabled), with method names as " ++
+                       "string literals (no concatenation or computation)")
+
+    readSpine env e =
+      case whead env e of
+        (env', ICon i _, [x, rest])
+          | isLib ["cons", "Cons"] i ->
+              do s <- readStmt env' x
+                 ss <- readSpine env' rest
+                 return (s:ss)
+        (_, ICon i _, [])
+          | isLib ["nil", "Nil"] i -> return []
+        _ -> notLiteral
+
+    readStmt env e =
+      case whead env e of
+        (env', ICon i _, [m1, m2])
+          | Just rel <- relOf i ->
+              do a <- readStr env' m1
+                 b <- readStr env' m2
+                 return (CRel a rel b)
+        (env', ICon i _, [m])
+          | isLib ["contractAlwaysReady", "ContractAlwaysReady"] i ->
+              fmap CAlwaysReady (readStr env' m)
+          | isLib ["contractAlwaysEnabled", "ContractAlwaysEnabled"] i ->
+              fmap CAlwaysEnabled (readStr env' m)
+        _ -> notLiteral
+
+    relOf i = foldr pick Nothing ["CF", "SB", "SBR", "C"]
+      where pick r acc | isLib ["contract" ++ r, "Contract" ++ r] i = Just r
+                       | otherwise = acc
+
+    -- the statement carrier lives in the Prelude; cons/nil also have
+    -- List reexports
+    isLib names i = getIdBaseString i `elem` names &&
+                    getIdQualString i `elem` ["Prelude", "List"]
+
+    -- reduce to a recognizable head applied to value arguments,
+    -- resolving the typechecker's local bindings on the way: dictionary
+    -- lets arrive as beta redexes (`IAps (ILam d _ body) [dict]`), and
+    -- variables bound by them are resolved through an environment.
+    -- Referenced top-level definitions are never unfolded, so any
+    -- real computation still stops the reader.  Bound variables are
+    -- unique after typecheck, so one flat environment suffices.
+    whead env e0 = go env e0 []
+      where
+        go env' (IAps f _ es) as = go env' f (es ++ as)
+        go env' (ILam v _ b) (a:as) = go (M.insert v a env') b as
+        go env' (ILAM _ _ b) as = go env' b as
+        go env' (IVar v) as | Just d <- M.lookup v env' = go env' d as
+        go env' h as = (env', h, as)
+
+    -- a method-name argument: string literals arrive wrapped
+    -- (fromString dictionary application after typecheck), so collect
+    -- string-literal leaves without unfolding referenced definitions,
+    -- and require exactly one
+    readStr env e = case collect env e of
+                      [s] -> Right s
+                      _ -> notLiteral
+    collect _ (ICon _ (ICString { iStr = s })) = [s]
+    collect env (IAps f _ es) = concatMap (collect env) (f:es)
+    collect env (ILam _ _ b) = collect env b
+    collect env (ILAM _ _ b) = collect env b
+    collect env (IVar v) | Just d <- M.lookup v env = collect env d
+    collect _ _ = []
 
 -- ==================================================
 -- The check
@@ -119,26 +191,8 @@ contractDefId (CQType _ t) =
         Nothing -> Nothing
     _ -> Nothing
 
--- read a def body that must be a single string literal; the literal
--- arrives wrapped (fromString dictionary application after
--- typecheck), so walk the expression collecting string-literal
--- leaves without unfolding referenced definitions, and require
--- exactly one
-readStringLiteral :: IExpr a -> Either String String
-readStringLiteral e0 =
-    case collect e0 of
-      [s] -> Right s
-      _ -> Left ("a contract must be a single string literal " ++
-                 "(no concatenation or computation)")
-  where
-    collect (ICon _ (ICString { iStr = s })) = [s]
-    collect (IAps f _ es) = concatMap collect (f:es)
-    collect (ILam _ _ b) = collect b
-    collect (ILAM _ _ b) = collect b
-    collect _ = []
-
 -- The entry point: look up contract_<Ifc> for the module's interface;
--- if declared, parse it and check the inferred schedule against it.
+-- if declared, read it and check the inferred schedule against it.
 checkDeclaredContract :: ErrorHandle
                       -> M.Map Id (IExpr a)     -- all defs (qualified)
                       -> CQType                 -- the module's original type
@@ -155,11 +209,9 @@ checkDeclaredContract errh alldefs cqt modId modPos mci rdyTrue meths =
       case M.lookup cid alldefs of
         Nothing -> return ()      -- contracts are opt-in
         Just body -> do
-          let errs = case readStringLiteral body of
+          let errs = case readContract body of
                 Left m -> [m]
-                Right s -> case parseContract s of
-                  Left m -> [m]
-                  Right stmts -> concatMap (checkStmt mci rdyTrue meths) stmts
+                Right stmts -> concatMap (checkStmt mci rdyTrue meths) stmts
           if null errs
             then return ()
             else bsError errh
@@ -197,7 +249,7 @@ checkStmt mci rdyTrue meths stmt =
         Right i | i `elem` rdyTrue -> []
                 | any (\r -> getIdBaseString r == ("RDY_" ++ m)) rdyTrue -> []
                 | otherwise ->
-                    ["always_ready " ++ m ++ " is declared but the " ++
+                    ["contractAlwaysReady " ++ m ++ " is declared but the " ++
                      "method's readiness is not constantly true"]
     CAlwaysEnabled _ -> []   -- a consumer assumption; recorded, not
                              -- an obligation on the member
@@ -205,7 +257,8 @@ checkStmt mci rdyTrue meths stmt =
     resolve n
       | take 4 n == "RDY_" =
           Left ("`" ++ n ++ "': RDY_* names do not appear in contracts; " ++
-                "readiness is the method's own offer (use always_ready)")
+                "readiness is the method's own offer " ++
+                "(use contractAlwaysReady)")
       | otherwise =
           case [ i | i <- meths, getIdBaseString i == n ] of
             (i:_) -> Right i

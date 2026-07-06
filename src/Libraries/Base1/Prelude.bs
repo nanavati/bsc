@@ -181,6 +181,11 @@ package Prelude(
         isCons, isNil,
         decodeList,
 
+        -- interface contracts
+        ContractStmt(..),
+        contractCF, contractSB, contractSBR, contractC,
+        contractAlwaysReady, contractAlwaysEnabled,
+
         -- other list primitives
         listLength,
 
@@ -3620,6 +3625,48 @@ isNil _ = False
 decodeList :: List a -> Maybe (a, List a)
 decodeList (Cons x xs) = Valid (x, xs)
 decodeList Nil = Invalid
+
+-- Interface contracts (compile-time values, read by the compiler).
+-- A contract is declared beside its interface by naming convention,
+-- as a literal list of statements:
+--
+--   contract_Counter :: List ContractStmt
+--   contract_Counter = cons (contractSB "value" "incr")
+--                      (cons (contractAlwaysReady "value") nil)
+--
+-- and every module implementing the interface is checked against the
+-- declaration at its own compile.  There is deliberately no textual
+-- grammar for contracts; the statement constructors below are the
+-- only surface, so the language can evolve through ordinary typed
+-- deprecation.  Unlisted method pairs are conflicting; self-pairs are
+-- outside the language; RDY_* names never appear (readiness is the
+-- method's own offer aspect, not a sibling method).
+
+data ContractStmt
+        = ContractCF String String
+        | ContractSB String String
+        | ContractSBR String String
+        | ContractC String String
+        | ContractAlwaysReady String
+        | ContractAlwaysEnabled String
+
+contractCF :: String -> String -> ContractStmt
+contractCF = ContractCF
+
+contractSB :: String -> String -> ContractStmt
+contractSB = ContractSB
+
+contractSBR :: String -> String -> ContractStmt
+contractSBR = ContractSBR
+
+contractC :: String -> String -> ContractStmt
+contractC = ContractC
+
+contractAlwaysReady :: String -> ContractStmt
+contractAlwaysReady = ContractAlwaysReady
+
+contractAlwaysEnabled :: String -> ContractStmt
+contractAlwaysEnabled = ContractAlwaysEnabled
 
 -- uck! We define these twice because we want people
 -- to be able to import standard list functions qualified
