@@ -57,7 +57,7 @@ if { $vtest == 1 } {
 compile_verilog_fail_error ComputedContract.bsv S0015
 if { $vtest == 1 } {
     set out [make_bsc_vcomp_output_name ComputedContract.bsv]
-    find_regexp $out {a contract must be a literal list of contract}
+    find_regexp $out {no concatenation or computation}
 }
 
 # NEGATIVE: a group over an interface with no declared contract
