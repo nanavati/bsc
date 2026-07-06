@@ -150,6 +150,8 @@ import Classic(SyntaxMode(..), setSyntax)
 import ILift(iLift)
 import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
+import ContractCheck(checkDeclaredContract)
+import SchedInfo(methodConflictInfo)
 import ADumpSchedule (MethodDumpInfo, aDumpSchedule, aDumpScheduleErr,
                       dumpMethodInfo, dumpMethodBVIInfo)
 import ANoInline (aNoInline)
@@ -896,6 +898,17 @@ genModule
              (amod_assumps,
               asi_method_uses_map sched_info'',
               asi_resource_alloc_table sched_info'')
+
+    -- check the module against its interface's declared contract, if
+    -- one exists (contract_<Ifc> beside the interface declaration):
+    -- the check direction is actual-refines-declared, at the
+    -- implementation's own compile
+    let inferred_mci = methodConflictInfo (asi_v_sched_info sched_info'')
+        rdy_true_ids = [ i | IEFace i _ (Just (e, _)) _ _ _ <- ifc,
+                             isTrue e || isAlwaysRdy pps i ]
+        boundary_meths = [ i | IEFace i _ _ _ _ _ <- ifc ]
+    checkDeclaredContract errh alldefs (orig_cqt wi) (mod_nm wi) def_pos
+                          inferred_mci rdy_true_ids boundary_meths
 
     -- move assumption actions into rule bodies
     start flags DFremoveAssumps

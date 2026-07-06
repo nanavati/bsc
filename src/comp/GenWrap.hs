@@ -355,17 +355,17 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        -- XXX we don't update the symbol table with the new instances
        -- XXX we rely on the symbol table being rebuilt
 
-       -- boundary description defs: one literal value def per generated
+       -- signature defs: one literal value def per generated
        -- interface, carrying the structural half of the boundary
-       -- (entries with their port renderings) as ordinary data in the .bo
-       boundaryDefs <- mapM mkBoundaryDef finalIfcTRecs
+       -- interface (entries with port renderings) as ordinary data in the .bo
+       signatureDefs <- mapM mkSignatureDef finalIfcTRecs
 
        let finalDefs = reverse fixedDefs ++
                        ifcdefns ++
                        newModule_s ++
                        ifcConversionDefs ++
                        instanceDefs ++
-                       boundaryDefs
+                       signatureDefs
 
        gens <- mapM (genWrapInfo newFlatIfcs) moduledefs
 
@@ -2187,10 +2187,10 @@ saveTopModPortTypeStmt i t =
           [mkMaybe Nothing, stringLiteralAt noPosition s, typeLiteral t]
 
 -- ====================
--- Boundary description defs
+-- Signature defs (the structural half of the interface: entries)
 --
 -- For each generated (flattened) interface, emit one ordinary literal
--- value definition carrying the structural half of the boundary as
+-- value definition carrying the interface's structural half as
 -- data: one entry per leaf field of the original interface, with its
 -- flattened path name and (slot, value) facts -- kind, reified type,
 -- port-naming inputs (prefix, argN, result).  The def lands in the
@@ -2198,34 +2198,34 @@ saveTopModPortTypeStmt i t =
 -- are deliberately NOT here (contracts are declared at the interface,
 -- schedules stay in the .ba).
 --
---   boundary_<flatifc> :: List (String, List (String, String))
+--   signature_<flatifc> :: List (String, List (String, String))
 
-mkBoundaryDef :: IfcTRec -> GWMonad CDefn
-mkBoundaryDef rec =
+mkSignatureDef :: IfcTRec -> GWMonad CDefn
+mkSignatureDef rec =
  do let ifcId = rec_rootid rec
         pos = getPosition ifcId
-    entries <- boundaryEntries ifcId (rec_finfs rec)
+    entries <- signatureEntries ifcId (rec_finfs rec)
     let sane c = if isAlphaNum c then c else '_'
         defId = mkId pos (concatFString
-                            [mkFString "boundary_",
+                            [mkFString "signature_",
                              mkFString (map sane (getIdBaseString (rec_id rec)))])
         tString = cTCon idString
         tSlot = mkPairType tString tString
         tSlots = TAp (cTCon idList) tSlot
         tEntry = mkPairType tString tSlots
-        tBoundary = TAp (cTCon idList) tEntry
+        tSignature = TAp (cTCon idList) tEntry
         eStr = stringLiteralAt pos
         slotE (k, v) = mkTuple pos [eStr k, eStr v]
         entryE (path, slots) =
             mkTuple pos [eStr path, mkList pos (map slotE slots)]
         body = mkList pos (map entryE entries)
-    return (CValueSign (CDef defId (CQType [] tBoundary) [CClause [] [] body]))
+    return (CValueSign (CDef defId (CQType [] tSignature) [CClause [] [] body]))
 
 -- the same traversal discipline as mkFieldSavePortTypeStmts: recurse
 -- through subinterfaces (extending prefixes) and vector interfaces,
 -- and at each leaf compute the flattened path and naming inputs
-boundaryEntries :: Id -> [FInf] -> GWMonad [(String, [(String, String)])]
-boundaryEntries topIfcId = concatMapM (ent noPrefixes topIfcId)
+signatureEntries :: Id -> [FInf] -> GWMonad [(String, [(String, String)])]
+signatureEntries topIfcId = concatMapM (ent noPrefixes topIfcId)
  where
    ent :: IfcPrefixes -> Id -> FInf -> GWMonad [(String, [(String, String)])]
    ent prefixes ifcIdIn (FInf f as r aIds) =
