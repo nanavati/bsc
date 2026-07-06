@@ -3385,6 +3385,78 @@ contract check (the §12 finding that BVI = declared boundary still
 applies; it re-enters as a small import-validation check). (4)
 `contractAlwaysEnabled` is recorded, not yet enforced against callers.
 
+### As built, continued: increments A–F (post-critique, A88–A101)
+
+Executed after the external critique of the architecture brief, in the
+revised order (soundness before new protocol work).
+
+**B — sealing soundness (A100).** The confirmed self-pair leak is
+closed: sealing no longer copies any member self-relations or `sEXT`.
+Self-relations are declaration-derived from the signature def's kind
+slots, read through the def env with the same qualified-lookup pattern
+as contracts (pragma-variant flattened names accepted by prefix):
+value methods seal to self-CF (guarded against the member's own
+schedule, like the readiness fold), action/actionvalue to self-C
+(until capacity clauses exist); nonempty `sEXT` rejects group
+formation. Pinout equality joins the group site as a *mechanism
+precondition* (verbatim-ifdef instantiation), comparing each
+alternate's `VModInfo` (already located, previously discarded) to the
+root's by wire — module args, per-method port shapes with the
+`max 1` mult normalization, non-method fields — and the manifest
+gains a normalized pinout record (the surface-fingerprint seed).
+Residual (1) above is thereby closed at the group site; the
+member-compile form awaits declared port directives.
+
+**C — `contractAlwaysEnabled` enforced (A90).** Sealing stamps a new
+`VPmusthigh` port property (not `VPinhigh`: the instantiation must
+keep classic members' EN ports connected — `VPinhigh` EN ports are
+omitted from the port list), which keys the existing
+`ProveEq use aTrue` obligation and raises G0015 at the *parent's*
+compile (promotable to an error), exactly bsc's native
+always-enabled semantics. Sealing requires `contractAlwaysReady` for
+the same method (always_enabled implies always_ready) and rejects the
+clause on value methods. v0 scope: the proof discharges when members
+collapse their RDY wire (`always_ready` pragma); the sealed-constant
+readiness fold at the parent awaits the conventions work. Residual
+(4) above is closed.
+
+**D — declared method conventions (A96).**
+`convention_<Ifc> :: List#(ConventionStmt)` with one v0 statement,
+`conventionReadyValid`, ClassicEnable the unwritten default. Read at
+each member's compile, validated (unknown method, value method, and
+`always_enabled` combinations are positioned errors), and stamped as
+the new `VPreadyvalid` prop on enable ports through the wrapper
+generator's port-props channel (merged per-name — `fixupPort` takes
+the first entry per port). Conformance across a group holds by
+construction (every member is stamped from one declaration).
+
+**E — ReadyValidRetractable export (A91/A99).** The factoring theorem
+as one AND: `aAddScheduleDefs` gates tagged methods' enable
+expressions with their own RDY def, so the boundary accepts a request
+asserted during not-ready, legally and without effect — fire =
+request ∧ ready. Consumer side untouched (classic callers' EN already
+implies ready); Bluesim compiles the same gated package. Demonstrated
+against a hand-written Verilog master driving garbage requests during
+not-ready: the state holds — the boundary that previously required
+the `always_ready`/`always_enabled` wire-dump idiom is now a checked,
+contract-carrying method. Retractable, not AXI (Irrevocable + skid on
+the horizon).
+
+**F — dotted-path atoms (A97).** Contract and convention atoms accept
+`sub.method`, validated against the one admitted grammar
+(`MethodPath ::= ident ("." ident)*`) and flattened at every
+resolution site; sealing's kind lookup bridges the other way (the
+signature def's paths are dotted — `fieldPathName` renders hierarchy
+with dots; boundary names are the underscore rendering). The
+group-site inline-root protection recognizes flattened subtrees.
+Vector-index paths (`[_]` placeholders) remain future work with
+aggregate clauses.
+
+Remaining residuals after A–F: BVI members' member-side checks;
+alternates' RDY relations beyond the root guard; the parent-side
+sealed-constant readiness fold; port-name directives and the full
+declared-rendering equality check; vector/aggregate paths.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
