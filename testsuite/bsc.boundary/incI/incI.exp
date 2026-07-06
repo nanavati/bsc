@@ -1,0 +1,81 @@
+# Increment I: contractAlwaysReady collapses the RDY port at the
+# member's own boundary, with no always_ready pragma anywhere.
+#
+# TickerIfc declares tick/count always-ready (tick's body is
+# unguarded, count is a plain read); pause is NOT declared and keeps
+# its guard.  The generated Verilog must have no RDY_tick/RDY_count
+# and must keep RDY_pause.  The desync that ICE'd the original
+# increment-I attempt (schedule sees the pragma, the wrapper's field
+# set does not) is structurally gone: one effective pragma set drives
+# both.
+
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "*.vexe"
+erase_many "*.cexe"
+erase_many "*.cexe.so"
+erase_many "*.out"
+erase_many "*.impls.json"
+
+# ----------
+# (1) The collapse, member-side (backend-independent artifact checks)
+
+compile_verilog_pass TickerIfc.bsv mkTickerA
+find_regexp_fail mkTickerA.v {RDY_tick}
+find_regexp_fail mkTickerA.v {RDY_count}
+find_regexp mkTickerA.v {RDY_pause}
+
+# no pair-completeness ICE anywhere in the compile
+find_regexp_fail [make_bsc_vcomp_output_name TickerIfc.bsv] {VModInfo}
+
+# ----------
+# (2) Consumer side: a separately compiled parent reads the collapsed
+#     boundary from the .bo and simulates on both backends
+
+if { $vtest == 1 } {
+    compile_verilog_pass TbTicker.bsv mkTbTicker
+    link_verilog_pass {mkTbTicker.v mkTickerA.v} mkTbTicker
+    sim_verilog mkTbTicker
+    move mkTbTicker.out mkTbTicker.v.out
+    compare_file mkTbTicker.v.out mkTbTicker.out.expected
+}
+
+if { $ctest == 1 } {
+    compile_object_pass TbTicker.bsv mkTbTicker
+    link_objects_pass {mkTbTicker} mkTbTicker
+    sim_output mkTbTicker
+    move mkTbTicker.out mkTbTicker.c.out
+    compare_file mkTbTicker.c.out mkTbTicker.out.expected
+}
+
+# ----------
+# (3) NEGATIVE: a member that guards a declared-always-ready method
+#     fails its own compile with the always-ready proof
+
+compile_verilog_fail_error BadReady.bsv G0006 1 mkTickerBad
+
+# ----------
+# (4) Mixed group: pragma-free contract-collapsed generated root +
+#     ready-less BVI alternate; pinouts equal post-collapse
+
+if { $vtest == 1 } {
+    compile_verilog_pass TbMix.bsv mkTbMix
+    link_verilog_pass {mkTbMix.v mkCounterUp.v counterV.v} mkTbMix
+    sim_verilog mkTbMix
+    move mkTbMix.out mkTbMix.v.default.out
+    compare_file mkTbMix.v.default.out mkTbMix.out.expected
+
+    link_verilog_pass {mkTbMix.v mkCounterUp.v counterV.v} mkTbMix "-Xv -DBSV_IMPL_mkCounterUp_vlog"
+    sim_verilog mkTbMix
+    move mkTbMix.out mkTbMix.v.vlog.out
+    compare_file mkTbMix.v.vlog.out mkTbMix.vlog.out.expected
+}
+
+if { $ctest == 1 } {
+    compile_object_pass TbMix.bsv mkTbMix
+    link_objects_pass {mkTbMix} mkTbMix
+    sim_output mkTbMix
+    move mkTbMix.out mkTbMix.c.default.out
+    compare_file mkTbMix.c.default.out mkTbMix.out.expected
+}

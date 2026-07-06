@@ -153,6 +153,7 @@ import ILift(iLift)
 import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
 import ContractCheck(checkDeclaredContract, pinoutSummary,
+                     contractReadyPragmas,
                      declaredConventions, bviImportErrs,
                      suggestContractText, cqtIfcCon)
 import SchedInfo(methodConflictInfo)
@@ -699,10 +700,25 @@ genModule
     def  =
 
   do
-    let pps = wi_prags wi
+    let gw_pps = wi_prags wi
         def_pos = let (IDef i _ _ _) = def
                   in  getPosition i
-    flags <- updateFlags errh def_pos [ s | PPoptions ss <- pps, s <- ss ] flags0
+    flags <- updateFlags errh def_pos [ s | PPoptions ss <- gw_pps, s <- ss ] flags0
+
+    -- the module's effective pragmas: GenWrap's set plus the pragmas
+    -- the interface's declared contract implies (contractAlwaysReady
+    -- collapses the method's RDY at this module's own boundary).  One
+    -- set drives elaboration, scheduling, the schedule proofs, the
+    -- boundary field filter, and the wrapper rendering below, so the
+    -- schedule and the recorded boundary cannot disagree about it.
+    contract_pps <-
+        case contractReadyPragmas alldefs (orig_cqt wi) of
+          Left msg -> bsError errh
+              [(def_pos, EGeneric ("contract for module `" ++
+                                   getIdString (unQualId (mod_nm wi)) ++
+                                   "': " ++ msg))]
+          Right ps -> return ps
+    let pps = gw_pps ++ contract_pps
 
     let modstr = getIdString (unQualId (mod_nm wi))
 

@@ -1,5 +1,6 @@
 module ContractCheck(checkDeclaredContract,
                      ContractStmt(..), readContract,
+                     contractReadyPragmas,
                      contractIdForIfc, signatureIdForIfc,
                      readSignatureKinds,
                      imposeDeclared, markMustHigh,
@@ -43,6 +44,7 @@ import Data.List(nub, intercalate, group, sort, (\\))
 
 import Error(ErrorHandle, ErrMsg(..), bsError)
 import Position(Position, noPosition)
+import Pragma(PProp(..))
 import PreIds(idArrow)
 import Id
 import Util(ordPair, uniquePairs)
@@ -289,6 +291,31 @@ readSignatureKinds e0 =
 -- the module type applied to the interface (`Module ifc`, or `m ifc`
 -- under an IsModule context), so the interface is the argument of the
 -- outermost application.
+-- The contract-derived module pragmas for a module of this type:
+-- each contractAlwaysReady clause is the declaration-side spelling of
+-- the always_ready pragma.  genModule folds these into the module's
+-- effective pragma set, so the schedule proof (ENotAlwaysReady), the
+-- boundary field set (the RDY filter), and the wrapper's readiness
+-- guards all read one set and cannot desynchronize.  Dotted paths
+-- flatten to the boundary's underscore rendering, matching
+-- isAlwaysRdy's comparison.  No clauses (or no declared contract)
+-- contributes no pragma: PPalwaysReady [] would mean the whole
+-- module.
+contractReadyPragmas :: M.Map Id (IExpr a) -> CQType -> Either String [PProp]
+contractReadyPragmas alldefs cqt =
+  case cqtIfcCon cqt of
+    Nothing -> Right []
+    Just ifc ->
+      case M.lookup (contractIdForIfc ifc) alldefs of
+        Nothing -> Right []
+        Just body -> do
+          stmts <- readContract body
+          flats <- mapM flattenAtomPath [ m | CAlwaysReady m <- stmts ]
+          return $ if null flats
+                   then []
+                   else [PPalwaysReady [ [mkId noPosition (mkFString f)]
+                                       | f <- flats ]]
+
 contractDefId :: CQType -> Maybe Id
 contractDefId cqt = fmap contractIdForIfc (cqtIfcCon cqt)
 

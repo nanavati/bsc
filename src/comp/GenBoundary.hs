@@ -61,7 +61,10 @@ renderWrapperCDefn spec pps fmod wire_info sch pathinfo ips symt fields true_ifc
                    _ -> internalError "GenBoundary.renderWrapperCDefn: ts, tr"
       st1 = (bs_state spec) { symtable = symt }
   -- do not use ifc prags here
-  (st2, ti_) <- runGWMonadGetNoFail (flatTypeId pps tr) st1
+  -- the flat type's identity is a GenWrap-time fact: pragmas that
+  -- arrive later (contract-derived always_ready) change ports, never
+  -- the nominal type (renderings do not fork types)
+  (st2, ti_) <- runGWMonadGetNoFail (flatTypeId (bs_pps spec) tr) st1
   let vs =  take (length ts) tmpVarIds
   (st3, Just (ifcId, _, finfs)) <- runGWMonadGetNoFail (chkInterface tr) st2
   let
