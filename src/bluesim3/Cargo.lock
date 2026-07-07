@@ -25,6 +25,7 @@ name = "bsim3"
 version = "0.0.1"
 dependencies = [
  "bsim3-codegen",
+ "bsim3-interp",
  "bsim3-ir",
  "bsim3-kernel",
  "bsim3-rt",
@@ -37,6 +38,13 @@ version = "0.0.1"
 dependencies = [
  "bsim3-ir",
  "inkwell",
+]
+
+[[package]]
+name = "bsim3-interp"
+version = "0.0.1"
+dependencies = [
+ "bsim3-ir",
 ]
 
 [[package]]

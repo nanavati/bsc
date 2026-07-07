@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 bsim3-ir = { path = "../bsim3-ir" }
+bsim3-interp = { path = "../bsim3-interp" }
 bsim3-kernel = { path = "../bsim3-kernel" }
 bsim3-rt = { path = "../bsim3-rt" }
 bsim3-wave = { path = "../bsim3-wave" }

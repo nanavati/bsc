@@ -12,6 +12,7 @@ use std::process::ExitCode;
 fn usage() -> ExitCode {
     eprintln!("bsim3 {} (phase P0 scaffold)", env!("CARGO_PKG_VERSION"));
     eprintln!("usage: bsim3 ir dump <module.bir>");
+    eprintln!("       bsim3 run <module.bir> [-m max_cycles]");
     ExitCode::from(2)
 }
 
@@ -34,6 +35,19 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        ["run", path, rest @ ..] => {
+            let max_cycles = match rest {
+                ["-m", n] => n.parse().unwrap_or(u64::MAX),
+                _ => u64::MAX,
+            };
+            match bsim3_interp::run_file(path, max_cycles) {
+                Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
+                Err(e) => {
+                    eprintln!("bsim3: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         _ => usage(),
     }
 }
