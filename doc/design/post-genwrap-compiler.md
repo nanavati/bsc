@@ -3682,6 +3682,31 @@ every boundary the ~18.6k-test suite synthesizes, member-for-member,
 with per-leaf codecs resolved and `.bo`-resident — the fold
 increment's precondition.
 
+**7 — the fold as producer (pilot).** Under the hidden
+`-boundary-fold` flag, the wrapper's interface-rendering body is
+built from the `boundary_` description's field entries
+(`genFromBodyDesc`, a pure function) instead of re-walking the
+symtab: the description supplies per-leaf structure and naming — the
+path, kind, and prefix/result/arg slots replace the
+interface-pragma recomputation — while method types still come from
+the interface inventory (types are not description data yet) and
+codec application remains the `fromWrapField` class application the
+solver re-resolves to the very instance the description recorded.
+The defensive posture is total: any disagreement between description
+and inventory, an opaque leaf, or a hierarchical/vector path falls
+back silently to the legacy walk, so a stale or out-of-scope
+description can never change output. Verified: byte-identical
+generated Verilog flag-on vs flag-off across a 233-file corpus (163
+renders folded across 102 distinct modules; all 48 fallbacks are
+subinterface/vector/clock/reset/inout shapes — the widening
+worklist); all eleven behavioral suites pass in both modes; the
+full suite under the flag shows only the known environmental and
+injected-flag-noise failures, at the fastest wall time of the round
+(1:38) — the fold is free. The round's residue for the next
+increment set: widen the pilot (the fallback shapes), move method
+types into descriptions, apply codecs by reference (the
+ISyntax-direct renderer), then the §5.3 one-application injection.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
