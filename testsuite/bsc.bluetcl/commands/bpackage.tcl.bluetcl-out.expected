@@ -20,6 +20,8 @@ Search Reg:
 Test InoutRegIFC
 Test signature_InoutRegIFCBool_
 Test signature_RegBool_
+Test boundary_InoutRegIFCBool_
+Test boundary_RegBool_
 Vector readVReg
 Vector writeVReg
 RegFile RegFile

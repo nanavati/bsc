@@ -30,20 +30,25 @@ Test
 position {Test.bsv 1 1}
 ---------
 Command: browsepackage list 9
-11 f {}
-12 mkBVI {}
-13 mkI {}
-14 mkIfcWithVec {}
-15 mkM {}
-16 mkS {}
-17 mkT {}
-18 signature_IfcWithVec_ {}
-19 signature_InoutIFC_ {}
-20 signature_InoutRegIFCBool_ {}
-21 signature_RWireBool_ {}
-22 signature_RegBool_ {}
-23 signature__Test_Foo134 {}
-24 x {}
+11 boundary_IfcWithVec_ {}
+12 boundary_InoutIFC_ {}
+13 boundary_InoutRegIFCBool_ {}
+14 boundary_RWireBool_ {}
+15 boundary_RegBool_ {}
+16 f {}
+17 mkBVI {}
+18 mkI {}
+19 mkIfcWithVec {}
+20 mkM {}
+21 mkS {}
+22 mkT {}
+23 signature_IfcWithVec_ {}
+24 signature_InoutIFC_ {}
+25 signature_InoutRegIFCBool_ {}
+26 signature_RWireBool_ {}
+27 signature_RegBool_ {}
+28 signature__Test_Foo134 {}
+29 x {}
 ---------
 Command: browsepackage detail 9
 Functions
@@ -52,14 +57,54 @@ Command: browsepackage list 11
 ---------
 Command: browsepackage detail 11
 function
+Test::boundary_IfcWithVec_
+result List#(BoundaryEntry)
+position {Test.bsv 176 40}
+---------
+Command: browsepackage list 12
+---------
+Command: browsepackage detail 12
+function
+Test::boundary_InoutIFC_
+result List#(BoundaryEntry)
+position {Test.bsv 129 30}
+---------
+Command: browsepackage list 13
+---------
+Command: browsepackage detail 13
+function
+Test::boundary_InoutRegIFCBool_
+result List#(BoundaryEntry)
+position {Test.bsv 88 30}
+---------
+Command: browsepackage list 14
+---------
+Command: browsepackage detail 14
+function
+Test::boundary_RWireBool_
+result List#(BoundaryEntry)
+position {Test.bsv 156 12}
+---------
+Command: browsepackage list 15
+---------
+Command: browsepackage detail 15
+function
+Test::boundary_RegBool_
+result List#(BoundaryEntry)
+position {Test.bsv 102 12}
+---------
+Command: browsepackage list 16
+---------
+Command: browsepackage detail 16
+function
 Test::f
 result Bool
 arguments {Bool Bool}
 position {Test.bsv 83 15}
 ---------
-Command: browsepackage list 12
+Command: browsepackage list 17
 ---------
-Command: browsepackage detail 12
+Command: browsepackage detail 17
 module
 Test::mkBVI
 interface Test::Foo#(a)
@@ -67,240 +112,240 @@ arguments {Int#(32) Inout#(Test::Bar)}
 provisos {{Bits#(a, sa)}}
 position {Test.bsv 134 11}
 ---------
-Command: browsepackage list 13
+Command: browsepackage list 18
 ---------
-Command: browsepackage detail 13
+Command: browsepackage detail 18
 module
 Test::mkI
 interface Test::InoutIFC
 arguments Inout#(Test::Bar)
 position {Test.bsv 129 8}
 ---------
-Command: browsepackage list 14
+Command: browsepackage list 19
 ---------
-Command: browsepackage detail 14
+Command: browsepackage detail 19
 module
 Test::mkIfcWithVec
 interface Test::IfcWithVec
 arguments Inout#(Test::Bar)
 position {Test.bsv 176 8}
 ---------
-Command: browsepackage list 15
+Command: browsepackage list 20
 ---------
-Command: browsepackage detail 15
+Command: browsepackage detail 20
 module
 Test::mkM
 interface Reg#(Bool)
 position {Test.bsv 102 8}
 ---------
-Command: browsepackage list 16
+Command: browsepackage list 21
 ---------
-Command: browsepackage detail 16
+Command: browsepackage detail 21
 module
 Test::mkS
 interface RWire#(Bool)
 position {Test.bsv 156 8}
 ---------
-Command: browsepackage list 17
+Command: browsepackage list 22
 ---------
-Command: browsepackage detail 17
+Command: browsepackage detail 22
 module
 Test::mkT
 interface Test::InoutRegIFC#(Bool)
 arguments Inout#(Test::Bar)
 position {Test.bsv 88 8}
 ---------
-Command: browsepackage list 18
+Command: browsepackage list 23
 ---------
-Command: browsepackage detail 18
+Command: browsepackage detail 23
 function
 Test::signature_IfcWithVec_
 result {{List#(Tuple2#(String, List#(Tuple2#(String, String))))}}
 position {Test.bsv 176 40}
 ---------
-Command: browsepackage list 19
+Command: browsepackage list 24
 ---------
-Command: browsepackage detail 19
+Command: browsepackage detail 24
 function
 Test::signature_InoutIFC_
 result {{List#(Tuple2#(String, List#(Tuple2#(String, String))))}}
 position {Test.bsv 129 30}
 ---------
-Command: browsepackage list 20
+Command: browsepackage list 25
 ---------
-Command: browsepackage detail 20
+Command: browsepackage detail 25
 function
 Test::signature_InoutRegIFCBool_
 result {{List#(Tuple2#(String, List#(Tuple2#(String, String))))}}
 position {Test.bsv 88 30}
 ---------
-Command: browsepackage list 21
+Command: browsepackage list 26
 ---------
-Command: browsepackage detail 21
+Command: browsepackage detail 26
 function
 Test::signature_RWireBool_
 result {{List#(Tuple2#(String, List#(Tuple2#(String, String))))}}
 position {Test.bsv 156 12}
 ---------
-Command: browsepackage list 22
+Command: browsepackage list 27
 ---------
-Command: browsepackage detail 22
+Command: browsepackage detail 27
 function
 Test::signature_RegBool_
 result {{List#(Tuple2#(String, List#(Tuple2#(String, String))))}}
 position {Test.bsv 102 12}
 ---------
-Command: browsepackage list 23
+Command: browsepackage list 28
 ---------
-Command: browsepackage detail 23
+Command: browsepackage detail 28
 function
 Test::signature__Test_Foo134
 result {{List#(Tuple2#(String, List#(Tuple2#(String, String))))}}
 position {Test.bsv 53 11}
 ---------
-Command: browsepackage list 24
+Command: browsepackage list 29
 ---------
-Command: browsepackage detail 24
+Command: browsepackage detail 29
 function
 Test::x
 result Bool
 position {Test.bsv 81 6}
 ---------
 Command: browsepackage list 10
-25 Bar {}
-26 BarSet {}
-27 Baz {}
-28 Foo {}
-29 IfcWithVec {}
-30 InoutIFC {}
-31 InoutRegIFC {}
-32 SubIFC {}
-33 Sz {}
-34 T {}
-35 TopIFC {}
-36 U {}
-37 U2 {}
-38 V2 {}
+30 Bar {}
+31 BarSet {}
+32 Baz {}
+33 Foo {}
+34 IfcWithVec {}
+35 InoutIFC {}
+36 InoutRegIFC {}
+37 SubIFC {}
+38 Sz {}
+39 T {}
+40 TopIFC {}
+41 U {}
+42 U2 {}
+43 V2 {}
 ---------
 Command: browsepackage detail 10
 Types
 ---------
-Command: browsepackage list 25
+Command: browsepackage list 30
 ---------
-Command: browsepackage detail 25
+Command: browsepackage detail 30
 Enum
 Test::Bar
 members {Red Yellow Blue}
 width 2
 position {Test.bsv 11 36}
 ---------
-Command: browsepackage list 26
+Command: browsepackage list 31
 ---------
-Command: browsepackage detail 26
+Command: browsepackage detail 31
 Enum
 Test::BarSet
 members {Red2 Yellow2 Blue2}
 width 2
 position {Test.bsv 12 43}
 ---------
-Command: browsepackage list 27
+Command: browsepackage list 32
 ---------
-Command: browsepackage detail 27
+Command: browsepackage detail 32
 Struct
 {Test::Baz#(type t, numeric type n)}
 polymorphic
 members {{Bool  f1  // width 1} {Bit#(n)  f2  } {Vector::Vector#(n, t)  v  }}
 position {Test.bsv 17 18}
 ---------
-Command: browsepackage list 28
+Command: browsepackage list 33
 ---------
-Command: browsepackage detail 28
+Command: browsepackage detail 33
 Interface
 {Test::Foo#(type a)}
 polymorphic
 members {{method  Action  wset  (a)} {method  a  wget  ()} {method  Bool  whas  ()} {interface  Inout#(Bool)  io_out}}
 position {Test.bsv 53 11}
 ---------
-Command: browsepackage list 29
+Command: browsepackage list 34
 ---------
-Command: browsepackage detail 29
+Command: browsepackage detail 34
 Interface
 Test::IfcWithVec
 members {{interface  Vector::Vector#(2, Reg#(Bool))  vec1} {interface  Vector::Vector#(2, Vector::Vector#(2, Reg#(Bool)))  vec2} {interface  Vector::Vector#(2, Vector::Vector#(2, Vector::Vector#(2, Reg#(Bool))))  vec3} {method  Vector::Vector#(2, Bool)  data1  ()} {method  Vector::Vector#(2, Vector::Vector#(2, Bool))  data2  ()} {method  Vector::Vector#(2, Vector::Vector#(2, Vector::Vector#(2, Bool)))  data3  ()} {interface  Vector::Vector#(2, Clock)  clks1} {interface  Vector::Vector#(2, Reset)  rsts1} {interface  Vector::Vector#(2, Inout#(Test::Bar))  ios1}}
 position {Test.bsv 65 11}
 ---------
-Command: browsepackage list 30
+Command: browsepackage list 35
 ---------
-Command: browsepackage detail 30
+Command: browsepackage detail 35
 Interface
 Test::InoutIFC
 members {{interface  Inout#(Test::Bar)  b}}
 position {Test.bsv 31 11}
 ---------
-Command: browsepackage list 31
+Command: browsepackage list 36
 ---------
-Command: browsepackage detail 31
+Command: browsepackage detail 36
 Interface
 {Test::InoutRegIFC#(type a)}
 polymorphic
 members {{interface  Reg#(a)  r} {interface  Inout#(Test::Bar)  b}}
 position {Test.bsv 35 11}
 ---------
-Command: browsepackage list 32
+Command: browsepackage list 37
 ---------
-Command: browsepackage detail 32
+Command: browsepackage detail 37
 Interface
 {Test::SubIFC#(type a)}
 polymorphic
 members {{interface  Reg#(a)  r}}
 position {Test.bsv 27 11}
 ---------
-Command: browsepackage list 33
+Command: browsepackage list 38
 ---------
-Command: browsepackage detail 33
+Command: browsepackage detail 38
 Alias
 Test::Sz
 Definition 9
 position {Test.bsv 7 11}
 ---------
-Command: browsepackage list 34
+Command: browsepackage list 39
 ---------
-Command: browsepackage detail 34
+Command: browsepackage detail 39
 Alias
 {Test::T#(type a, type b)}
 Definition {{Tuple2#(b, a)}}
 position {Test.bsv 9 22}
 ---------
-Command: browsepackage list 35
+Command: browsepackage list 40
 ---------
-Command: browsepackage detail 35
+Command: browsepackage detail 40
 Interface
 {Test::TopIFC#(type a)}
 polymorphic
 members {{method  Bool  f  (a,  a)} {interface  Clock  clk_out} {interface  Reset  rst_out} {method  Bool  g  (a)} {interface  Test::SubIFC#(a)  s}}
 position {Test.bsv 19 11}
 ---------
-Command: browsepackage list 36
+Command: browsepackage list 41
 ---------
-Command: browsepackage detail 36
+Command: browsepackage detail 41
 TaggedUnion
 {Test::U#(type a)}
 polymorphic
 members {{void  F1  // width 0} {a  F2  } {List#(a)  F3  } {function Bool f(Bool x1)  F4  }}
 position {Test.bsv 45 3}
 ---------
-Command: browsepackage list 37
+Command: browsepackage list 42
 ---------
-Command: browsepackage detail 37
+Command: browsepackage detail 42
 TaggedUnion
 {Test::U2#(type a)}
 polymorphic
 members {{void  F1  // width 0} {a  F2  }}
 position {Test.bsv 50 3}
 ---------
-Command: browsepackage list 38
+Command: browsepackage list 43
 ---------
-Command: browsepackage detail 38
+Command: browsepackage detail 43
 Alias
 {Test::V2#(type t)}
 Definition {{Vector::Vector#(2, t)}}
