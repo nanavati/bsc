@@ -53,7 +53,20 @@ tiDefns errh s flags ds = do
                           (Left emsgs)  -> Left emsgs
                           (Right cdefn) -> rmFreeTypeVars cdefn
   let (checks, wss, pkgss) = unzip3 (map checkDef ds)
-  let (errors, ds') = apFst concat $ separate checks
+  let (_, ds') = apFst concat $ separate (checks :: [Either [EMsg] CDefn])
+  -- a boundary description def (compiler-emitted boundary_<flatifc>)
+  -- re-proves the wrapper's WrapField provisos, so when an interface
+  -- cannot synthesize, both defs fail with the same error at the same
+  -- position; report only the wrapper's (the description def is
+  -- still poisoned below)
+  let isBoundaryDescDef (CValueSign (CDef i _ _)) =
+          "boundary_" `isPrefixOf` getIdBaseString i
+      isBoundaryDescDef _ = False
+      bd_errs = concat [ es | (Left es, d) <- zip checks ds,
+                              isBoundaryDescDef d ]
+      other_errs = concat [ es | (Left es, d) <- zip checks ds,
+                                 not (isBoundaryDescDef d) ]
+      errors = if null other_errs then bd_errs else other_errs
   let have_errors = not (null errors)
   let mkErrorDef (Left _)  (CValueSign (CDef i t _)) = Just (mkPoisonedCDefn i t)
       mkErrorDef (Left _)  (Cclass {}) = Nothing

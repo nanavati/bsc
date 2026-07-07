@@ -3631,6 +3631,57 @@ closes the §13 "parent-side sealed-constant readiness fold" residual
 for generated members: parents see constant readiness as ordinary
 evaluated truth.
 
+**6 — boundary descriptions with codec references, proven by shadow.**
+GenWrap emits `boundary_<flatifc>` beside `signature_`: a literal
+`List BoundaryEntry` whose field entries carry the leaf's flattened
+path and rendering slots and — because `primMkFieldEntry`'s
+`WrapField` proviso is resolved by the typechecker at the declaration
+against the leaf's name and type proxies — a reference to the leaf's
+codec dictionary, serialized through the ordinary def machinery
+(A98/A61: the reference is a def-graph edge, not a name string; the
+`f`-typed proxy argument keeps the proviso unambiguous).
+Clock/reset/inout leaves are opaque entries (the native floor needs
+no dictionary); foreign interfaces are excluded. `BoundaryDesc.hs`
+reads descriptions back post-typecheck (readers shared with
+ContractCheck; `CodecRef` holds the resolved dictionary reference),
+and the hidden `-check-wrap-shadow` flag compares the described
+boundary against the assembled one at every module generation.
+Description defs are rooted (`DefP_Boundary`); `.bo`/`.ba` tags
+bumped.
+
+The proof is the discovery loop: the full suite ran under the flag
+until the only failures were the known environmental set. Four
+rounds, each teaching something real: (1) the checker's own lookup
+misconstructed the def name from the already-suffixed flat id — and
+en route exposed that flag-on suite compiles after flag-off twins
+were `-u`-skipped no-ops (the increment-2 lesson recurring in test
+form; the shadow suite now compiles against erased state). (2)
+Vector positions are index-parametric in descriptions
+(`subs.[_].put`, one shared codec — the upstream WrapField
+index-erasure) but index-concrete at boundaries: the comparator
+matches parametrically, and index-count completeness is explicitly
+NOT description data until A97's aggregate clauses. (3) Clock and
+reset leaves flatten like everything else; kind classification must
+run on synonym-expanded types; output-port presence is not
+description data (a zero-width result drops its port — the floor's
+empty member). (4) Vector-of-clock fields match parametrically too,
+and the `value` kind is the emission's catch-all — a type-function
+method type (the #313/#383 hole) cannot be classified pre-typecheck,
+so the fallback kind asserts nothing; only positively-identified
+kinds assert their port shape. Convergence: the full suite under the
+flag reports ZERO shadow disagreements (18606 passes; residual
+failures are the known environmental set plus nine option-echo tests
+that any injected TEST_BSC_OPTIONS perturbs by design). One
+description side-effect surfaced and was fixed on the #900 precedent:
+a boundary def re-proves the wrapper's WrapField provisos, so a
+non-synthesizable interface errored twice at one position — the
+package typecheck now reports a boundary description def's failures
+only when nothing else failed (they are strictly derivative; the def
+is still poisoned). Final state: the description substrate spans
+every boundary the ~18.6k-test suite synthesizes, member-for-member,
+with per-leaf codecs resolved and `.bo`-resident — the fold
+increment's precondition.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
