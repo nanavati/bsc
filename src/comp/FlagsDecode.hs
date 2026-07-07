@@ -661,7 +661,8 @@ defaultFlags bluespecdir = Flags {
         warnMethodUrgency = True,
         warnUndetPred = False,
         genABinExplicit = False,
-        checkWrapShadow = False
+        checkWrapShadow = False,
+        boundaryFold = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1110,6 +1111,10 @@ externalFlags = [
         ("bias-method-scheduling",
          (Toggle (\f x -> f {biasMethodScheduling=x}) (showIfTrue biasMethodScheduling),
           "schedule methods before rules when possible", Hidden)),
+
+        ("boundary-fold",
+         (Toggle (\f x -> f {boundaryFold=x}) (showIfTrue boundaryFold),
+          "render the wrapper interface from the boundary description", Hidden)),
 
         ("check-wrap-shadow",
          (Toggle (\f x -> f {checkWrapShadow=x}) (showIfTrue checkWrapShadow),

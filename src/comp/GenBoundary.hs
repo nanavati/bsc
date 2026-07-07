@@ -10,6 +10,7 @@ import Prelude hiding ((<>))
 #endif
 
 import Control.Monad(zipWithM)
+import System.Environment(lookupEnv)
 import PFPrint
 import Position(noPosition)
 import Error(internalError)
@@ -21,12 +22,13 @@ import SymTab(SymTab)
 import CType(getArrows)
 import VModInfo(VSchedInfo, VPathInfo, VFieldInfo, VWireInfo, VPort)
 import Pragma
+import BoundaryDesc(BoundaryEntryR(..))
 import GenWrap(BoundarySpec(..), GWMonad, GenState(..),
                runGWMonadNoFail, runGWMonadGetNoFail,
                chkInterface, flatTypeId,
                isClockType, isResetType, isParamType,
                isInoutType, isVectorType,
-               genFromBody, mkArgPortTypes,
+               genFromBody, genFromBodyDesc, mkArgPortTypes,
                isRdyToRemoveField, fixupVeriField,
                ePack, ePrimInoutCast0)
 
@@ -51,8 +53,15 @@ type DefFun = [PProp] -> Bool -> VWireInfo -> VSchedInfo -> VPathInfo ->
 -- The [PProp] argument is the module's pragmas (the pragmas from the
 -- ifc declaration are per-type facts, recorded in the BoundarySpec).
 -- XXX: alwaysEnabled is dropped and broken (not propagated to {inhigh})
-renderWrapperCDefn :: BoundarySpec -> DefFun
-renderWrapperCDefn spec pps fmod wire_info sch pathinfo ips symt fields true_ifc_ids = do
+--
+-- The first argument is the module's parsed boundary_ description,
+-- when one was found and -boundary-fold asked for it (increment 7):
+-- the interface-rendering body is then built from the description's
+-- field entries (see GenWrap.genFromBodyDesc) instead of re-walking
+-- the symtab.  Nothing, or a description outside the pilot scope,
+-- takes the legacy path silently.
+renderWrapperCDefn :: Maybe [BoundaryEntryR a] -> BoundarySpec -> DefFun
+renderWrapperCDefn mentries spec pps fmod wire_info sch pathinfo ips symt fields true_ifc_ids = do
   let
       iprags = bs_iprags spec
       i = bs_id spec
@@ -124,9 +133,34 @@ renderWrapperCDefn spec pps fmod wire_info sch pathinfo ips symt fields true_ifc
              sch
              pathinfo
       vlift = (cVApply idLiftModule [vexp])
-  body <- runGWMonadNoFail
-              (genFromBody arg_pts vlift true_ifc_ids ti_ ifcId finfs)
-              st4
+  -- the fold (increment 7): when the boundary_ description is in
+  -- hand, build the interface-rendering body from its field entries;
+  -- an entry set outside the pilot scope (opaque leaves, hierarchical
+  -- or vector paths, any disagreement with the interface inventory)
+  -- renders by the legacy walk instead
+  let entryLeaf (BFieldR { bf_path = p, bf_slots = ss }) = Just (p, ss)
+      entryLeaf (BOpaqueR {}) = Nothing
+      mfold = do entries <- mentries
+                 ds <- mapM entryLeaf entries
+                 genFromBodyDesc ds arg_pts vlift true_ifc_ids ti_ finfs
+  -- instrumentation: when BSC_BOUNDARY_FOLD_LOG names a file, record
+  -- the per-module fold-vs-fallback decision there (only meaningful
+  -- when a description was supplied, i.e. under -boundary-fold)
+  case mentries of
+    Nothing -> return ()
+    Just _ -> do
+      mlog <- lookupEnv "BSC_BOUNDARY_FOLD_LOG"
+      case mlog of
+        Nothing -> return ()
+        Just fn -> let what = maybe "fallback" (const "fold") mfold
+                   in  appendFile fn (what ++ " " ++
+                                      getIdBaseString i ++ "\n")
+  body <- case mfold of
+            Just b -> return b
+            Nothing ->
+                runGWMonadNoFail
+                    (genFromBody arg_pts vlift true_ifc_ids ti_ ifcId finfs)
+                    st4
   let cls = CClause (map CPVar vs) [] body
   return $ CValueSign (CDef i (bs_cqt spec) [cls])
 

@@ -1082,23 +1082,27 @@ genModule
     -- filter and the readiness guards agree with the recorded
     -- schedule by construction (the ifc-declaration pragmas are
     -- per-type facts, carried in the BoundarySpec)
+    -- the boundary_ description lookup, shared by the shadow check
+    -- (increment 6) and the fold (increment 7).  The description def
+    -- is package-qualified with the flat interface's package; fall
+    -- back to a same-base scan (the members may live in another
+    -- package).
+    let bid = boundaryIdForIfc (wrapper_ifc wi)
+        bid_base = getIdBaseString bid
+        mbody = case M.lookup bid alldefs of
+                  Just b -> Just b
+                  Nothing ->
+                    case [ b | (i, b) <- M.toList alldefs,
+                               getIdBaseString i == bid_base ] of
+                      (b:_) -> Just b
+                      [] -> Nothing
+
     -- the shadow check (increment 6): under -check-wrap-shadow,
     -- verify that the boundary_ description determines the boundary
     -- being assembled -- the substrate proof the fold increment
-    -- builds on.  The description def is package-qualified with the
-    -- flat interface's package; fall back to a same-base scan (the
-    -- members may live in another package).
+    -- builds on.
     when (checkWrapShadow flags) $ do
-        let bid = boundaryIdForIfc (wrapper_ifc wi)
-            bid_base = getIdBaseString bid
-            mbody = case M.lookup bid alldefs of
-                      Just b -> Just b
-                      Nothing ->
-                        case [ b | (i, b) <- M.toList alldefs,
-                                   getIdBaseString i == bid_base ] of
-                          (b:_) -> Just b
-                          [] -> Nothing
-            eff_pps = bs_iprags (wi_boundary wi) ++ pps
+        let eff_pps = bs_iprags (wi_boundary wi) ++ pps
             shadow_fields = filter (not . isRdyToRemoveField eff_pps)
                                    fieldinfo
         case mbody of
@@ -1116,8 +1120,32 @@ genModule
                       [ (def_pos, EGeneric ("wrap shadow: " ++ e))
                       | e <- errs ]
 
+    -- the fold (increment 7): under -boundary-fold, hand the parsed
+    -- description to the wrapper renderer, which builds the
+    -- interface-rendering body from it (falling back silently to the
+    -- legacy walk outside the pilot scope).  A missing or unreadable
+    -- description is not an error here -- the legacy path renders as
+    -- before
+    mentries <-
+        if boundaryFold flags
+        then case mbody of
+               Nothing -> do
+                 when (verbose flags) $ putStrLnF
+                     ("boundary fold: no description for " ++ modstr ++
+                      "; taking the legacy path")
+                 return Nothing
+               Just body ->
+                 case readBoundaryEntries body of
+                   Left msg -> do
+                     when (verbose flags) $ putStrLnF
+                         ("boundary fold: " ++ modstr ++ ": " ++ msg ++
+                          "; taking the legacy path")
+                     return Nothing
+                   Right entries -> return (Just entries)
+        else return Nothing
+
     let bspec = wi_boundary wi
-    def <- renderWrapperCDefn bspec
+    def <- renderWrapperCDefn mentries bspec
                  pps
                  fwrapper
                  wireinfo

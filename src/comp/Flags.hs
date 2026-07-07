@@ -166,7 +166,12 @@ data Flags = Flags {
         -- compare the assembled boundary against the boundary_
         -- description at every module generation (a checker for the
         -- description substrate; increment 6)
-        checkWrapShadow :: Bool
+        checkWrapShadow :: Bool,
+        -- render the wrapper's interface body from the boundary_
+        -- description instead of re-walking the symtab, falling back
+        -- silently to the legacy path outside the pilot scope
+        -- (the fold as producer; increment 7)
+        boundaryFold :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)
