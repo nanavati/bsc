@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/bsim3-ir",
+    "crates/bsim3-interp",
     "crates/bsim3-kernel",
     "crates/bsim3-rt",
     "crates/bsim3-wave",
@@ -11,6 +12,7 @@ members = [
 # bsim3-codegen needs llvm-18-dev; everything else builds without it.
 default-members = [
     "crates/bsim3-ir",
+    "crates/bsim3-interp",
     "crates/bsim3-kernel",
     "crates/bsim3-rt",
     "crates/bsim3-wave",
