@@ -138,6 +138,7 @@ import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
+import SimExportIR(writeBirFile)
 import SimMakeCBlocks(simMakeCBlocks)
 import SimCOpt(simCOpt)
 import SimBlocksToC(simBlocksToC)
@@ -1295,6 +1296,10 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        start flags DFsimPackageOpt
        sim_system_opt <- simPackageOpt errh flags sim_system
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
+
+       -- export the Bluesim 3 IR when requested
+       when (genBir flags) $
+            writeBirFile (prefix ++ toplevel ++ ".bir") sim_system_opt
 
        -- convert SimPackages and SimSchedules to SimCCBlocks and SimCCScheds
        start flags DFsimMakeCBlocks
