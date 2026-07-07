@@ -1,20 +1,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/bsim2-ir",
-    "crates/bsim2-kernel",
-    "crates/bsim2-rt",
-    "crates/bsim2-wave",
-    "crates/bsim2-codegen",
-    "crates/bsim2",
+    "crates/bsim3-ir",
+    "crates/bsim3-kernel",
+    "crates/bsim3-rt",
+    "crates/bsim3-wave",
+    "crates/bsim3-codegen",
+    "crates/bsim3",
 ]
-# bsim2-codegen needs llvm-18-dev; everything else builds without it.
+# bsim3-codegen needs llvm-18-dev; everything else builds without it.
 default-members = [
-    "crates/bsim2-ir",
-    "crates/bsim2-kernel",
-    "crates/bsim2-rt",
-    "crates/bsim2-wave",
-    "crates/bsim2",
+    "crates/bsim3-ir",
+    "crates/bsim3-kernel",
+    "crates/bsim3-rt",
+    "crates/bsim3-wave",
+    "crates/bsim3",
 ]
 
 [workspace.package]

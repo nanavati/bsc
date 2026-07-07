@@ -1,0 +1,21 @@
+[package]
+name = "bsim3"
+description = "Bluesim 3 driver: link planner, JIT/AOT builder, native runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bsim3"
+path = "src/main.rs"
+
+[dependencies]
+bsim3-ir = { path = "../bsim3-ir" }
+bsim3-kernel = { path = "../bsim3-kernel" }
+bsim3-rt = { path = "../bsim3-rt" }
+bsim3-wave = { path = "../bsim3-wave" }
+bsim3-codegen = { path = "../bsim3-codegen" }
+
+[features]
+llvm = ["bsim3-codegen/llvm"]
