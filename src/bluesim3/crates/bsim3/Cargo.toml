@@ -20,3 +20,5 @@ bsim3-codegen = { path = "../bsim3-codegen" }
 
 [features]
 llvm = ["bsim3-codegen/llvm"]
+# hybrid JIT in the interpreter (BSIM3_JIT=1 at runtime)
+jit = ["bsim3-interp/jit"]

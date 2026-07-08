@@ -8,5 +8,11 @@ repository.workspace = true
 
 [dependencies]
 bsim3-ir = { path = "../bsim3-ir" }
+bsim3-codegen = { path = "../bsim3-codegen", optional = true }
 libloading = "0.8"
 libc = "0.2"
+
+[features]
+# hybrid JIT: eligible rules run as LLVM-compiled functions inside the
+# interpreter's event loop (BSIM3_JIT=1 at runtime; needs llvm-18-dev)
+jit = ["dep:bsim3-codegen", "bsim3-codegen/llvm"]
