@@ -607,6 +607,7 @@ defaultFlags bluespecdir = Flags {
         finalcleanup = 1,
         genABin = False,
         genBir = False,
+        genSim3 = False,
         genName = [],
         genSysC = False,
         -- The ifcPath value will be produced from the raw value,
@@ -1605,6 +1606,15 @@ externalFlags = [
          in  (NoArg setFn (Just getFn),
               "compile BSV generating Bluesim object", Visible)),
 
+        ("sim3",
+         let setFn f = case setBackend f Bluesim of
+                         Left f' -> Left f' { genABin = True, genBir = True,
+                                              genSim3 = True }
+                         Right e -> Right e
+             getFn f = genSim3 f
+         in  (NoArg setFn (Just getFn),
+              "compile BSV generating a Bluesim 3 (bsim3) simulation", Visible)),
+
         ("simdir",
          (Arg "dir" (\f s -> Left (f {cdir = Just s})) (Just (FRTMaybeString cdir)),
           "output directory for Bluesim intermediate files", Visible)),
@@ -1927,6 +1937,7 @@ showFlagsRaw flags =
           ("finalcleanup", show (finalcleanup flags)),
           ("genABin", show (genABin flags)),
           ("genBir", show (genBir flags)),
+          ("genSim3", show (genSim3 flags)),
           ("genName", show (genName flags)),
           ("genSysC", show (genSysC flags)),
           ("ifLift", show (ifLift flags)),
