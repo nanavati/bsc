@@ -28,7 +28,11 @@ import sys
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 BSC = os.path.join(REPO, "inst", "bin", "bsc")
-BSIM3 = os.path.join(REPO, "src", "bluesim3", "target", "debug", "bsim3")
+# the release build keeps heavyweight tests (SHA512, GlibcRandom) well
+# under the timeout; fall back to debug if it hasn't been built
+BSIM3 = os.path.join(REPO, "src", "bluesim3", "target", "release", "bsim3")
+if not os.path.exists(BSIM3):
+    BSIM3 = os.path.join(REPO, "src", "bluesim3", "target", "debug", "bsim3")
 ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
 
 MAX_CYCLES = "4000"
