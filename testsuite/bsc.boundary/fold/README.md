@@ -23,9 +23,18 @@ suite synthesizes:
 - **always_ready on the interface** (`ArFold.bsv`) — the minted
   `AR_` flat type's description drives a boundary with no RDY ports.
 
+Increment 9 adds type verification: each field entry's resolved
+method type (recovered from the `f`-typed proxy the typechecker
+instantiated at the declaration) must equal the member's own
+inventory type before the fold may fire — `XPkgIfc.bsv`/
+`XPkgUser.bsv` prove this across a package boundary, where the
+types were recorded at one compile and verified at another.
+
 Each shape asserts a `fold <module>` line in the
 `BSC_BOUNDARY_FOLD_LOG` decision log and the absence of any
 `fallback`; `FoldTb.bsv` links and runs on Bluesim under the flag.
 The defensive posture is unchanged: any description/inventory
-disagreement falls back silently to the legacy walk, so a stale
-description can never change the produced wrapper.
+disagreement (naming, kind, arguments, or types) falls back silently
+to the legacy walk — and is a positioned error under
+`-check-wrap-shadow` — so a stale description can never change the
+produced wrapper.

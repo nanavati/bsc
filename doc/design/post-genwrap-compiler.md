@@ -3742,6 +3742,37 @@ round's fastest wall time (1:35:18). One test-harness lesson: a
 suite's `unset` of the census env var killed logging for every
 suite after it in the one-process runtest run — save and restore.
 
+**9 — method types verified from descriptions.** Each `boundary_`
+field entry's resolved method type turns out to have been in every
+`.bo` all along: the `f`-typed proxy argument (kept for proviso
+disambiguation, A98) is `(CAny :: f)` at the declaration, which
+iConv renders as `primBuildUndefined` applied AT the field's method
+type — so the type is the application's type argument, recovered by
+a type-keeping head walk (`headTypes`; `whead` discards type
+arguments, which the first smoke run found immediately: every leaf
+reported "no recorded type" and the fold correctly refused to fire).
+No emission or format change. After a successful fold walk, every
+leaf's recorded type is compared against `iConvT` of the interface
+inventory's leaf type (the walk consumed the entries in order, so
+they pair up positionally); a mismatch or unrecoverable type falls
+the module back to the legacy walk silently and is a positioned
+error under `-check-wrap-shadow`. From this increment on, a fold
+that fires is a fold whose description types are PROVEN true — the
+description is self-sufficient data: path, kind, naming, type, and
+codec reference per leaf. Verified: corpus 211 folds / 0 fallbacks
+byte-identical with verification live; boundary suites 345
+(including a new cross-package pair — types recorded at the
+declaring package's compile, verified at the member's); and the
+full suite under `-boundary-fold -check-wrap-shadow` with an
+unbroken census: **3781 folds, ZERO fallbacks across the entire
+~18.6k-test run**, failure set byte-identical to the known
+baseline, wall 1:36:15 — the verification is free. The residue for
+increment 10: consume the recorded types and codec references in an
+ISyntax-direct renderer, bypassing the per-module wrapper
+re-typecheck (`compileCDefToIDef`'s one-def
+ctxreduce/typecheck/simplify/iConv pipeline, `bsc.hs:2430-2457`,
+which re-solves per module what the description already records).
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
