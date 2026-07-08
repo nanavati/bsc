@@ -1145,7 +1145,7 @@ genModule
         else return Nothing
 
     let bspec = wi_boundary wi
-    def <- renderWrapperCDefn mentries bspec
+    (def, foldTypeReport) <- renderWrapperCDefn mentries flags bspec
                  pps
                  fwrapper
                  wireinfo
@@ -1155,6 +1155,14 @@ genModule
                  symt
                  fieldinfo
                  true_ifc_ids
+
+    -- a fold attempt whose recorded types disagreed with the
+    -- interface inventory fell back silently; under the checker
+    -- flag, that disagreement is an error (increment 9)
+    when (checkWrapShadow flags && not (null foldTypeReport)) $
+        bsError errh
+            [ (def_pos, EGeneric ("wrap shadow: " ++ e))
+            | e <- foldTypeReport ]
 
     -- mainly because hypering the def will force any embedded exceptions
     t <- dump errh flags t DFwrappergen dumpnames def

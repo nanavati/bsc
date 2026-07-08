@@ -20,6 +20,8 @@ import CSyntax
 import CSyntaxUtil
 import SymTab(SymTab)
 import CType(getArrows)
+import Flags(Flags)
+import IConv(iConvT)
 import VModInfo(VSchedInfo, VPathInfo, VFieldInfo, VWireInfo, VPort)
 import Pragma
 import BoundaryDesc(BoundaryEntryR(..))
@@ -46,9 +48,13 @@ import GenWrap(BoundarySpec(..), GWMonad, GenState(..),
 -- synthesized after GenWrap to be supplied) and the remaining inputs
 -- are pure data.
 
+-- (the [String] is the described-vs-inventory type report from a
+-- fold attempt -- empty when no fold was attempted or every leaf's
+-- recorded type matched; the caller surfaces it under
+-- -check-wrap-shadow)
 type DefFun = [PProp] -> Bool -> VWireInfo -> VSchedInfo -> VPathInfo ->
               [VPort] -> SymTab -> [VFieldInfo] -> [Id] ->
-              IO CDefn
+              IO (CDefn, [String])
 
 -- The [PProp] argument is the module's pragmas (the pragmas from the
 -- ifc declaration are per-type facts, recorded in the BoundarySpec).
@@ -60,8 +66,9 @@ type DefFun = [PProp] -> Bool -> VWireInfo -> VSchedInfo -> VPathInfo ->
 -- description's entries (see GenWrap.genFromBodyDesc) instead of
 -- re-walking the pragma tables.  Nothing, or any disagreement with
 -- the interface inventory, takes the legacy path silently.
-renderWrapperCDefn :: Maybe [BoundaryEntryR a] -> BoundarySpec -> DefFun
-renderWrapperCDefn mentries spec pps fmod wire_info sch pathinfo ips symt fields true_ifc_ids = do
+renderWrapperCDefn :: Maybe [BoundaryEntryR a] -> Flags ->
+                      BoundarySpec -> DefFun
+renderWrapperCDefn mentries flags spec pps fmod wire_info sch pathinfo ips symt fields true_ifc_ids = do
   let
       iprags = bs_iprags spec
       i = bs_id spec
@@ -140,13 +147,42 @@ renderWrapperCDefn mentries spec pps fmod wire_info sch pathinfo ips symt fields
   -- any disagreement renders by the legacy walk instead
   let entryLeaf (BFieldR { bf_path = p, bf_slots = ss }) = (p, ss)
       entryLeaf (BOpaqueR { bo_path = p, bo_slots = ss }) = (p, ss)
-  mfold <- case mentries of
-             Nothing -> return Nothing
-             Just entries ->
-                 runGWMonadNoFail
-                     (genFromBodyDesc (map entryLeaf entries)
-                          arg_pts vlift true_ifc_ids ti_ finfs)
-                     st4
+  mfold0 <- case mentries of
+              Nothing -> return Nothing
+              Just entries ->
+                  runGWMonadNoFail
+                      (genFromBodyDesc (map entryLeaf entries)
+                           arg_pts vlift true_ifc_ids ti_ finfs)
+                      st4
+  -- the walk consumed every entry in order, so its leaf types line
+  -- up with the entries pairwise; each field entry's recorded method
+  -- type (resolved by the typechecker at the declaration) must equal
+  -- the inventory's leaf type -- the description's types are load
+  -- bearing only if they are TRUE (increment 9).  A mismatch (or an
+  -- entry with no recoverable type) falls the module back to the
+  -- legacy walk; the report is returned for -check-wrap-shadow.
+  let tyReport =
+          case (mentries, mfold0) of
+            (Just entries, Just (_, cts)) ->
+                [ err
+                | (ent, ct) <- zip entries cts,
+                  BFieldR { bf_path = pth, bf_ftype = mft } <- [ent],
+                  let want = iConvT flags symt ct,
+                  err <- case mft of
+                           Just got
+                             | got == want -> []
+                             | otherwise ->
+                                 ["described type of `" ++ pth ++
+                                  "' is " ++ pfpString got ++
+                                  " but the interface says " ++
+                                  pfpString want]
+                           Nothing ->
+                               ["no recorded type for `" ++ pth ++
+                                "'"] ]
+            _ -> []
+      mfold = case (mfold0, tyReport) of
+                (Just (b, _), []) -> Just b
+                _ -> Nothing
   -- instrumentation: when BSC_BOUNDARY_FOLD_LOG names a file, record
   -- the per-module fold-vs-fallback decision there (only meaningful
   -- when a description was supplied, i.e. under -boundary-fold)
@@ -166,6 +202,6 @@ renderWrapperCDefn mentries spec pps fmod wire_info sch pathinfo ips symt fields
                     (genFromBody arg_pts vlift true_ifc_ids ti_ ifcId finfs)
                     st4
   let cls = CClause (map CPVar vs) [] body
-  return $ CValueSign (CDef i (bs_cqt spec) [cls])
+  return (CValueSign (CDef i (bs_cqt spec) [cls]), tyReport)
 
 -- ==============================

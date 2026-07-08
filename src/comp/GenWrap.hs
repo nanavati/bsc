@@ -1623,25 +1623,30 @@ mkFromBind true_ifc_ids var ft =
 --
 -- Returns Nothing (the caller then takes the legacy path) on any
 -- disagreement, missing slots, or leftover entries.  Within scope
--- the result is constructor-identical to genFromBody's.
+-- the result is constructor-identical to genFromBody's.  The second
+-- component of the result is the consumed entries' leaf types, in
+-- consumption order (one per entry, opaque leaves included), for
+-- the caller's described-vs-inventory type verification
+-- (increment 9).
 genFromBodyDesc :: [(String, [(String, String)])] ->
                    [(VPort, CType)] -> CExpr -> [Id] -> Id -> [FInf] ->
-                   GWMonad (Maybe CExpr)
+                   GWMonad (Maybe (CExpr, [CType]))
 genFromBodyDesc entries arg_pts mk true_ifc_ids si fts =
  do mres <- walkList noPrefixes entries fts
     case mres of
-      Just (blobs, ifc_sptStmts, []) ->
+      Just (blobs, ifc_sptStmts, cts, []) ->
         do let meths = [ CLValue (setInternal f) [CClause vps [] e'] g
                        | (f, e, g) <- blobs,
                          let (vps, e') = unLams e ]
                arg_sptStmts =
                    map (uncurry (savePortTypeStmt (CVar id_x))) arg_pts
                sptStmts = arg_sptStmts ++ map CMStmt ifc_sptStmts
-           return $ Just $ Cmodule pos $
-                      [CMStmt $ CSBindT (CPVar (id_t pos)) Nothing []
-                                    (CQType [] sty) mk] ++
-                      ((saveNameStmt (id_t pos) id_x):sptStmts) ++
-                      [CMinterface (Cinterface pos Nothing meths)]
+           let body = Cmodule pos $
+                        [CMStmt $ CSBindT (CPVar (id_t pos)) Nothing []
+                                      (CQType [] sty) mk] ++
+                        ((saveNameStmt (id_t pos) id_x):sptStmts) ++
+                        [CMinterface (Cinterface pos Nothing meths)]
+           return $ Just (body, cts)
       _ -> return Nothing
  where
    pos = getIdPosition si
@@ -1651,24 +1656,25 @@ genFromBodyDesc entries arg_pts mk true_ifc_ids si fts =
 
    -- walk a field list, threading the un-consumed entries
    walkList :: IfcPrefixes -> [(String, [(String, String)])] -> [FInf] ->
-               GWMonad (Maybe ([(Id, CExpr, [CQual])], [CStmt],
+               GWMonad (Maybe ([(Id, CExpr, [CQual])], [CStmt], [CType],
                                [(String, [(String, String)])]))
-   walkList _ es [] = return (Just ([], [], es))
+   walkList _ es [] = return (Just ([], [], [], es))
    walkList prefixes es (ft:rest) =
     do mhead <- walk prefixes es ft
        case mhead of
          Nothing -> return Nothing
-         Just (blob, stmts, es') ->
+         Just (blob, stmts, cts, es') ->
            do mrest <- walkList prefixes es' rest
               case mrest of
                 Nothing -> return Nothing
-                Just (blobs, stmtss, es'') ->
-                    return (Just (blob:blobs, stmts ++ stmtss, es''))
+                Just (blobs, stmtss, ctss, es'') ->
+                    return (Just (blob:blobs, stmts ++ stmtss,
+                                  cts ++ ctss, es''))
 
    -- one field: subinterface / vector / leaf, mirroring genFromBody's
    -- meth (and boundaryEntries' ent) case for case
    walk :: IfcPrefixes -> [(String, [(String, String)])] -> FInf ->
-           GWMonad (Maybe ((Id, CExpr, [CQual]), [CStmt],
+           GWMonad (Maybe ((Id, CExpr, [CQual]), [CStmt], [CType],
                            [(String, [(String, String)])]))
    walk prefixes es (FInf f as r aIds) =
     do mi <- chkInterface r
@@ -1678,9 +1684,9 @@ genFromBodyDesc entries arg_pts mk true_ifc_ids si fts =
               msubs <- walkList newprefixes es sub_fts
               case msubs of
                 Nothing -> return Nothing
-                Just (blobs, stmts, es') ->
+                Just (blobs, stmts, cts, es') ->
                     return (Just ((f, cInterface ti blobs, []),
-                                  stmts, es'))
+                                  stmts, cts, es'))
          _ ->
            do isVec <- isVectorInterfaces r
               case (isVec, as) of
@@ -1691,16 +1697,16 @@ genFromBodyDesc entries arg_pts mk true_ifc_ids si fts =
                      melems <- walkList newprefixes es vfts
                      case melems of
                        Nothing -> return Nothing
-                       Just (blobs, stmts, es') ->
+                       Just (blobs, stmts, cts, es') ->
                          let (exprs, gs) =
                                  unzip [ (e, g) | (_, e, g) <- blobs ]
                              vec = cToVector isListN exprs
                          in  return (Just ((f, vec, concat gs),
-                                           stmts, es'))
+                                           stmts, cts, es'))
                 _ -> leaf prefixes es (FInf f as r aIds)
 
    leaf :: IfcPrefixes -> [(String, [(String, String)])] -> FInf ->
-           GWMonad (Maybe ((Id, CExpr, [CQual]), [CStmt],
+           GWMonad (Maybe ((Id, CExpr, [CQual]), [CStmt], [CType],
                            [(String, [(String, String)])]))
    leaf _ [] _ = return Nothing
    leaf prefixes ((path, slots) : es') (FInf f as r aIds) =
@@ -1751,7 +1757,8 @@ genFromBodyDesc entries arg_pts mk true_ifc_ids si fts =
                                  [fnp, proxy,
                                   mkMaybe (Just (CVar id_x)),
                                   prefixE, arg_nms, resultE]]
-                return (Just ((f, e, qs), [spt], es'))
+                return (Just ((f, e, qs), [spt],
+                              [foldr arrow r as], es'))
          _ -> return Nothing
 
 

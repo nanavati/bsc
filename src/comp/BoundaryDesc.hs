@@ -42,6 +42,10 @@ data BoundaryEntryR a
   = BFieldR {
         bf_path  :: String,             -- flattened leaf path
         bf_slots :: [(String, String)], -- kind/type/prefix/result/argN
+        bf_ftype :: Maybe IType,        -- the leaf's resolved method
+                                        -- type, from the f-typed
+                                        -- proxy the typechecker
+                                        -- instantiated (increment 9)
         bf_codec :: CodecRef a
     }
   | BOpaqueR {
@@ -81,7 +85,7 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
             -- the proxies are type-level (unreadable as values), and
             -- the leaf's path travels as the first slot
             case as of
-              [dict, _nmProxy, _fProxy, slotsE] ->
+              [dict, _nmProxy, fProxy, slotsE] ->
                   do slots <- readListSpine malformed readSlot env' slotsE
                      path <- case lookup "path" slots of
                                Just str -> Right str
@@ -91,8 +95,17 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
                                 ICon i (ICDef {}) -> Just i
                                 ICon i (ICValue {}) -> Just i
                                 _ -> Nothing
+                         -- the proxy is (CAny :: f) at the
+                         -- declaration: an undetermined constant
+                         -- whose iConType is the field's method type
+                         -- at the resolved instantiation
+                         mft = case whead env' fProxy of
+                                 (_, ICon _ (ICUndet { iConType = t }),
+                                  _) -> Just t
+                                 _ -> Nothing
                      return (BFieldR { bf_path = path,
                                        bf_slots = slots,
+                                       bf_ftype = mft,
                                        bf_codec = CodecRef {
                                            cr_name = nm,
                                            cr_types = [],

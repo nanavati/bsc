@@ -36,6 +36,8 @@ compile_verilog_pass ClkFold.bsv mkClkFold
 compile_verilog_pass InoutFold.bsv mkInoutFold
 compile_verilog_pass ArFold.bsv mkArFold
 compile_verilog_pass RenamedFold.bsv mkRenamedFold
+compile_verilog_pass XPkgIfc.bsv
+compile_verilog_pass XPkgUser.bsv mkXPkgUser
 
 # ----------
 # the fold: fresh state, the flag, and the decision log
@@ -57,6 +59,8 @@ compile_verilog_pass ClkFold.bsv mkClkFold {-boundary-fold}
 compile_verilog_pass InoutFold.bsv mkInoutFold {-boundary-fold}
 compile_verilog_pass ArFold.bsv mkArFold {-boundary-fold}
 compile_verilog_pass RenamedFold.bsv mkRenamedFold {-boundary-fold}
+compile_verilog_pass XPkgIfc.bsv {} {-boundary-fold}
+compile_verilog_pass XPkgUser.bsv mkXPkgUser {-boundary-fold -check-wrap-shadow}
 
 if { [info exists saved_fold_log] } {
     set env(BSC_BOUNDARY_FOLD_LOG) $saved_fold_log
@@ -71,6 +75,10 @@ find_regexp fold_decisions.log {fold mkClkFold}
 find_regexp fold_decisions.log {fold mkInoutFold}
 find_regexp fold_decisions.log {fold mkArFold}
 find_regexp fold_decisions.log {fold mkRenamedFold}
+# ... including across a package boundary, with the recorded types
+# verified against the member's inventory (-check-wrap-shadow would
+# error on any type disagreement rather than fall back silently)
+find_regexp fold_decisions.log {fold mkXPkgUser}
 # ... and nothing took the legacy path
 find_regexp_fail fold_decisions.log {fallback}
 
