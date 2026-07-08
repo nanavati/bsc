@@ -30,6 +30,7 @@ dependencies = [
  "bsim3-kernel",
  "bsim3-rt",
  "bsim3-wave",
+ "libc",
 ]
 
 [[package]]

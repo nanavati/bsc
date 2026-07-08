@@ -17,6 +17,7 @@ bsim3-kernel = { path = "../bsim3-kernel" }
 bsim3-rt = { path = "../bsim3-rt" }
 bsim3-wave = { path = "../bsim3-wave" }
 bsim3-codegen = { path = "../bsim3-codegen" }
+libc = "0.2"
 
 [features]
 llvm = ["bsim3-codegen/llvm"]
