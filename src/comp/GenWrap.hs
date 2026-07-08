@@ -1601,93 +1601,158 @@ mkFromBind true_ifc_ids var ft =
               return (f, e, qs)
 
 
--- The fold as producer (increment 7): build the same wrapper body as
--- genFromBody, but with the per-leaf structure and naming driven by
--- the boundary_ description's field entries (path and the
--- kind/prefix/result/argN slots) instead of by re-walking the
--- interface with chkInterface and the pragma tables.  A method type
--- is not description data, so it (and the field's Id, for its
--- qualifier and position) comes from the FInf inventory the renderer
--- already holds; the description entry supplies everything the legacy
--- path recomputed per leaf -- the flattened path, the port-naming
--- slots, and the leaf's kind (which replaces the isClockType/
--- isResetType/isInoutType re-classification: a described field entry
--- is never an opaque leaf).  The RDY guard decision remains the
--- true_ifc_ids test, as in mkFromBind.
+-- The fold as producer (increments 7-8): build the same wrapper
+-- body as genFromBody, but with the per-leaf naming driven by the
+-- boundary_ description's entries (path and the
+-- kind/prefix/result/argN slots) instead of by re-walking the pragma
+-- tables.  The walk itself -- subinterface recursion, vector
+-- expansion, and each leaf's type -- still follows the FInf
+-- inventory (types are not description data yet), consuming
+-- description entries in the same DFS order the emission produced
+-- them: boundaryEntries and this walk share the traversal
+-- discipline, so the orders agree by construction, and a vector
+-- position consumes one entry per concrete index (the emission wrote
+-- one per index, the path index-erased to `[_]').  At every leaf the
+-- description must agree with the inventory -- the flattened path
+-- (fieldPathName), the kind (opaque vs method), and the declared
+-- argument names -- and the whole module falls back to the legacy
+-- walk on any disagreement, so a stale description can never change
+-- the produced wrapper.  What the description supplies outright is
+-- the naming: the WrapField name proxy and the saveFieldPortTypes
+-- prefix/result/argN values.
 --
--- Returns Nothing (the caller then takes the legacy path) outside the
--- pilot scope: a hierarchical or vector path (any '.' component), an
--- opaque or non-method kind, missing slots, or any disagreement with
--- the FInf inventory (order, count, path names, argument names).
--- Within scope the result is constructor-identical to genFromBody's.
+-- Returns Nothing (the caller then takes the legacy path) on any
+-- disagreement, missing slots, or leftover entries.  Within scope
+-- the result is constructor-identical to genFromBody's.
 genFromBodyDesc :: [(String, [(String, String)])] ->
                    [(VPort, CType)] -> CExpr -> [Id] -> Id -> [FInf] ->
-                   Maybe CExpr
+                   GWMonad (Maybe CExpr)
 genFromBodyDesc entries arg_pts mk true_ifc_ids si fts =
- do leaves <- if length entries == length fts
-              then mapM chkLeaf (zip entries fts)
-              else Nothing
-    let pos = getIdPosition si
-        sty = cTCon si
-        var = CVar (id_t pos)
-
-        mkMethodD :: (String, String, String, FInf) -> CDefl
-        mkMethodD (path, _, _, FInf f _ _ _) =
-            let binf = binId noPrefixes f
-                wbinf = mkRdyId binf
-                sel = CSelect var
-                meth_guard = CApply eUnpack [sel wbinf]
-                qs = if (wbinf `elem` true_ifc_ids)
-                     then [] else [CQFilter meth_guard]
-                fnp = mkTypeProxyExpr $ TAp (cTCon idStrArg) $
-                        cTStr (mkFString path) (getIdPosition f)
-                e = CApply (CVar idFromWrapField) [fnp, sel binf]
-            in  CLValue (setInternal f) [CClause [] [] e] qs
-
-        mkSptD :: (String, String, String, FInf) -> CStmt
-        mkSptD (path, prefixStr, resultStr, FInf f as r aIds) =
-            let fproxy = mkTypeProxyExpr $ TAp (cTCon idStrArg) $
-                           cTStr (mkFString path) (getIdPosition f)
-                proxy = mkTypeProxyExpr $ foldr arrow r as
-                prefix = stringLiteralAt noPosition prefixStr
-                arg_nms = mkList (getPosition f)
-                            [stringLiteralAt (getPosition i) (getIdString i)
-                             | i <- aIds]
-                result = stringLiteralAt noPosition resultStr
-            in  CSExpr Nothing $
-                  cVApply idLiftModule $
-                    [cVApply idSaveFieldPortTypes
-                       [fproxy, proxy, mkMaybe (Just (CVar id_x)),
-                        prefix, arg_nms, result]]
-
-        meths = map mkMethodD leaves
-        ifc_sptStmts = map mkSptD leaves
-        arg_sptStmts = map (uncurry (savePortTypeStmt (CVar id_x))) arg_pts
-        sptStmts = arg_sptStmts ++ map CMStmt ifc_sptStmts
-    return $ Cmodule pos $
-               [CMStmt $ CSBindT (CPVar (id_t pos)) Nothing []
-                             (CQType [] sty) mk] ++
-               ((saveNameStmt (id_t pos) id_x):sptStmts) ++
-               [CMinterface (Cinterface pos Nothing meths)]
+ do mres <- walkList noPrefixes entries fts
+    case mres of
+      Just (blobs, ifc_sptStmts, []) ->
+        do let meths = [ CLValue (setInternal f) [CClause vps [] e'] g
+                       | (f, e, g) <- blobs,
+                         let (vps, e') = unLams e ]
+               arg_sptStmts =
+                   map (uncurry (savePortTypeStmt (CVar id_x))) arg_pts
+               sptStmts = arg_sptStmts ++ map CMStmt ifc_sptStmts
+           return $ Just $ Cmodule pos $
+                      [CMStmt $ CSBindT (CPVar (id_t pos)) Nothing []
+                                    (CQType [] sty) mk] ++
+                      ((saveNameStmt (id_t pos) id_x):sptStmts) ++
+                      [CMinterface (Cinterface pos Nothing meths)]
+      _ -> return Nothing
  where
+   pos = getIdPosition si
+   sty = cTCon si
+   var = CVar (id_t pos)
    methodKinds = ["value", "action", "actionvalue"]
-   chkLeaf :: ((String, [(String, String)]), FInf) ->
-              Maybe (String, String, String, FInf)
-   chkLeaf ((path, slots), finf@(FInf f _ _ aIds))
-     | '.' `notElem` path,
-       not (null path),
-       path == getIdBaseString f,
-       maybe False (`elem` methodKinds) (lookup "kind" slots),
-       Just prefixStr <- lookup "prefix" slots,
-       Just resultStr <- lookup "result" slots,
-       -- the argN slots must agree with the declared argument names
-       -- (a stale description must not change the produced wrapper)
-       [ v | (k, v) <- slots,
-             take 3 k == "arg", all isDigit (drop 3 k),
-             not (null (drop 3 k)) ]
-           == map getIdString aIds
-     = Just (path, prefixStr, resultStr, finf)
-     | otherwise = Nothing
+
+   -- walk a field list, threading the un-consumed entries
+   walkList :: IfcPrefixes -> [(String, [(String, String)])] -> [FInf] ->
+               GWMonad (Maybe ([(Id, CExpr, [CQual])], [CStmt],
+                               [(String, [(String, String)])]))
+   walkList _ es [] = return (Just ([], [], es))
+   walkList prefixes es (ft:rest) =
+    do mhead <- walk prefixes es ft
+       case mhead of
+         Nothing -> return Nothing
+         Just (blob, stmts, es') ->
+           do mrest <- walkList prefixes es' rest
+              case mrest of
+                Nothing -> return Nothing
+                Just (blobs, stmtss, es'') ->
+                    return (Just (blob:blobs, stmts ++ stmtss, es''))
+
+   -- one field: subinterface / vector / leaf, mirroring genFromBody's
+   -- meth (and boundaryEntries' ent) case for case
+   walk :: IfcPrefixes -> [(String, [(String, String)])] -> FInf ->
+           GWMonad (Maybe ((Id, CExpr, [CQual]), [CStmt],
+                           [(String, [(String, String)])]))
+   walk prefixes es (FInf f as r aIds) =
+    do mi <- chkInterface r
+       case (mi, as) of
+         (Just (ti, _, sub_fts), []) ->
+           do newprefixes <- extendPrefixes prefixes [] r f
+              msubs <- walkList newprefixes es sub_fts
+              case msubs of
+                Nothing -> return Nothing
+                Just (blobs, stmts, es') ->
+                    return (Just ((f, cInterface ti blobs, []),
+                                  stmts, es'))
+         _ ->
+           do isVec <- isVectorInterfaces r
+              case (isVec, as) of
+                (Just (n, tVec, isListN), []) ->
+                  do newprefixes <- extendPrefixes prefixes [] r f
+                     let vfts = [ FInf (mkNumId num) [] tVec []
+                                | num <- [0..(n-1)] ]
+                     melems <- walkList newprefixes es vfts
+                     case melems of
+                       Nothing -> return Nothing
+                       Just (blobs, stmts, es') ->
+                         let (exprs, gs) =
+                                 unzip [ (e, g) | (_, e, g) <- blobs ]
+                             vec = cToVector isListN exprs
+                         in  return (Just ((f, vec, concat gs),
+                                           stmts, es'))
+                _ -> leaf prefixes es (FInf f as r aIds)
+
+   leaf :: IfcPrefixes -> [(String, [(String, String)])] -> FInf ->
+           GWMonad (Maybe ((Id, CExpr, [CQual]), [CStmt],
+                           [(String, [(String, String)])]))
+   leaf _ [] _ = return Nothing
+   leaf prefixes ((path, slots) : es') (FInf f as r aIds) =
+    do isClock <- isClockType r
+       isReset <- isResetType r
+       isInout <- isInoutType r
+       let isIot = isInout /= Nothing
+           -- the walk's own opaque classification, for agreement
+           -- with the described kind
+           wkind | isClock = Just "clock"
+                 | isReset = Just "reset"
+                 | isIot = Just "inout"
+                 | otherwise = Nothing
+           kindOK = case (lookup "kind" slots, wkind) of
+                      (Just k, Just wk) -> k == wk
+                      (Just k, Nothing) -> k `elem` methodKinds
+                      (Nothing, _) -> False
+           -- the argN slots must agree with the declared argument
+           -- names (a stale description must not change the wrapper)
+           argsOK = [ v | (k, v) <- slots,
+                          take 3 k == "arg", all isDigit (drop 3 k),
+                          not (null (drop 3 k)) ]
+                    == map getIdString aIds
+       case (lookup "prefix" slots, lookup "result" slots) of
+         (Just prefixStr, Just resultStr)
+           | path == getFString (fieldPathName prefixes f),
+             kindOK, argsOK ->
+             do let binf = binId prefixes f
+                    wbinf = mkRdyId binf
+                    sel = CSelect var
+                    meth_guard = CApply eUnpack [sel wbinf]
+                    qs = if (wbinf `elem` true_ifc_ids ||
+                             isClock || isReset || isIot)
+                         then [] else [CQFilter meth_guard]
+                    fnp = mkTypeProxyExpr $ TAp (cTCon idStrArg) $
+                            cTStr (mkFString path) (getIdPosition f)
+                    e = CApply (CVar idFromWrapField) [fnp, sel binf]
+                    proxy = mkTypeProxyExpr $ foldr arrow r as
+                    prefixE = stringLiteralAt noPosition prefixStr
+                    arg_nms = mkList (getPosition f)
+                                [stringLiteralAt (getPosition i)
+                                                 (getIdString i)
+                                 | i <- aIds]
+                    resultE = stringLiteralAt noPosition resultStr
+                    spt = CSExpr Nothing $
+                            cVApply idLiftModule $
+                              [cVApply idSaveFieldPortTypes
+                                 [fnp, proxy,
+                                  mkMaybe (Just (CVar id_x)),
+                                  prefixE, arg_nms, resultE]]
+                return (Just ((f, e, qs), [spt], es'))
+         _ -> return Nothing
 
 
 -- add port properties to method ports in VModInfo
@@ -2320,8 +2385,18 @@ boundaryEntries topIfcId = concatMapM (ent noPrefixes topIfcId)
                 then let kind | isClk = "clock"
                               | isRst = "reset"
                               | otherwise = "inout"
+                         -- naming slots travel on opaque entries too:
+                         -- the fold renders every leaf's
+                         -- saveFieldPortTypes from the description,
+                         -- and the legacy walk emits one for
+                         -- clock/reset/inout leaves as well
+                         oslots = [("path", pathStr), ("kind", kind),
+                                   ("prefix", localPrefix),
+                                   ("result", resultName)]
+                         oslotE (k, v) = mkTuple pos [eStr k, eStr v]
+                         oslotsE = mkList pos (map oslotE oslots)
                      in  return [cVApply idPrimMkOpaqueEntry
-                                     [eStr pathStr, eStr kind]]
+                                     [eStr pathStr, eStr kind, oslotsE]]
                 else do
                   let kind | leftCon rx == Just idActionValue =
                                if leftCon (getActionValueArg rx) == Just idPrimUnit

@@ -1120,12 +1120,12 @@ genModule
                       [ (def_pos, EGeneric ("wrap shadow: " ++ e))
                       | e <- errs ]
 
-    -- the fold (increment 7): under -boundary-fold, hand the parsed
-    -- description to the wrapper renderer, which builds the
+    -- the fold (increments 7-8): under -boundary-fold, hand the
+    -- parsed description to the wrapper renderer, which builds the
     -- interface-rendering body from it (falling back silently to the
-    -- legacy walk outside the pilot scope).  A missing or unreadable
-    -- description is not an error here -- the legacy path renders as
-    -- before
+    -- legacy walk on any description/inventory disagreement).  A
+    -- missing or unreadable description is not an error here -- the
+    -- legacy path renders as before
     mentries <-
         if boundaryFold flags
         then case mbody of

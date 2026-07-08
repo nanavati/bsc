@@ -55,11 +55,11 @@ type DefFun = [PProp] -> Bool -> VWireInfo -> VSchedInfo -> VPathInfo ->
 -- XXX: alwaysEnabled is dropped and broken (not propagated to {inhigh})
 --
 -- The first argument is the module's parsed boundary_ description,
--- when one was found and -boundary-fold asked for it (increment 7):
--- the interface-rendering body is then built from the description's
--- field entries (see GenWrap.genFromBodyDesc) instead of re-walking
--- the symtab.  Nothing, or a description outside the pilot scope,
--- takes the legacy path silently.
+-- when one was found and -boundary-fold asked for it (increments
+-- 7-8): the interface-rendering body is then built from the
+-- description's entries (see GenWrap.genFromBodyDesc) instead of
+-- re-walking the pragma tables.  Nothing, or any disagreement with
+-- the interface inventory, takes the legacy path silently.
 renderWrapperCDefn :: Maybe [BoundaryEntryR a] -> BoundarySpec -> DefFun
 renderWrapperCDefn mentries spec pps fmod wire_info sch pathinfo ips symt fields true_ifc_ids = do
   let
@@ -133,16 +133,20 @@ renderWrapperCDefn mentries spec pps fmod wire_info sch pathinfo ips symt fields
              sch
              pathinfo
       vlift = (cVApply idLiftModule [vexp])
-  -- the fold (increment 7): when the boundary_ description is in
-  -- hand, build the interface-rendering body from its field entries;
-  -- an entry set outside the pilot scope (opaque leaves, hierarchical
-  -- or vector paths, any disagreement with the interface inventory)
-  -- renders by the legacy walk instead
-  let entryLeaf (BFieldR { bf_path = p, bf_slots = ss }) = Just (p, ss)
-      entryLeaf (BOpaqueR {}) = Nothing
-      mfold = do entries <- mentries
-                 ds <- mapM entryLeaf entries
-                 genFromBodyDesc ds arg_pts vlift true_ifc_ids ti_ finfs
+  -- the fold (increments 7-8): when the boundary_ description is in
+  -- hand, build the interface-rendering body from its entries -- the
+  -- description-directed walk consumes them in emission order,
+  -- checking agreement with the interface inventory at every leaf;
+  -- any disagreement renders by the legacy walk instead
+  let entryLeaf (BFieldR { bf_path = p, bf_slots = ss }) = (p, ss)
+      entryLeaf (BOpaqueR { bo_path = p, bo_slots = ss }) = (p, ss)
+  mfold <- case mentries of
+             Nothing -> return Nothing
+             Just entries ->
+                 runGWMonadNoFail
+                     (genFromBodyDesc (map entryLeaf entries)
+                          arg_pts vlift true_ifc_ids ti_ finfs)
+                     st4
   -- instrumentation: when BSC_BOUNDARY_FOLD_LOG names a file, record
   -- the per-module fold-vs-fallback decision there (only meaningful
   -- when a description was supplied, i.e. under -boundary-fold)

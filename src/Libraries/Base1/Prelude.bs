@@ -2635,7 +2635,8 @@ primitive type BoundaryEntry :: *
 primitive primMkFieldEntry :: (WrapField name f w) =>
     StrArg name -> f -> List (String, String) -> BoundaryEntry
 
-primitive primMkOpaqueEntry :: String -> String -> BoundaryEntry
+primitive primMkOpaqueEntry :: String -> String ->
+    List (String, String) -> BoundaryEntry
 
 -- one boundary, several implementations: instantiate the default
 -- (root) implementation and form an implementation group over it;

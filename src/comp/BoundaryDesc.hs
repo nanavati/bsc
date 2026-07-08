@@ -46,7 +46,8 @@ data BoundaryEntryR a
     }
   | BOpaqueR {
         bo_path :: String,
-        bo_kind :: String               -- "clock" | "reset" | "inout"
+        bo_kind :: String,              -- "clock" | "reset" | "inout"
+        bo_slots :: [(String, String)]  -- path/kind/prefix/result
     }
 
 -- the (package-qualified) id of an interface's compiler-emitted
@@ -67,10 +68,13 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
 
     readEntry env e =
       case whead env e of
-        (env', ICon _ (ICPrim { primOp = PrimMkOpaqueEntry }), [p, k]) ->
+        (env', ICon _ (ICPrim { primOp = PrimMkOpaqueEntry }),
+               [p, k, slotsE]) ->
             do path <- readStr1 malformed env' p
                kind <- readStr1 malformed env' k
-               return (BOpaqueR { bo_path = path, bo_kind = kind })
+               slots <- readListSpine malformed readSlot env' slotsE
+               return (BOpaqueR { bo_path = path, bo_kind = kind,
+                                  bo_slots = slots })
         (env', ICon _ (ICPrim { primOp = PrimMkFieldEntry }), as) ->
             -- the application is (dict, name proxy, type proxy,
             -- slots): the resolved WrapField dictionary comes first,

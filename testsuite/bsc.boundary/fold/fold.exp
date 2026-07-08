@@ -1,0 +1,87 @@
+# -boundary-fold (hidden flag): the wrapper's interface-rendering
+# body is built from the module's boundary_<flatifc> description --
+# the description-directed walk consumes the entries in emission
+# order, taking the naming (WrapField name proxy, saveFieldPortTypes
+# prefix/result/argN) from the description while structure and types
+# still follow the interface inventory, and falls back silently to
+# the legacy walk on any disagreement.  Increment 8 widened the walk
+# past the flat pilot: subinterfaces, vectors ([_]-erased entries
+# re-expanded per index), opaque clock/reset/inout leaves (whose
+# entries now carry the naming slots), renamed ports, and the
+# always_ready-on-interface (AR_) flat types.
+#
+# Every source compiles WITHOUT the flag first (the baseline is green
+# independent of the fold), then WITH the flag and a fold-decision
+# log; the log must show `fold <module>' -- and no fallback at all.
+# The testbench links and runs on Bluesim under the flag against a
+# hand-computed .out.expected: the folded wrappers behave.
+
+global env
+
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "*.cexe"
+erase_many "*.cexe.so"
+erase_many "*.out"
+erase_many "*.impls.json"
+erase "fold_decisions.log"
+
+# ----------
+# baseline: each shape compiles without the flag
+
+compile_verilog_pass HierFold.bsv mkHierFold
+compile_verilog_pass VecFold.bsv mkVecFold
+compile_verilog_pass ClkFold.bsv mkClkFold
+compile_verilog_pass InoutFold.bsv mkInoutFold
+compile_verilog_pass ArFold.bsv mkArFold
+compile_verilog_pass RenamedFold.bsv mkRenamedFold
+
+# ----------
+# the fold: fresh state, the flag, and the decision log
+
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+set env(BSC_BOUNDARY_FOLD_LOG) "fold_decisions.log"
+
+compile_verilog_pass HierFold.bsv mkHierFold {-boundary-fold}
+compile_verilog_pass VecFold.bsv mkVecFold {-boundary-fold}
+compile_verilog_pass ClkFold.bsv mkClkFold {-boundary-fold}
+compile_verilog_pass InoutFold.bsv mkInoutFold {-boundary-fold}
+compile_verilog_pass ArFold.bsv mkArFold {-boundary-fold}
+compile_verilog_pass RenamedFold.bsv mkRenamedFold {-boundary-fold}
+
+unset env(BSC_BOUNDARY_FOLD_LOG)
+
+# every widened shape rendered by the fold ...
+find_regexp fold_decisions.log {fold mkHierFold}
+find_regexp fold_decisions.log {fold mkVecFold}
+find_regexp fold_decisions.log {fold mkClkFold}
+find_regexp fold_decisions.log {fold mkInoutFold}
+find_regexp fold_decisions.log {fold mkArFold}
+find_regexp fold_decisions.log {fold mkRenamedFold}
+# ... and nothing took the legacy path
+find_regexp_fail fold_decisions.log {fallback}
+
+# the description's naming reached the boundary: renamed ports in the
+# generated Verilog, concrete vector indices, prefixed subifc ports,
+# and no RDY anywhere on the AR_ boundary
+find_regexp mkRenamedFold.v {nres}
+find_regexp mkRenamedFold.v {np_v}
+find_regexp mkVecFold.v {items_2_put}
+find_regexp mkHierFold.v {SS_poke_x}
+find_regexp_fail mkArFold.v {RDY}
+
+# ----------
+# behavior under the fold (Bluesim)
+
+if { $ctest == 1 } {
+    erase_many "*.bo"
+    erase_many "*.ba"
+    compile_object_pass FoldTb.bsv mkFoldTb {-boundary-fold}
+    link_objects_pass {mkFoldTb} mkFoldTb
+    sim_output mkFoldTb
+    move mkFoldTb.out mkFoldTb.c.out
+    compare_file mkFoldTb.c.out mkFoldTb.out.expected
+}
