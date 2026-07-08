@@ -39,6 +39,7 @@ version = "0.0.1"
 dependencies = [
  "bsim3-ir",
  "inkwell",
+ "libc",
 ]
 
 [[package]]
