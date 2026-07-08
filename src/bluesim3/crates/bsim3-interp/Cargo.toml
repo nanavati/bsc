@@ -9,3 +9,4 @@ repository.workspace = true
 [dependencies]
 bsim3-ir = { path = "../bsim3-ir" }
 libloading = "0.8"
+libc = "0.2"
