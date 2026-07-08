@@ -39,6 +39,12 @@ compile_verilog_pass RenamedFold.bsv mkRenamedFold
 
 # ----------
 # the fold: fresh state, the flag, and the decision log
+# (save any outer census log -- runtest runs every .exp in one
+# process, so this must be restored, not unset)
+
+if { [info exists env(BSC_BOUNDARY_FOLD_LOG)] } {
+    set saved_fold_log $env(BSC_BOUNDARY_FOLD_LOG)
+}
 
 erase_many "*.bo"
 erase_many "*.ba"
@@ -52,7 +58,11 @@ compile_verilog_pass InoutFold.bsv mkInoutFold {-boundary-fold}
 compile_verilog_pass ArFold.bsv mkArFold {-boundary-fold}
 compile_verilog_pass RenamedFold.bsv mkRenamedFold {-boundary-fold}
 
-unset env(BSC_BOUNDARY_FOLD_LOG)
+if { [info exists saved_fold_log] } {
+    set env(BSC_BOUNDARY_FOLD_LOG) $saved_fold_log
+} else {
+    unset env(BSC_BOUNDARY_FOLD_LOG)
+}
 
 # every widened shape rendered by the fold ...
 find_regexp fold_decisions.log {fold mkHierFold}
