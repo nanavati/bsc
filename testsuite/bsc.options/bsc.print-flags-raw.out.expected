@@ -31,6 +31,7 @@ Flags {
 	finalcleanup = 1,
 	genABin = False,
 	genBir = False,
+	genSim3 = False,
 	genName = [],
 	genSysC = False,
 	ifLift = True,
