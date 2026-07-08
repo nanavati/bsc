@@ -662,7 +662,8 @@ defaultFlags bluespecdir = Flags {
         warnUndetPred = False,
         genABinExplicit = False,
         checkWrapShadow = False,
-        boundaryFold = False
+        boundaryFold = False,
+        boundaryInject = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1115,6 +1116,10 @@ externalFlags = [
         ("boundary-fold",
          (Toggle (\f x -> f {boundaryFold=x}) (showIfTrue boundaryFold),
           "render the wrapper interface from the boundary description", Hidden)),
+
+        ("boundary-inject",
+         (Toggle (\f x -> f {boundaryInject=x}) (showIfTrue boundaryInject),
+          "construct the wrapper skeleton at code generation", Hidden)),
 
         ("check-wrap-shadow",
          (Toggle (\f x -> f {checkWrapShadow=x}) (showIfTrue checkWrapShadow),

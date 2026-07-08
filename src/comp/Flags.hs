@@ -171,7 +171,14 @@ data Flags = Flags {
         -- description instead of re-walking the symtab, falling back
         -- silently to the legacy path outside the pilot scope
         -- (the fold as producer; increment 7)
-        boundaryFold :: Bool
+        boundaryFold :: Bool,
+        -- do not plant the wrapper skeleton in the package at
+        -- GenWrap time: the user's def stays a top-level def
+        -- (unrenamed, unstubbed), and the skeleton is constructed at
+        -- genModule time and compiled by the same per-module
+        -- pipeline as the final wrapper (the section-5.3 injection
+        -- relocation, pilot; increment 11)
+        boundaryInject :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

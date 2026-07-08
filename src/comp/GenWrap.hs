@@ -2,6 +2,7 @@
 {-# OPTIONS_GHC -fwarn-name-shadowing #-}
 module GenWrap(
                genWrap,
+               mkInjectedModDef,
                WrapInfo(..),
                BoundarySpec(..),
                -- for GenBoundary (rendering the final wrapper)
@@ -27,8 +28,8 @@ import Control.Monad.State(StateT, runStateT, lift, gets, get, put)
 import PFPrint
 import Position(Position, noPosition, getPositionLine, cmdPosition)
 import Error(internalError, EMsg, EMsgs(..), ErrMsg(..), ErrorHandle, bsError)
-import ErrorMonad(ErrorMonad, convErrorMonadToIO)
-import Flags(Flags)
+import ErrorMonad(ErrorMonad(..), convErrorMonadToIO)
+import Flags(Flags, boundaryInject)
 import FStringCompat
 import PreStrings(fsUnderscore, fs_t, fsTo, fsFrom, fsEmpty, fsEnable, fs_rdy, fsDot)
 import Id
@@ -157,6 +158,11 @@ data BoundarySpec = BoundarySpec
    bs_cqt    :: CQType,   -- qualified type of the wrapper def
    bs_iprags :: [PProp],  -- pragmas from the ifc declaration
    bs_pps    :: [PProp],  -- module pragmas as seen at GenWrap time
+   -- module argument info (user names, types, vector explosion) and
+   -- the argument port-to-type mapping, recorded for the injected
+   -- skeleton construction (increment 11)
+   bs_vtis   :: [(Id, CType, ArgInfo)],
+   bs_argpts :: [(Id, CType)],
    bs_state  :: GenState  -- snapshot of the GenWrap monad state
  }
 
@@ -167,11 +173,13 @@ data WrapInfo = WrapInfo
    wrapper_ifc :: Id,           -- munged interface name
    wrapped_mod :: Id,           -- Id of wrapped module eg.  mkTest_
    wi_prags    :: [PProp],
+   wi_injected :: Bool,         -- no skeleton planted: construct it
+                                -- at genModule time (increment 11)
    wi_boundary :: BoundarySpec
  }
 
 instance PPrint WrapInfo where
-    pPrint d p wi@(WrapInfo id1 cqt id2 id3 ps _) =
+    pPrint d p wi@(WrapInfo id1 cqt id2 id3 ps _ _) =
        text "WrapInfo:" <+> ppId d id1 <> text(" :: ") <> pPrint d 0 cqt <>
        text(" id2: ") <>  ppId d id2 <> text(" id3: ") <>
        ppId d id3 $+$
@@ -363,14 +371,22 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        -- The following make up the new definition list in the CPackage.
        let ifcdefns = map genifc_cdefn newFlatIfcs  -- new interface definitions
 
-       -- create new new module definitions for the CPackage
-       newModule_s <- mapM (mkNewModDef genIfcMap) moduledefs
+       -- create new new module definitions for the CPackage.
+       -- Under -boundary-inject (increment 11) the skeletons are
+       -- NOT planted: they are constructed at genModule time
+       -- (mkInjectedModDef) and compiled by the same per-module
+       -- pipeline as the final wrapper.  mkNewModDef still runs for
+       -- its user-error checks (port-name sanity, interface args).
+       flgs_inj <- getFlags
+       let doInject = boundaryInject flgs_inj && generating
+       newModule_s_all <- mapM (mkNewModDef genIfcMap) moduledefs
+       let newModule_s = if doInject then [] else newModule_s_all
 
        to_Defs <- mapM mkTo_ trs
        from_Defs <- mapM mkFrom_ trs
        let ifcConversionDefs = to_Defs ++ from_Defs
 
-       let fixedDefs = map fixDef defsWithVector
+       let fixedDefs = map (fixDef doInject) defsWithVector
 
        instanceDefs <- concatMapM mkInstances trs
        -- XXX we don't update the symbol table with the new instances
@@ -397,7 +413,7 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
                        signatureDefs ++
                        boundaryDefs
 
-       gens <- mapM (genWrapInfo newFlatIfcs) moduledefs
+       gens <- mapM (genWrapInfo doInject newFlatIfcs) moduledefs
 
        --traceM ( "gen wrap: wrapinfo : " ++ ppReadable gens )
        ----traceM ( "gen Wrap: dis : " ++ ppReadable dis )
@@ -427,12 +443,16 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
                        (internalError "extSym: tried to access field names")
            tyinf = TypeInfo (Just qdi) k vs ti Nothing
 
-       -- removes the [CClause] from the input, and replaces it with singleton list
-       fixDef :: CDefn -> CDefn
-       fixDef (CValueSign (CDef defid t e)) | generating &&
-                                              isGenDef ppmap defid =
+       -- removes the [CClause] from the input, and replaces it with
+       -- singleton list.  Under -boundary-inject the user's def is
+       -- left intact: the injected skeleton calls it by reference,
+       -- and the final wrapper replaces it after synthesis (updDef).
+       fixDef :: Bool -> CDefn -> CDefn
+       fixDef inj (CValueSign (CDef defid t e)) | generating &&
+                                                  not inj &&
+                                                  isGenDef ppmap defid =
            CValueSign (CDef defid t [CClause [] [] (CVar defid)])
-       fixDef d = d
+       fixDef _ d = d
 
 
 -- --------------------
@@ -647,8 +667,8 @@ fixupPolyModType ty =
 -- Pragmas on the ifc type declaration are added to the module's list of
 -- pragmas (returned in the WrapInfo).
 
-genWrapInfo :: [GeneratedIfc] -> ModDefInfo -> GWMonad WrapInfo
-genWrapInfo genifcs (d@(CDef modName oqt@(CQType _ t) cls), cqt, _, pps) =
+genWrapInfo :: Bool -> [GeneratedIfc] -> ModDefInfo -> GWMonad WrapInfo
+genWrapInfo injected genifcs (d@(CDef modName oqt@(CQType _ t) cls), cqt, vtis, pps) =
  do
    ifcName_ <- ifcNameFromMod pps t
    -- lookup the generate ifc for this module
@@ -661,14 +681,26 @@ genWrapInfo genifcs (d@(CDef modName oqt@(CQType _ t) cls), cqt, _, pps) =
    -- XXX the new module name should be already created in ModDefInfo,
    -- XXX so that it does not have to be created both here and in mkNewModDef
    let newModName = modIdRename pps modName
-   --traceM ("genWrapInfo" ++ ppReadable ifcName_ ++ ppReadable newModName)
-   --traceM ("genWrapInfo" ++ ppReadable genifcs)
-   spec <- mkDef iprops pps d cqt -- pass down the pragma for the wrapper gen state
+   -- the argument port-to-type mapping, for the injected skeleton's
+   -- saveTopModPortType statements (any port-name errors were
+   -- already reported by mkNewModDef's own call)
+   flgs <- getFlags
+   let cfields = case genifc_cdefn ifc of
+                   (Cstruct _ _ _ _ cs _) -> cs
+                   _ -> []
+   ftps <- mapM collectIfcInfoW (reverse cfields)
+   let argpts = case checkModulePortNames flgs (getPosition modName)
+                         pps vtis ftps of
+                  EMResult aps -> aps
+                  EMWarning _ aps -> aps
+                  EMError _ -> []
+   spec <- mkDef iprops pps d cqt vtis argpts
    return WrapInfo { mod_nm      = modName,
                      orig_cqt    = oqt,
                      wrapper_ifc = ifcName_,
                      wrapped_mod = newModName,
                      wi_prags    = (pps ++ iprops),-- combine pragmas
+                     wi_injected = injected,
                      wi_boundary = spec }
  where
    --Get interface name from module XXX make disappear
@@ -679,8 +711,15 @@ genWrapInfo genifcs (d@(CDef modName oqt@(CQType _ t) cls), cqt, _, pps) =
        tr = case getArrows localt of
               (_, TAp _ r) -> r
               _ -> internalError "GenWrap.genWrapInfo ifcNameFromMod: tr"
-genWrapInfo _ (def,_,_,_) =
+genWrapInfo _ _ (def,_,_,_) =
     internalError( "genWrapInfo: unexpected def: " ++ ppReadable def )
+
+-- the field-id/type/pragmas triple of a generated interface field
+-- (shared with mkNewModDef's local collectIfcInfo)
+collectIfcInfoW :: CField -> GWMonad (Id, CType, [IfcPragma])
+collectIfcInfoW (CField {cf_name = fid, cf_pragmas = ps,
+                         cf_type = CQType _ ftype }) =
+    return (fid, ftype, fromMaybe [] ps)
 
 
 -- --------------------
@@ -1431,53 +1470,10 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
      return (fid, ftype, fromMaybe [] ps)
 
    convVar :: ArgInfo -> GWMonad CExpr
-   convVar (Simple v lt) =
-     do
-       cint <- chkInterface lt
-       case cint of
-         Just (ti, _, fts) -> -- interface arguments are not supported
-                              bad (getPosition v,
-                                   EInterfaceArg (pfpString i))
-         Nothing ->
-          do
-            isInout <- isInoutType lt
-            case isInout of
-             Just _ -> return (CApply ePrimInoutUncast0 [CVar v])
-             _ ->
-              do
-               isClock <- isClockType lt
-               isReset <- isResetType lt
-               isParam <- isParamType lt
-               if (isClock || isReset || isParam)
-                 then return (CVar v)
-                 else return (CApply eUnpack [CVar v])
-   convVar (Vector isListN _ _ sub_ports) = do
-       -- get the expression for each port
-       -- (which may split the ports further)
-       elem_es <- mapM convVar sub_ports
-       return $ cToVector isListN elem_es
+   convVar = convModArg i
 
    mkCtx :: ([CPred], Type) -> (Type, Type) -> GWMonad ([CPred], Type)
-   mkCtx (ctx, rt) (lt, v) =
-    do
-      -- XXX interface argument remnant
-      isgIfc <- isGoodInterface lt
-      if isgIfc
-        then do
-          ft <- flatTypeId [] lt
-          return (ctx, cTCon ft `fn` rt)
-        else do
-          isInout <- isInoutType lt
-          case isInout of
-            Just tt -> return ((CPred (CTypeclass idBits) [tt, v]):ctx,
-                               TAp tInout_ v `fn` rt)
-            _ -> do
-                  isClock <- isClockType lt
-                  isReset <- isResetType lt
-                  isParam <- isParamType lt
-                  if (isClock || isReset || isParam)
-                     then return (ctx, lt `fn` rt)
-                     else return ((CPred (CTypeclass idBits) [lt, v]):ctx, TAp tBit v `fn` rt)
+   mkCtx = mkArgCtx
 
 mkNewModDef _ (def,_,_,_) =
     internalError ("GenWrap::mkNewModDef unexpected definition " ++ show def )
@@ -1490,18 +1486,110 @@ mkNewModDef _ (def,_,_,_) =
 -- the data used at the end of synthesis to do the final wrapper
 -- computation (see GenBoundary.renderWrapperCDefn).
 
-mkDef :: [PProp] -> [PProp] -> CDef -> CQType -> GWMonad BoundarySpec
-mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
+mkDef :: [PProp] -> [PProp] -> CDef -> CQType ->
+         [(Id, CType, ArgInfo)] -> [(Id, CType)] -> GWMonad BoundarySpec
+mkDef iprags pps (CDef i (CQType _ qt) _) cqt vtis argpts = do
  st0 <- get
  return (BoundarySpec { bs_id     = i,
                         bs_qt     = qt,
                         bs_cqt    = cqt,
                         bs_iprags = iprags,
                         bs_pps    = pps,
+                        bs_vtis   = vtis,
+                        bs_argpts = argpts,
                         bs_state  = st0 })
 
-mkDef _ _ def _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
+mkDef _ _ def _ _ _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
 
+
+-- The injected skeleton (increment 11): the same module definition
+-- mkNewModDef plants in the package, constructed instead at
+-- genModule time from the BoundarySpec -- with the user's module
+-- called BY REFERENCE (the user's def stays top-level and intact)
+-- rather than let-bound inside.  The user-error checks (port names,
+-- interface arguments) already ran at GenWrap time.
+mkInjectedModDef :: BoundarySpec -> GWMonad CDefn
+mkInjectedModDef spec = do
+   let i = bs_id spec
+       qt = bs_qt spec
+       pps = bs_pps spec
+       vtis = bs_vtis spec
+       arg_pts = bs_argpts spec
+   let tr = case getArrows qt of
+              (_, TAp _ r) -> r
+              _ -> internalError "GenWrap.mkInjectedModDef: tr"
+   cint <- chkInterface tr
+   (ifcId, _, fts) <- case cint of
+                        Just res -> return res
+                        Nothing -> internalError
+                                     "GenWrap.mkInjectedModDef: cint"
+   tyId <- flatTypeId pps tr
+   let ty = tmod (cTCon tyId)
+   let arg_infos = thd $ unzip3 vtis
+       (vs, ts) = unzip $ concatMap extractVTPairs arg_infos
+   exprs <- mapM (convModArg i) arg_infos
+   let mexp = cApply 10 (CVar i) exprs
+       arg_sptStmts = map (uncurry saveTopModPortTypeStmt) arg_pts
+   ifc_sptStmts <- mkFieldSavePortTypeStmts Nothing ifcId fts
+   let sptStmts = arg_sptStmts ++ ifc_sptStmts
+       lexp = if not (null sptStmts)
+              then Cdo False (sptStmts ++ [CSExpr Nothing mexp])
+              else mexp
+       to = cVApply idLiftM [CVar (to_Id tyId), lexp]
+       cls = CClause (map CPVar vs) [] to
+   let tvs = map cTVarNum (take (length ts) tmpTyVarIds)
+   (ctx, ty') <- foldM mkArgCtx ([], ty) (reverse (zip ts tvs))
+   return (CValueSign (CDef (modIdRename pps i) (CQType ctx ty') [cls]))
+
+-- convert a wrapper-skeleton argument from its bitified/blasted
+-- ports back to the user module's argument (shared by mkNewModDef
+-- and mkInjectedModDef; the Id names the module, for error messages)
+convModArg :: Id -> ArgInfo -> GWMonad CExpr
+convModArg mid (Simple v lt) =
+  do
+    cint <- chkInterface lt
+    case cint of
+      Just _ -> bad (getPosition v, EInterfaceArg (pfpString mid))
+      Nothing ->
+       do
+         isInout <- isInoutType lt
+         case isInout of
+          Just _ -> return (CApply ePrimInoutUncast0 [CVar v])
+          _ ->
+           do
+            isClock <- isClockType lt
+            isReset <- isResetType lt
+            isParam <- isParamType lt
+            if (isClock || isReset || isParam)
+              then return (CVar v)
+              else return (CApply eUnpack [CVar v])
+convModArg mid (Vector isListN _ _ sub_ports) = do
+    elem_es <- mapM (convModArg mid) sub_ports
+    return $ cToVector isListN elem_es
+
+-- the skeleton's proviso context and bitified type, one argument at
+-- a time (shared by mkNewModDef and mkInjectedModDef)
+mkArgCtx :: ([CPred], Type) -> (Type, Type) -> GWMonad ([CPred], Type)
+mkArgCtx (ctx, rt) (lt, v) =
+ do
+   isgIfc <- isGoodInterface lt
+   if isgIfc
+     then do
+       ft <- flatTypeId [] lt
+       return (ctx, cTCon ft `fn` rt)
+     else do
+       isInout <- isInoutType lt
+       case isInout of
+         Just tt -> return ((CPred (CTypeclass idBits) [tt, v]):ctx,
+                            TAp tInout_ v `fn` rt)
+         _ -> do
+               isClock <- isClockType lt
+               isReset <- isResetType lt
+               isParam <- isParamType lt
+               if (isClock || isReset || isParam)
+                  then return (ctx, lt `fn` rt)
+                  else return ((CPred (CTypeclass idBits) [lt, v]):ctx,
+                               TAp tBit v `fn` rt)
 
 mkArgPortTypes :: VWireInfo -> [CType] -> [(VPort, CType)]
 mkArgPortTypes wire_info arg_ts =

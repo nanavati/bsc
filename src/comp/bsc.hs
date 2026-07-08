@@ -96,7 +96,8 @@ import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
-import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..), isRdyToRemoveField)
+import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..), GenState(..),
+               isRdyToRemoveField, mkInjectedModDef, runGWMonadNoFail)
 import GenBoundary(renderWrapperCDefn)
 import BoundaryDesc(boundaryIdForIfc, readBoundaryEntries, codecShadowErrs, wrapperCodecs,
                     shadowBoundaryErrs)
@@ -559,19 +560,23 @@ compilePackage
         orderGens (IPackage pid _ _ ds) gs =
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
-          where gis = [ qualId pid i
-                                | (WrapInfo i _ _ _ _ _) <- gs ]
-                tr = [ (qualId pid i_, qualId pid i)
-                                | (WrapInfo i _ _ i_ _ _) <- gs ]
+          where gis = [ qualId pid (mod_nm w) | w <- gs ]
+                -- an injected module (increment 11) has no planted
+                -- skeleton and no stub: its own (intact) def is the
+                -- reference-graph node, so only legacy modules'
+                -- original-name defs are excluded and renamed
+                gis_lgy = [ qualId pid (mod_nm w)
+                                | w <- gs, not (wi_injected w) ]
+                tr = [ (qualId pid (wrapped_mod w), qualId pid (mod_nm w))
+                                | w <- gs, not (wi_injected w) ]
                 ds' = [ IDef (lookupWithDefault tr i i) t e p
-                                | IDef i t e p <- ds, i `notElem` gis ]
+                                | IDef i t e p <- ds, i `notElem` gis_lgy ]
                 is = [ i | IDef i _ _ _ <- ds' ]
                 g  = [ (i, fdVars e `intersect` is) | IDef i _ e _ <- ds' ]
                 iis = scc g
                 os = concat iis `intersect` gis
                 get i = headOrErr "bsc.orderGens: no WrapInfo"
-                                  [ x | x@(WrapInfo i' _ _ _ _ _) <- gs,
-                                                unQualId i == i' ]
+                                  [ x | x <- gs, unQualId i == mod_nm x ]
         ordgens :: [WrapInfo]
         ordgens = orderGens imods gens
 
@@ -604,10 +609,37 @@ compilePackage
                 ex_filt ex = do (CE.ErrorCall s) <- (CE.fromException ex)::(Maybe CE.ErrorCall)
                                 return s
                 def_comp = do
+                  -- an injected module (increment 11): the skeleton
+                  -- is constructed here from the BoundarySpec and
+                  -- compiled by the same per-module pipeline as the
+                  -- final wrapper, instead of having been planted in
+                  -- the package at GenWrap time
+                  (elab_def, okS) <-
+                      if wi_injected wi
+                      then do
+                        let st = (bs_state (wi_boundary wi))
+                                     { symtable = symt }
+                        skel <- runGWMonadNoFail
+                                    (mkInjectedModDef (wi_boundary wi))
+                                    st
+                        milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
+                        case milog of
+                          Just fn -> appendFile fn
+                              ("inject " ++ getIdBaseString i ++ "\n")
+                          Nothing -> return ()
+                        compileCDefToIDef errh flags dumpnames'
+                            symt imods skel
+                      else do
+                        milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
+                        case milog of
+                          Just fn -> appendFile fn
+                              ("legacy " ++ getIdBaseString i ++ "\n")
+                          Nothing -> return ()
+                        return (getDef im i', True)
                   def <- genModule errh wi fwrapper flags dumpnames'
                              prefix (getIdBaseString pkgId)
-                             internalSymt alldefs (getDef im i')
-                  return (def, True)
+                             internalSymt alldefs elab_def
+                  return (def, okS)
                 ex_comp s = do
                   hFlush stdout >> hPutStr stderr s
                   -- XXX exitFail will do the pre-exit actions again

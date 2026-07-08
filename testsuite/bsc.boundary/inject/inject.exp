@@ -1,0 +1,87 @@
+# -boundary-inject (hidden flag; increment 11 pilot of the design
+# doc's section-5.3 injection relocation): GenWrap does NOT plant the
+# wrapper skeleton in the package -- the user's def stays a
+# top-level def, unrenamed and unstubbed, typechecked as written --
+# and the skeleton is constructed at genModule time from the
+# recorded BoundarySpec and compiled by the same per-module pipeline
+# as the final wrapper.  The generated hardware must be identical
+# (the byte-identity gate lives in the corpus comparison; here the
+# census, the boundary port names, behavior on Bluesim, and the
+# survival of user errors whose reporting phase moved).
+
+global env
+
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+erase_many "*.cexe"
+erase_many "*.cexe.so"
+erase_many "*.out"
+erase_many "*.impls.json"
+erase "inject_decisions.log"
+
+# ----------
+# baseline: every shape compiles without the flag
+
+compile_verilog_pass HierInj.bsv mkHierInj
+compile_verilog_pass ArgInj.bsv mkArgInj
+compile_fail_error BadArgInj.bsv T0032
+
+# ----------
+# injection: fresh state, the flag, and the decision census
+
+if { [info exists env(BSC_BOUNDARY_INJECT_LOG)] } {
+    set saved_inject_log $env(BSC_BOUNDARY_INJECT_LOG)
+}
+
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+set env(BSC_BOUNDARY_INJECT_LOG) "inject_decisions.log"
+
+compile_verilog_pass HierInj.bsv mkHierInj {-boundary-inject}
+compile_verilog_pass ArgInj.bsv mkArgInj {-boundary-inject}
+
+# the injected boundary is the same boundary: prefixed subifc ports,
+# and the argument ports/parameters all present
+find_regexp mkHierInj.v {SS_poke_x}
+find_regexp mkHierInj.v {RDY_SS_peek}
+find_regexp mkArgInj.v {parameter \[3 : 0\] p}
+find_regexp mkArgInj.v {input  \[7 : 0\] d}
+find_regexp mkArgInj.v {input  \[7 : 0\] k_0}
+find_regexp mkArgInj.v {input  \[7 : 0\] k_1}
+
+# a user error in the module's argument types survives (its phase
+# moves to genModule; the message does not disappear)
+compile_fail_error BadArgInj.bsv T0032 1 {-boundary-inject}
+
+# the injection substrate composes with the description substrate:
+# fold + shadow + inject together
+erase_many "*.bo"
+erase_many "*.ba"
+erase_many "mk*.v"
+compile_verilog_pass HierInj.bsv mkHierInj {-boundary-inject -boundary-fold -check-wrap-shadow}
+
+if { [info exists saved_inject_log] } {
+    set env(BSC_BOUNDARY_INJECT_LOG) $saved_inject_log
+} else {
+    unset env(BSC_BOUNDARY_INJECT_LOG)
+}
+
+# every generated module went through the injected path
+find_regexp inject_decisions.log {inject mkHierInj}
+find_regexp inject_decisions.log {inject mkArgInj}
+find_regexp_fail inject_decisions.log {legacy}
+
+# ----------
+# behavior under injection (Bluesim)
+
+if { $ctest == 1 } {
+    erase_many "*.bo"
+    erase_many "*.ba"
+    compile_object_pass InjTb.bsv mkInjTb {-boundary-inject}
+    link_objects_pass {mkInjTb} mkInjTb
+    sim_output mkInjTb
+    move mkInjTb.out mkInjTb.c.out
+    compare_file mkInjTb.c.out mkInjTb.out.expected
+}
