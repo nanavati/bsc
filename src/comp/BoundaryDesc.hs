@@ -16,9 +16,14 @@ import PreIds(idBuildUndef, idFromWrapField)
 import Position(noPosition)
 import FStringCompat(mkFString, getFString)
 import ISyntax
+import ISyntaxSubst(tSubst)
 import VModInfo(VFieldInfo(..))
+import SymTab(SymTab, findType, findSClass, TypeInfo(..))
+import CType(TISort(..), CTypeclass(..))
+import Pred(Class(..))
 import Pragma(PProp, isAlwaysRdy)
 import Prim(PrimOp(..))
+import PPrint(ppReadable)
 import ContractCheck(whead, readStr1, readListSpine, readPairWith)
 
 -- ==================================================
@@ -103,14 +108,37 @@ expandVars n env e0 =
 -- bodies behind ICDef references (a same-package reference carries
 -- the real body, a cross-package one an undet placeholder -- the
 -- def Id is the identity), and application-spine nesting (compared
--- through the headTypes-normalized view)
-dictEq :: IExpr a -> IExpr a -> Bool
-dictEq a b =
+-- through the headTypes-normalized view).  A node of an
+-- EVIDENCE-ONLY class (no methods -- numeric evidence like
+-- TupleSize) compares by its fully-applied dictionary type alone:
+-- different compiles legitimately construct such dictionaries
+-- differently (a structural ICTuple vs the source instance chain,
+-- the b1356 finding), and with no methods the construction is
+-- observationally irrelevant
+dictEq :: (IType -> Bool) -> IExpr a -> IExpr a -> Bool
+dictEq evOnly a b =
     let (ha, tsa, esa) = headTypes M.empty a
         (hb, tsb, esb) = headTypes M.empty b
-    in  headEq ha hb && tsa == tsb &&
-        length esa == length esb && and (zipWith dictEq esa esb)
+        strict = headEq ha hb && tsa == tsb &&
+                 length esa == length esb &&
+                 and (zipWith (dictEq evOnly) esa esb)
+        evid = case (appliedTy ha tsa esa, appliedTy hb tsb esb) of
+                 (Just ta, Just tb) -> ta == tb && evOnly ta
+                 _ -> False
+    in  strict || evid
   where
+    appliedTy (ICon _ ci) ts es =
+        do t <- itInst (iConType ci) ts
+           dropArrs (length es) t
+    appliedTy _ _ _ = Nothing
+    itInst t [] = Just t
+    itInst (ITForAll v _ r) (t:ts) = itInst (tSubst v t r) ts
+    itInst _ _ = Nothing
+    dropArrs :: Int -> IType -> Maybe IType
+    dropArrs 0 t = Just t
+    dropArrs n (ITAp (ITAp arr _) r) | arr == itArrow =
+        dropArrs (n - 1) r
+    dropArrs _ _ = Nothing
     headEq (ICon i1 c1) (ICon i2 c2) = i1 == i2 && conEq c1 c2
     headEq (IVar v1) (IVar v2) = v1 == v2
     headEq _ _ = False
@@ -129,6 +157,24 @@ dictEq a b =
         c1 == c2
     conEq (ICTuple {}) (ICTuple {}) = True
     conEq _ _ = False
+
+-- is this fully-applied dictionary type of a class with NO methods
+-- (evidence-only)?  The class-dictionary struct's fields are its
+-- methods plus one slot per superclass; methodless means the field
+-- count does not exceed the superclass count.
+evOnlyClassTy :: SymTab -> IType -> Bool
+evOnlyClassTy symt t0 =
+    case itLeftCon t0 of
+      Just ci ->
+          case (findType symt ci, findSClass symt (CTypeclass ci)) of
+            (Just (TypeInfo _ _ _ (TIstruct _ fs) _), Just cls) ->
+                length fs <= length (super cls)
+            _ -> False
+      Nothing -> False
+  where
+    itLeftCon (ITAp f _) = itLeftCon f
+    itLeftCon (ITCon ci _ _) = Just ci
+    itLeftCon _ = Nothing
 
 readBoundaryEntries :: IExpr a -> Either String [BoundaryEntryR a]
 readBoundaryEntries = readListSpine malformed readEntry M.empty
@@ -207,30 +253,32 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
 -- flat map sound) and inlined before comparison.
 
 -- every (leaf name, fully-inlined dictionary) pair in a compiled
--- wrapper body
+-- wrapper body (two accumulator-style passes: collect the let
+-- bindings, then the fromWrapField applications)
 wrapperCodecs :: IExpr a -> [(String, Either String (IExpr a))]
 wrapperCodecs wbody =
-    let binds = M.fromList (lets wbody)
+    let binds = M.fromList (lets wbody [])
 
-        lets e = case e of
-                   IAps (ILam v _ b) _ [rhs] ->
-                       (v, rhs) : lets b ++ lets rhs
-                   IAps f _ es -> lets f ++ concatMap lets es
-                   ILam _ _ b -> lets b
-                   ILAM _ _ b -> lets b
-                   _ -> []
+        lets e acc = case e of
+                       IAps (ILam v _ b) _ [rhs] ->
+                           (v, rhs) : lets b (lets rhs acc)
+                       IAps f _ es -> lets f (foldr lets acc es)
+                       ILam _ _ b -> lets b acc
+                       ILAM _ _ b -> lets b acc
+                       _ -> acc
 
-        uses e = case e of
-                   IAps (ICon i (ICSel {})) (ITStr s : _) (d : _)
-                     | i == idFromWrapField ->
-                       (getFString s, expandVars 200 binds d) : deeper e
-                   _ -> deeper e
-        deeper e = case e of
-                     IAps f _ es -> uses f ++ concatMap uses es
-                     ILam _ _ b -> uses b
-                     ILAM _ _ b -> uses b
-                     _ -> []
-    in  uses wbody
+        uses e acc = case e of
+                       IAps (ICon i (ICSel {})) (ITStr s : _) (d : _)
+                         | i == idFromWrapField ->
+                           (getFString s, expandVars 200 binds d)
+                               : deeper e acc
+                       _ -> deeper e acc
+        deeper e acc = case e of
+                         IAps f _ es -> uses f (foldr uses acc es)
+                         ILam _ _ b -> uses b acc
+                         ILAM _ _ b -> uses b acc
+                         _ -> acc
+    in  uses wbody []
 
 -- compare a compiled wrapper's codecs against the description's:
 -- every fromWrapField dictionary must be structurally identical to
@@ -238,13 +286,15 @@ wrapperCodecs wbody =
 -- leaves share one parametric entry, so several uses may check
 -- against the same recorded codec); opaque leaves (clock, reset,
 -- inout) have no recorded codec and are skipped
-codecShadowErrs :: [BoundaryEntryR a] -> IExpr a -> [String]
-codecShadowErrs entries wbody =
-    let recorded = [ (bf_path e, cr_body (bf_codec e))
+codecShadowErrs :: SymTab -> [BoundaryEntryR a] ->
+                   [(String, Either String (IExpr a))] -> [String]
+codecShadowErrs symt entries pairs =
+    let evOnly = evOnlyClassTy symt
+        recorded = [ (bf_path e, cr_body (bf_codec e))
                    | e@(BFieldR {}) <- entries ]
         opaque = [ bo_path e | e@(BOpaqueR {}) <- entries ]
     in  [ err
-        | (nm, mdict) <- wrapperCodecs wbody,
+        | (nm, mdict) <- pairs,
           nm `notElem` opaque,
           err <- case (lookup nm recorded, mdict) of
                    (Nothing, _) ->
@@ -253,10 +303,12 @@ codecShadowErrs entries wbody =
                    (_, Left msg) ->
                        ["codec of `" ++ nm ++ "': " ++ msg]
                    (Just rec_d, Right got_d)
-                     | dictEq rec_d got_d -> []
+                     | dictEq evOnly rec_d got_d -> []
                      | otherwise ->
                          ["codec of `" ++ nm ++ "' differs from the " ++
-                          "description's recorded dictionary"] ]
+                          "description's recorded dictionary\n" ++
+                          "  recorded: " ++ ppReadable rec_d ++
+                          "  re-solved: " ++ ppReadable got_d] ]
 
 -- ==================================================
 -- The shadow check (increment 6): does the description determine the

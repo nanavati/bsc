@@ -650,6 +650,7 @@ compilePackage
                     IDef _ _ wbody _ = idef
                 in  case fmap readBoundaryEntries mbody of
                       Just (Right entries) -> do
+                          let pairs = wrapperCodecs wbody
                           -- census hook: BSC_CODEC_SHADOW_LOG records
                           -- how many codec applications were compared
                           -- per module (proof the check is not
@@ -658,10 +659,9 @@ compilePackage
                           case mclog of
                             Just fn -> appendFile fn
                                 ("codecs " ++ getIdBaseString i ++ " " ++
-                                 show (length (wrapperCodecs wbody)) ++
-                                 "\n")
+                                 show (length pairs) ++ "\n")
                             Nothing -> return ()
-                          case codecShadowErrs entries wbody of
+                          case codecShadowErrs symt entries pairs of
                             [] -> return ()
                             errs -> bsError errh
                                 [ (getPosition i,
