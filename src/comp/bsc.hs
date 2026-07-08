@@ -3,7 +3,7 @@ module Main_bsc(main, hmain) where
 
 -- Haskell libs
 import Prelude
-import System.Environment(getArgs, getProgName)
+import System.Environment(getArgs, getProgName, lookupEnv)
 import System.Process(runInteractiveProcess, waitForProcess)
 import System.Process(system)
 import System.Exit(ExitCode(ExitFailure, ExitSuccess))
@@ -98,7 +98,7 @@ import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
 import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..), isRdyToRemoveField)
 import GenBoundary(renderWrapperCDefn)
-import BoundaryDesc(boundaryIdForIfc, readBoundaryEntries,
+import BoundaryDesc(boundaryIdForIfc, readBoundaryEntries, codecShadowErrs, wrapperCodecs,
                     shadowBoundaryErrs)
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
@@ -632,6 +632,42 @@ compilePackage
             -- since it will already appear as a user error, no need for
             -- an internal error
             (idef, ok2) <- compileCDefToIDef errh flags dumpnames' symt imods def
+
+            -- the codec shadow (increment 10): the compiled wrapper
+            -- re-solved one WrapField dictionary per boundary leaf;
+            -- each must be structurally identical to the codec the
+            -- description recorded at the declaration
+            when (checkWrapShadow flags && ok && ok2) $
+                let bid = boundaryIdForIfc (wrapper_ifc wi)
+                    bid_base = getIdBaseString bid
+                    mbody = case M.lookup bid alldefs of
+                              Just b -> Just b
+                              Nothing ->
+                                case [ b | (di, b) <- M.toList alldefs,
+                                           getIdBaseString di == bid_base ] of
+                                  (b:_) -> Just b
+                                  [] -> Nothing
+                    IDef _ _ wbody _ = idef
+                in  case fmap readBoundaryEntries mbody of
+                      Just (Right entries) -> do
+                          -- census hook: BSC_CODEC_SHADOW_LOG records
+                          -- how many codec applications were compared
+                          -- per module (proof the check is not
+                          -- vacuous at suite scale)
+                          mclog <- lookupEnv "BSC_CODEC_SHADOW_LOG"
+                          case mclog of
+                            Just fn -> appendFile fn
+                                ("codecs " ++ getIdBaseString i ++ " " ++
+                                 show (length (wrapperCodecs wbody)) ++
+                                 "\n")
+                            Nothing -> return ()
+                          case codecShadowErrs entries wbody of
+                            [] -> return ()
+                            errs -> bsError errh
+                                [ (getPosition i,
+                                   EGeneric ("wrap shadow: " ++ e))
+                                | e <- errs ]
+                      _ -> return ()
 
             t <- getNow
             start flags DFwrapper_fixup

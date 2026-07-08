@@ -3,16 +3,18 @@ module BoundaryDesc(
                     CodecRef(..),
                     boundaryIdForIfc,
                     readBoundaryEntries,
-                    shadowBoundaryErrs
+                    shadowBoundaryErrs,
+                    codecShadowErrs,
+                    wrapperCodecs
                    ) where
 
 import qualified Data.Map as M
 import Data.Char(isAlphaNum)
 
 import Id
-import PreIds(idBuildUndef)
+import PreIds(idBuildUndef, idFromWrapField)
 import Position(noPosition)
-import FStringCompat(mkFString)
+import FStringCompat(mkFString, getFString)
 import ISyntax
 import VModInfo(VFieldInfo(..))
 import Pragma(PProp, isAlwaysRdy)
@@ -74,6 +76,60 @@ headTypes env e0 = go env e0 [] []
     go env' (IVar v) tss as | Just d <- M.lookup v env' = go env' d tss as
     go _ h tss as = (h, tss, as)
 
+-- fully inline an environment's bindings into an expression, making
+-- it self-contained (dictionary trees are small and ground; the fuel
+-- bounds variable-chain loops, which cannot arise from letseq but
+-- guard against malformed input)
+expandVars :: Int -> M.Map Id (IExpr a) -> IExpr a ->
+              Either String (IExpr a)
+expandVars n env e0 =
+    case e0 of
+      IVar v | Just d <- M.lookup v env ->
+                 if n <= 0
+                 then Left "dictionary expansion out of fuel"
+                 else expandVars (n - 1) env d
+             | otherwise -> Right e0
+      IAps f ts es ->
+          do f' <- expandVars n env f
+             es' <- mapM (expandVars n env) es
+             return (IAps f' ts es')
+      ILam v t b ->
+          ILam v t `fmap` expandVars n (M.delete v env) b
+      ILAM v k b ->
+          ILAM v k `fmap` expandVars n env b
+      _ -> Right e0
+
+-- structural equality of dictionary trees, modulo positions, the
+-- bodies behind ICDef references (a same-package reference carries
+-- the real body, a cross-package one an undet placeholder -- the
+-- def Id is the identity), and application-spine nesting (compared
+-- through the headTypes-normalized view)
+dictEq :: IExpr a -> IExpr a -> Bool
+dictEq a b =
+    let (ha, tsa, esa) = headTypes M.empty a
+        (hb, tsb, esb) = headTypes M.empty b
+    in  headEq ha hb && tsa == tsb &&
+        length esa == length esb && and (zipWith dictEq esa esb)
+  where
+    headEq (ICon i1 c1) (ICon i2 c2) = i1 == i2 && conEq c1 c2
+    headEq (IVar v1) (IVar v2) = v1 == v2
+    headEq _ _ = False
+    conEq (ICDef {}) (ICDef {}) = True
+    conEq (ICValue {}) (ICValue {}) = True
+    conEq (ICDef {}) (ICValue {}) = True
+    conEq (ICValue {}) (ICDef {}) = True
+    conEq (ICSel { selNo = n1, numSel = m1 })
+          (ICSel { selNo = n2, numSel = m2 }) = n1 == n2 && m1 == m2
+    conEq (ICPrim { primOp = p1 }) (ICPrim { primOp = p2 }) = p1 == p2
+    conEq (ICString { iStr = s1 }) (ICString { iStr = s2 }) = s1 == s2
+    conEq (ICInt { iVal = v1 }) (ICInt { iVal = v2 }) = v1 == v2
+    conEq (ICUndet { iConType = t1 }) (ICUndet { iConType = t2 }) =
+        t1 == t2
+    conEq (ICCon { conTagInfo = c1 }) (ICCon { conTagInfo = c2 }) =
+        c1 == c2
+    conEq (ICTuple {}) (ICTuple {}) = True
+    conEq _ _ = False
+
 readBoundaryEntries :: IExpr a -> Either String [BoundaryEntryR a]
 readBoundaryEntries = readListSpine malformed readEntry M.empty
   where
@@ -118,13 +174,18 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
                                  (ICon _ (ICUndet { iConType = t }),
                                   _, _) -> Just t
                                  _ -> Nothing
+                     -- record the codec self-contained: the entry's
+                     -- dictionary argument may be a let-bound
+                     -- variable of the description def; inline the
+                     -- reading environment into it (increment 10)
+                     dict' <- expandVars 200 env' dict
                      return (BFieldR { bf_path = path,
                                        bf_slots = slots,
                                        bf_ftype = mft,
                                        bf_codec = CodecRef {
                                            cr_name = nm,
                                            cr_types = [],
-                                           cr_body = dict } })
+                                           cr_body = dict' } })
               _ -> malformed
         _ -> malformed
 
@@ -135,6 +196,67 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
               sv <- readStr1 malformed env' v
               return (sk, sv))
         env e
+
+-- ==================================================
+-- The codec shadow (increment 10): does the description's recorded
+-- codec EQUAL the dictionary the wrapper's own compilation re-solved?
+-- The compiled wrapper definition applies the fromWrapField class
+-- method once per boundary leaf (dictionary first, per IConv's field
+-- application shape); its let-bound dictionaries are applied-lambda
+-- shapes, collected into one environment (letseq freshness makes the
+-- flat map sound) and inlined before comparison.
+
+-- every (leaf name, fully-inlined dictionary) pair in a compiled
+-- wrapper body
+wrapperCodecs :: IExpr a -> [(String, Either String (IExpr a))]
+wrapperCodecs wbody =
+    let binds = M.fromList (lets wbody)
+
+        lets e = case e of
+                   IAps (ILam v _ b) _ [rhs] ->
+                       (v, rhs) : lets b ++ lets rhs
+                   IAps f _ es -> lets f ++ concatMap lets es
+                   ILam _ _ b -> lets b
+                   ILAM _ _ b -> lets b
+                   _ -> []
+
+        uses e = case e of
+                   IAps (ICon i (ICSel {})) (ITStr s : _) (d : _)
+                     | i == idFromWrapField ->
+                       (getFString s, expandVars 200 binds d) : deeper e
+                   _ -> deeper e
+        deeper e = case e of
+                     IAps f _ es -> uses f ++ concatMap uses es
+                     ILam _ _ b -> uses b
+                     ILAM _ _ b -> uses b
+                     _ -> []
+    in  uses wbody
+
+-- compare a compiled wrapper's codecs against the description's:
+-- every fromWrapField dictionary must be structurally identical to
+-- the recorded CodecRef of the entry with that leaf name (vector
+-- leaves share one parametric entry, so several uses may check
+-- against the same recorded codec); opaque leaves (clock, reset,
+-- inout) have no recorded codec and are skipped
+codecShadowErrs :: [BoundaryEntryR a] -> IExpr a -> [String]
+codecShadowErrs entries wbody =
+    let recorded = [ (bf_path e, cr_body (bf_codec e))
+                   | e@(BFieldR {}) <- entries ]
+        opaque = [ bo_path e | e@(BOpaqueR {}) <- entries ]
+    in  [ err
+        | (nm, mdict) <- wrapperCodecs wbody,
+          nm `notElem` opaque,
+          err <- case (lookup nm recorded, mdict) of
+                   (Nothing, _) ->
+                       ["codec applied for `" ++ nm ++
+                        "', which no entry describes"]
+                   (_, Left msg) ->
+                       ["codec of `" ++ nm ++ "': " ++ msg]
+                   (Just rec_d, Right got_d)
+                     | dictEq rec_d got_d -> []
+                     | otherwise ->
+                         ["codec of `" ++ nm ++ "' differs from the " ++
+                          "description's recorded dictionary"] ]
 
 -- ==================================================
 -- The shadow check (increment 6): does the description determine the

@@ -40,7 +40,12 @@ compile_verilog_pass XPkgIfc.bsv
 compile_verilog_pass XPkgUser.bsv mkXPkgUser
 
 # ----------
-# the fold: fresh state, the flag, and the decision log
+# the fold: fresh state, the flags, and the decision log -- with
+# -check-wrap-shadow on, every compile also verifies the described
+# boundary (increment 6), the recorded types (increment 9), and the
+# recorded codecs against the wrapper's re-solved dictionaries
+# (increment 10); a disagreement is an S0015 error, so these passing
+# compiles are the verification
 # (save any outer census log -- runtest runs every .exp in one
 # process, so this must be restored, not unset)
 
@@ -53,12 +58,12 @@ erase_many "*.ba"
 erase_many "mk*.v"
 set env(BSC_BOUNDARY_FOLD_LOG) "fold_decisions.log"
 
-compile_verilog_pass HierFold.bsv mkHierFold {-boundary-fold}
-compile_verilog_pass VecFold.bsv mkVecFold {-boundary-fold}
-compile_verilog_pass ClkFold.bsv mkClkFold {-boundary-fold}
-compile_verilog_pass InoutFold.bsv mkInoutFold {-boundary-fold}
-compile_verilog_pass ArFold.bsv mkArFold {-boundary-fold}
-compile_verilog_pass RenamedFold.bsv mkRenamedFold {-boundary-fold}
+compile_verilog_pass HierFold.bsv mkHierFold {-boundary-fold -check-wrap-shadow}
+compile_verilog_pass VecFold.bsv mkVecFold {-boundary-fold -check-wrap-shadow}
+compile_verilog_pass ClkFold.bsv mkClkFold {-boundary-fold -check-wrap-shadow}
+compile_verilog_pass InoutFold.bsv mkInoutFold {-boundary-fold -check-wrap-shadow}
+compile_verilog_pass ArFold.bsv mkArFold {-boundary-fold -check-wrap-shadow}
+compile_verilog_pass RenamedFold.bsv mkRenamedFold {-boundary-fold -check-wrap-shadow}
 compile_verilog_pass XPkgIfc.bsv {} {-boundary-fold}
 compile_verilog_pass XPkgUser.bsv mkXPkgUser {-boundary-fold -check-wrap-shadow}
 
