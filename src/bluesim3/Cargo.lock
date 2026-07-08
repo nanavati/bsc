@@ -44,6 +44,7 @@ dependencies = [
 name = "bsim3-interp"
 version = "0.0.1"
 dependencies = [
+ "bsim3-codegen",
  "bsim3-ir",
  "libc",
  "libloading",
