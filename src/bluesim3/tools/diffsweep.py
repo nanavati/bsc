@@ -30,10 +30,16 @@ import sys
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 BSC = os.path.join(REPO, "inst", "bin", "bsc")
 # the release build keeps heavyweight tests (SHA512, GlibcRandom) well
-# under the timeout; fall back to debug if it hasn't been built
-BSIM3 = os.path.join(REPO, "src", "bluesim3", "target", "release", "bsim3")
-if not os.path.exists(BSIM3):
-    BSIM3 = os.path.join(REPO, "src", "bluesim3", "target", "debug", "bsim3")
+# under the timeout; fall back to debug if it hasn't been built.
+# DIFFSWEEP_BSIM3 (set by --bsim3) is read at module level because pool
+# workers re-import this module under spawn/forkserver (Python >= 3.14
+# default): a global assigned only in main() would silently revert to
+# the default path in every worker.
+BSIM3 = os.environ.get("DIFFSWEEP_BSIM3", "")
+if not BSIM3:
+    BSIM3 = os.path.join(REPO, "src", "bluesim3", "target", "release", "bsim3")
+    if not os.path.exists(BSIM3):
+        BSIM3 = os.path.join(REPO, "src", "bluesim3", "target", "debug", "bsim3")
 ENV = dict(os.environ, PATH=os.path.join(REPO, "inst", "bin") + ":" + os.environ["PATH"])
 
 MAX_CYCLES = "4000"
@@ -208,7 +214,20 @@ def main():
     ap.add_argument("--jobs", type=int, default=8)
     ap.add_argument("--filter", default="", help="substring filter on test dir")
     ap.add_argument("--out", default="diffsweep-results.json")
+    ap.add_argument(
+        "--bsim3",
+        default="",
+        help="bsim3 binary to sweep (default: the repo release build); "
+        "lets a scratch build be tested without touching target/release",
+    )
     args = ap.parse_args()
+    if args.bsim3:
+        global BSIM3
+        BSIM3 = os.path.abspath(args.bsim3)
+        # workers re-import this module (spawn/forkserver); hand the
+        # override down via the environment
+        os.environ["DIFFSWEEP_BSIM3"] = BSIM3
+    print(f"bsim3 binary: {BSIM3}", flush=True)
 
     jobs = []
     workroot = os.path.join(os.path.dirname(args.out) or ".", "diffsweep-work")
