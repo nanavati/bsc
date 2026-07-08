@@ -9,9 +9,8 @@ module BoundaryDesc(
 import qualified Data.Map as M
 import Data.Char(isAlphaNum)
 
-import Data.List((\\))
-
 import Id
+import PreIds(idBuildUndef)
 import Position(noPosition)
 import FStringCompat(mkFString)
 import ISyntax
@@ -64,6 +63,17 @@ boundaryIdForIfc ifcId =
         base = "boundary_" ++ map sane (getIdBaseString ifcId)
     in  setIdBase ifcId (mkFString base)
 
+-- like whead, but keeping the type arguments accumulated along the
+-- application spine (innermost first); no lambda-stepping -- the
+-- callers apply it to direct applications only
+headTypes :: M.Map Id (IExpr a) -> IExpr a ->
+             (IExpr a, [IType], [IExpr a])
+headTypes env e0 = go env e0 [] []
+  where
+    go env' (IAps f ts es) tss as = go env' f (ts ++ tss) (es ++ as)
+    go env' (IVar v) tss as | Just d <- M.lookup v env' = go env' d tss as
+    go _ h tss as = (h, tss, as)
+
 readBoundaryEntries :: IExpr a -> Either String [BoundaryEntryR a]
 readBoundaryEntries = readListSpine malformed readEntry M.empty
   where
@@ -96,12 +106,17 @@ readBoundaryEntries = readListSpine malformed readEntry M.empty
                                 ICon i (ICValue {}) -> Just i
                                 _ -> Nothing
                          -- the proxy is (CAny :: f) at the
-                         -- declaration: an undetermined constant
-                         -- whose iConType is the field's method type
-                         -- at the resolved instantiation
-                         mft = case whead env' fProxy of
-                                 (_, ICon _ (ICUndet { iConType = t }),
-                                  _) -> Just t
+                         -- declaration; iConv renders it as
+                         -- primBuildUndefined applied AT the field's
+                         -- method type (buildUndef, IConv.hs), so
+                         -- the type is the application's type
+                         -- argument -- kept by headTypes, which
+                         -- whead would discard
+                         mft = case headTypes env' fProxy of
+                                 (ICon i _, [t], _)
+                                   | i == idBuildUndef -> Just t
+                                 (ICon _ (ICUndet { iConType = t }),
+                                  _, _) -> Just t
                                  _ -> Nothing
                      return (BFieldR { bf_path = path,
                                        bf_slots = slots,
