@@ -9,4 +9,6 @@ set rts_flags {+RTS -H128M -M256M -Sstderr -RTS}
 compile_verilog_fail PureLoop.bsv {} $rts_flags
 
 # And confirm that the test failed in the way we expect
-find_n_strings [make_bsc_vcomp_output_name PureLoop.bsv] "Heap exhausted" 1
+if {$vtest == 1} {
+    find_n_strings [make_bsc_vcomp_output_name PureLoop.bsv] "Heap exhausted" 1
+}
