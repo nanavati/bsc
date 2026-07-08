@@ -3707,6 +3707,41 @@ increment set: widen the pilot (the fallback shapes), move method
 types into descriptions, apply codecs by reference (the
 ISyntax-direct renderer), then the §5.3 one-application injection.
 
+**8 — the fold widened to every synthesized shape.**
+`genFromBodyDesc` became a `GWMonad` recursion mirroring
+`genFromBody`'s walk case for case — subinterface recursion, vector
+expansion, opaque clock/reset/inout leaves — consuming description
+entries in the DFS order the emission produced them (`boundaryEntries`
+and the walk share the traversal discipline, so the orders agree by
+construction; a vector position consumes one entry per concrete
+index, the path index-erased to `[_]`). Structure and types still
+follow the FInf inventory; the description supplies the naming
+outright — the WrapField name proxy and the `saveFieldPortTypes`
+prefix/result/argN values. At every leaf the flattened path
+(`fieldPathName`), the kind (opaque vs method), and the declared
+argument names must agree, and any disagreement — or leftover
+entries — falls the whole module back to the legacy walk silently.
+Opaque entries now carry the naming slots too (`primMkOpaqueEntry`
+gained a slots argument; `.bo` tag `bsc-bo-20260708-1`): the legacy
+walk emits `saveFieldPortTypes` for clock/reset/inout leaves as
+well, so the fold needs their prefix/result values from the
+description. Verified: the 233-file corpus renders 211 folds with
+ZERO fallbacks (increment 7's 48-shape worklist retired: every
+fallback was subinterface/vector/opaque, including the whole
+AR-on-interface family, which fell back for its subinterfaces, not
+its pragmas), byte-identical Verilog flag-on vs flag-off; the
+thirteen boundary suites pass (340), including the new
+`bsc.boundary/fold` suite (each widened shape asserts its `fold`
+decision in a `BSC_BOUNDARY_FOLD_LOG` census, renamed/prefixed/
+indexed port names checked in the generated Verilog, a Bluesim
+testbench runs through folded wrappers); and the full suite under
+`-boundary-fold -check-wrap-shadow` COMBINED — every module
+generation folds and is shadow-compared — shows a failure set
+byte-identical to the known environmental + option-echo set, at the
+round's fastest wall time (1:35:18). One test-harness lesson: a
+suite's `unset` of the census env var killed logging for every
+suite after it in the one-process runtest run — save and restore.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
