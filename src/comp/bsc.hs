@@ -91,7 +91,7 @@ import ISyntax(IPackage(..), IModule(..),
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
-import FixupDefs(fixupDefs, updDef)
+import FixupDefs(fixupDefs, updDef, fixupIDef)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -627,8 +627,14 @@ compilePackage
                           Just fn -> appendFile fn
                               ("inject " ++ getIdBaseString i ++ "\n")
                           Nothing -> return ()
-                        compileCDefToIDef errh flags dumpnames'
-                            symt imods skel
+                        (skelIDef, okS) <-
+                            compileCDefToIDef errh flags dumpnames'
+                                symt imods skel
+                        -- inline top-level def bodies into the
+                        -- skeleton's references (it is elaborated
+                        -- directly, so it never passes through the
+                        -- package-level fixup)
+                        return (fixupIDef im binmods skelIDef, okS)
                       else do
                         milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
                         case milog of

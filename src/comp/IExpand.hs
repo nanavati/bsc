@@ -3787,7 +3787,10 @@ conAp' i (ICPrim _ PrimStringOf) _ [T t, _] = internalError ("PrimStringOf unsim
 conAp' i (ICPrim _ PrimTypeOf) _ [T t, _] = do
    flags <- getFlags
    symt <- getSymTab
-   return $ pExpr (icType i (iConvT flags symt (iToCT t)))
+   let t_c = if hasForallT t
+              then internalError ("PrimTypeOf forall: " ++ show t)
+              else iToCT t
+   return $ pExpr (icType i (iConvT flags symt t_c))
 
 -- Primitives that should be used downstream
 conAp' _ (ICPrim _ PrimZeroExt) _ [t2@(T t), t1, t3, e] =
@@ -4134,7 +4137,9 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
             -- XXX we're inheriting the assumption of TypeOf
             --     that t is not polymorphic
             (PrimPrintType, [E (ICon _ (ICType { iType = t }))]) ->
-                return (P p (iMkString (pfpString (iToCT t))))
+                if hasForallT t
+                then internalError ("PrimPrintType forall: " ++ show t)
+                else return (P p (iMkString (pfpString (iToCT t))))
 
             -- clock primitives
             (PrimSameFamilyClock, [E (ICon _ (ICClock {iClock = c1})), E (ICon _ (ICClock {iClock = c2}))]) ->
@@ -5230,6 +5235,11 @@ isIntLit (E (ICon _ (ICInt { }))) = True
 isIntLit (T (ITNum _)) = True
 isIntLit _ = False
 
+hasForallT :: IType -> Bool
+hasForallT (ITForAll _ _ _) = True
+hasForallT (ITAp a b) = hasForallT a || hasForallT b
+hasForallT _ = False
+
 evalCExpr :: String -> CExpr -> IType -> [Arg] -> G PExpr
 evalCExpr tag ce it as = do
   mexpr <- lookupCExprCache ce it
@@ -5251,7 +5261,10 @@ cExprToIExpr tag ce it = do
   -- built-in typeclass reflection only uses coherent typeclasses
   -- XXX there may be a corner case if we depend on user code that requires
   -- XXX incoherent matching
-  let ct = iToCT it
+  let ct = if hasForallT it
+           then internalError ("evalCExpr " ++ tag ++
+                               " forall, expr: " ++ ppReadable ce)
+           else iToCT it
   case (fst3 $ TM.runTI flags False r (topExpr ct ce)) of
     Left errs -> internalError (err_tag ++ " errors: " ++ ppReadable errs)
     Right (ps, ce') -> do

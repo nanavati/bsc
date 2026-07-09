@@ -204,7 +204,14 @@ iToCTM itype = do
 
 convISLPC :: IStateLocPathComponent -> M InstLoc
 convISLPC islpc = do
-  ct <- iToCTM (isl_ifc_type islpc)
+  let hasForallT (ITForAll _ _ _) = True
+      hasForallT (ITAp a b) = hasForallT a || hasForallT b
+      hasForallT _ = False
+  ct <- if hasForallT (isl_ifc_type islpc)
+        then internalError ("InstNodes.convISLPC forall at instance `"
+                            ++ show (isl_inst_id islpc) ++ "': "
+                            ++ show (isl_ifc_type islpc))
+        else iToCTM (isl_ifc_type islpc)
   let  name = isl_inst_id islpc
        pos = getPosition name
        finalName = maybe name (mkId pos) (getIdDisplayName name)

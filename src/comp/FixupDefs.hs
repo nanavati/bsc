@@ -1,4 +1,4 @@
-module FixupDefs(fixupDefs, updDef) where
+module FixupDefs(fixupDefs, updDef, fixupIDef) where
 
 import Data.List(nub)
 import qualified Data.Map as M
@@ -45,6 +45,25 @@ fixupDefs (IPackage mi _ ps ds) ipkgs =
         --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
         (IPackage mi ipkg_sigs ps' ds', ads')
 
+
+-- ===============
+
+-- Fix up a SINGLE definition that is not (and will not become) a
+-- member of the package: inline the top-level def bodies into its
+-- ICDef references, against this package and its imports.  Used for
+-- the injected wrapper skeleton (increment 11), which is compiled by
+-- the per-module pipeline and elaborated directly -- without this,
+-- its cross-package references carry iConvVar's undet placeholder
+-- bodies and the evaluator would silently consume them.
+fixupIDef :: IPackage a -> [(IPackage a, String)] -> IDef a -> IDef a
+fixupIDef (IPackage _ _ _ ds) ipkgs d =
+    let ms = map fst ipkgs
+        ads = concat (ds : map (\ (IPackage _ _ _ ds_i) -> ds_i) ms)
+        m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
+        ads' = iDefsMap (fixUp m) ads
+    in  case iDefsMap (fixUp m) [d] of
+          [d'] -> d'
+          _ -> internalError "FixupDefs.fixupIDef"
 
 -- ===============
 

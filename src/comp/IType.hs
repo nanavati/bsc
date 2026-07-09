@@ -155,7 +155,7 @@ ppQuant s d p i t e =
 -- Convert ISyntax kinds/types to CType
 
 iToCT :: IType -> CType
-iToCT (ITForAll _ _ _) = internalError "IConv.iToCT: ITForAll"
+iToCT t@(ITForAll _ _ _) = internalError ("IConv.iToCT: ITForAll: " ++ show t)
 iToCT (ITAp t1 t2) = TAp (iToCT t1) (iToCT t2)
 iToCT (ITVar i) = internalError "IConv.iToCT: ITVar"
 iToCT (ITCon i k s) = TCon (TyCon i (Just (iToCK k)) s)
