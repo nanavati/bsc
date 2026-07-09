@@ -377,8 +377,11 @@ init (Cons x xs) = Cons x (init xs)
 --@ \begin{libverbatim}
 --@ function Integer length (List#(a) xs);
 --@ \end{libverbatim}
+-- Prelude.listLength is the accelerated primListLength plus the
+-- undetermined-list check; the raw primitive is silent on undetermined
+-- lists because the select/update wrappers probe with it.
 length :: List a -> Integer
-length = primListLength
+length = Prelude.listLength
 
 --@ Get the element at a certain position.
 --@ \index{(!!)@\te{(!!)} (\te{List} function)}

@@ -3699,18 +3699,11 @@ listNullOrUndef _ = True
 
 listLength :: List a -> Integer
 listLength l =
-  let len = listLength' l 0
+  let len = primListLength l
   in if (isRawUndefined len) then
        primGenerateError 80 (primGetEvalPosition len)
          "Attempt to get the length of an undetermined list"
      else len
-
-listLength' :: List a -> Integer -> Integer
-listLength' Nil n = n
--- XXX faking primSeq here
-listLength' (Cons _ xs) n = if (n == n) then
-                              listLength' xs (n + 1)
-                            else listLength' xs (n + 1)
 
 
 listStaticSelect :: Position__ -> List a -> Integer -> a

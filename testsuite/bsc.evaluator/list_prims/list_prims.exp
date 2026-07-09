@@ -49,6 +49,8 @@ test_c_veri_bsv ListSpineCondRef "sysListSpineCond.out.expected" "" "" 1
 # --- Select and length diagnostics ---
 # Static out-of-range select is a compile error (as recursive (!!) was)
 compile_verilog_fail_error ListSelectOOB.bsv S0015
+# Length of an undetermined list reports the Prelude's G0080 error
+compile_verilog_fail_error ListLengthUndet.bsv G0080
 
 # --- Select with a muxed constant index selects both arms ---
 test_c_veri_bsv ListSelectDyn
