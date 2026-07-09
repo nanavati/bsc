@@ -4904,30 +4904,9 @@ doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
           let cellToExpr (ArrayCell ptr ref) =
                 pExprToHExpr (P p (IRefT a_ty' ptr S.empty ref))
               elems = map cellToExpr (Array.elems arr)
-          return $ pExpr $ iMkList a_ty' elems
+          return $ P p $ iMkList a_ty' elems
         _ -> nfError "primArrayToList" $ mkAp f [T a_ty, E arr_e']
 doArrayToList f _ _ = internalError("IExpand.doArrayToList : " ++ ppReadable f)
-
-evalListElems :: IType -> HExpr -> G [HExpr]
-evalListElems elem_ty e = do
-  (_, elems) <- evalListElemsP elem_ty e
-  return elems
-
-evalListElemsP :: IType -> HExpr -> G (HPred, [HExpr])
-evalListElemsP elem_ty e = do
-  (_, P p e') <- evalUH e
-  case e' of
-    IAps (ICon i _) _ [a] ->
-      if i == idCons noPosition then do
-        (_, P pa a') <- evalUH a
-        case a' of
-          IAps (ICon _ (ICTuple {})) _ [e_h, e_t] -> do
-            (p_rest, rest) <- evalListElemsP elem_ty e_t
-            return (pConjs [p, pa, p_rest], e_h : rest)
-          _ -> internalError ("evalListElemsP Cons: " ++ showTypeless a')
-      else if i == idPrimChr then return (p, [])
-      else internalError ("evalListElemsP con: " ++ show i)
-    _ -> nfError "evalListElemsP" e'
 
 doListToArray :: HExpr -> IType -> HExpr -> G PExpr
 doListToArray f@(ICon fi (ICPrim {primOp = PrimListToArray}))
@@ -4935,12 +4914,20 @@ doListToArray f@(ICon fi (ICPrim {primOp = PrimListToArray}))
     norm <- getTypeNormalizer
     let a_ty' = norm a_ty
         resultType = norm (ITAp itPrimArray a_ty)
-    (p, elems) <- evalListElemsP a_ty' list_e
-    cells <- mapM mkArrayCell elems
-    let n = toInteger (length elems)
-        arr = Array.listArray (0, n-1) cells
-    addPredG p $
-      return $ pExpr $ ICon fi (ICLazyArray resultType arr Nothing)
+        -- The walk (via evalListOp) handles PrimIf and PrimWhenPred spines,
+        -- which a plain Cons/Nil match would reject.
+        toArrayUndet i k _p = nfError "primListToArray" $
+                                icUndetAt (getPosition i) resultType k
+        collectList acc e =
+          evalListOp fi e a_ty' resultType toArrayUndet
+            (\p -> do
+              cells <- mapM mkArrayCell (Prelude.reverse acc)
+              let n = toInteger (length cells)
+                  arr = Array.listArray (0, n-1) cells
+              addPredG p $
+                return $ pExpr $ ICon fi (ICLazyArray resultType arr Nothing))
+            (\p e_h e_t -> addPredG p $ collectList (e_h : acc) e_t)
+    collectList [] list_e
 doListToArray f _ _ = internalError("IExpand.doListToArray : " ++ ppReadable f)
 
 -- if without extra arguments

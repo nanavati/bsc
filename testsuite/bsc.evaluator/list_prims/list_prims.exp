@@ -55,6 +55,9 @@ compile_verilog_fail_error ListLengthUndet.bsv G0080
 # --- Select with a muxed constant index selects both arms ---
 test_c_veri_bsv ListSelectDyn
 
+# --- toVector of a conditional list muxes the arms ---
+test_c_veri_bsv ListToVectorIf
+
 # --- ListN pack keeps element conditions (routes through list prims) ---
 compile_verilog_fail_error ListNPackCond.bsv G0005 1
 
