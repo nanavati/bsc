@@ -1,0 +1,24 @@
+[package]
+name = "bsim3-capi"
+description = "Bluesim kernel C API (bk_*) on the bsim3 interpreter: a drop-in model .so for bluetcl's `sim` command"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# staticlib: `bsim3 link --interactive` links this with a generated
+# shim object (exporting new_MODEL_<top>) into <out>.so; rlib for tests
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+bsim3-ir = { path = "../bsim3-ir" }
+bsim3-interp = { path = "../bsim3-interp" }
+libc = "0.2"
+
+[features]
+# default ON: `sim run`/`sim runto` execute at hybrid-JIT speed between
+# interactive stops (state is edge-coherent for symbol peeks).  A lean
+# LLVM-free .so remains buildable with --no-default-features.
+default = ["jit"]
+jit = ["bsim3-interp/jit"]
