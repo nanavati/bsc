@@ -1,0 +1,29 @@
+#!/bin/sh
+# Edge-SSA regression battery: compile each design with the installed
+# bsc, run the reference Bluesim executable and the bsim3 AOT artifact
+# (bare defaults = the specialized fast compile), and diff stdout +
+# exit codes.  BSC=/path/bsc BSIM3=/path/bsim3 sh run.sh [workdir]
+BSC=${BSC:-bsc}
+BSIM3=${BSIM3:-bsim3}
+SRC=$(cd "$(dirname "$0")" && pwd)
+case "$BSC" in
+    */*) PATH="$(cd "$(dirname "$BSC")" && pwd):$PATH"; export PATH;;
+esac
+WK=${1:-$(mktemp -d)}
+cd "$WK" || exit 2
+fail=0
+check() { # name top
+    name=$1; top=$2
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./ref.exe > ref.out 2>&1; refrc=$?
+    "$BSIM3" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (bsim3 link)"; fail=1; return; }
+    BSIM3="$BSIM3" ./art > got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
+    if ! cmp -s ref.out got.out; then echo "FAIL $name (stdout)"; diff ref.out got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check EdgeSelfKill sysEdgeSelfKill
+check HoistDivTrap sysHoistDivTrap
+exit $fail
