@@ -64,13 +64,16 @@ function any_T fold(function any_T f(any_T x, any_T y), Array#(any_T) v);
 
       Integer nln = div(ln+1,2);
 
-      Array#(any_T) temp = primArrayNewU(nln);
+      // genWith builds each halving level in one pass; updating a
+      // primArrayNewU array copies the whole array per element.
+      function any_T pairAt(Integer i);
+        if (2*i + 1 < ln)
+          return f(v[2*i], v[2*i+1]);
+        else
+          return v[2*i];
+      endfunction
 
-      for(Integer i = 0; i < div(ln,2); i = i + 1)
-        temp[i] = f(v[2*i], v[2*i+1]);
-      if (nln != div(ln,2))
-        temp[nln-1] = v[ln-1];
-      return fold(f, temp);
+      return fold(f, genWith(nln, pairAt));
     end
 
 
