@@ -46,9 +46,18 @@ test_c_veri_bsv ListSelectTest
 test_c_veri_bsv ListSpineCond "" "" "" 1
 test_c_veri_bsv ListSpineCondRef "sysListSpineCond.out.expected" "" "" 1
 
+# --- Select and length diagnostics ---
+# Static out-of-range select is a compile error (as recursive (!!) was)
+compile_verilog_fail_error ListSelectOOB.bsv S0015
+
+# --- Select with a muxed constant index selects both arms ---
+test_c_veri_bsv ListSelectDyn
 
 # --- ListN pack keeps element conditions (routes through list prims) ---
 compile_verilog_fail_error ListNPackCond.bsv G0005 1
+
+# --- Over-application: selecting a function from a list and applying it ---
+test_c_veri_bsv OverApplyListSelect
 
 # --- A self-referential list dies with too-many-steps, not a hang ---
 compile_verilog_fail_error CyclicList.bs G0024 1 "" {-steps-warn-interval 5000 -steps-max-intervals 1}

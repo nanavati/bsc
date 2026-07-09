@@ -4031,9 +4031,9 @@ conAp' _ (ICPrim _ PrimListLength) f [T t, E list_e] = do
   when doDebug $ traceM ("conAp': PrimListLength!")
   doListLength f t list_e
 
-conAp' _ (ICPrim _ PrimListSelect) f [T t, E list_e, E idx_e] = do
+conAp' _ (ICPrim _ PrimListSelect) f (T t : E list_e : E idx_e : as) = do
   when doDebug $ traceM ("conAp': PrimListSelect!")
-  doListSelect f t list_e idx_e
+  doListSelect f t list_e idx_e as
 conAp' _ (ICPrim _ PrimListZipWith) f [T a, T b, T c, E func, E list1, E list2] = do
   when doDebug $ traceM ("conAp': PrimListZipWith!")
   doListZipWith f a b c func list1 list2
@@ -4862,27 +4862,35 @@ doListLength f@(ICon prim_i (ICPrim {primOp = PrimListLength}))
     countList 0 list_e
 doListLength f _ _ = internalError ("IExpand.doListLength : " ++ ppReadable f)
 
-doListSelect :: HExpr -> IType -> HExpr -> HExpr -> G PExpr
+doListSelect :: HExpr -> IType -> HExpr -> HExpr -> [Arg] -> G PExpr
 doListSelect f@(ICon prim_i (ICPrim {primOp = PrimListSelect}))
-             elem_ty list_e idx_e = do
+             elem_ty list_e idx_e as = do
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
-    (_, P p idx_e') <- evalUH idx_e
-    case idx_e' of
-      ICon _ (ICInt { iVal = IntLit { ilValue = index } }) ->
-          -- Walk the spine without forcing elements; return the element at
-          -- position index without evaluating the others.
-          addPredG p $ selectAt index 0 list_e
-        where
-          selectAt target cur e =
-            evalListOp prim_i e elem_ty' elem_ty' (listOpUndet elem_ty')
-              (\p -> return $ P p $ icUndet elem_ty' UNotUsed)
-              (\p e_h e_t ->
-                if cur == target
-                  then addPredG p $ eval1 e_h
-                  else addPredG p $ selectAt target (cur + 1) e_t)
-      _ -> internalError ("IExpand.doListSelect: index: " ++ ppReadable idx_e')
-doListSelect f _ _ _ = internalError ("IExpand.doListSelect : " ++ ppReadable f)
+        -- Walk the spine without forcing elements; return the element at
+        -- position index without evaluating the others.  Walking off the
+        -- end yields a silent undefined value: the Prelude's checked
+        -- select wrappers probe out-of-range positions in dead mux arms
+        -- and own the user-facing out-of-range diagnostics.
+        handleIdx (ICon _ (ICInt { iVal = IntLit { ilValue = index } })) =
+            selectAt index 0 list_e
+          where
+            selectAt target cur e =
+              evalListOp prim_i e elem_ty' elem_ty' (listOpUndet elem_ty')
+                (\p -> return $ P p $ icUndet elem_ty' UNotUsed)
+                (\p e_h e_t ->
+                  if cur == target
+                    then addPredG p $ eval1 e_h
+                    else addPredG p $ selectAt target (cur + 1) e_t)
+        handleIdx idx_e' =
+            -- not a compile-time constant (evalStaticOp has already pushed
+            -- the selection into PrimIf arms and undetermined values)
+            nfError "primListSelect" $ mkAp f [T elem_ty, E list_e, E idx_e']
+    result <- evalStaticOp idx_e elem_ty' handleIdx
+    case as of
+      [] -> return result
+      _  -> evalAp "list-select-rest" (pExprToHExpr result) as
+doListSelect f _ _ _ _ = internalError ("IExpand.doListSelect : " ++ ppReadable f)
 
 doArrayToList :: HExpr -> IType -> HExpr -> G PExpr
 doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
