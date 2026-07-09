@@ -84,3 +84,8 @@ test_c_veri_bsv ZipWithAnyUneq
 # --- zipWith cells stay lazy: unconsumed elements are never forced ---
 compile_verilog_pass ZipWithLazy.bsv sysZipWithLazy
 
+# --- Undefined vectors through append stay lazy ---
+# newVector elements are don't-cares; append must not force them
+# (cells copy lazily), whether or not the undefined half is consumed.
+compile_verilog_pass UninitAppendOk.bsv sysUninitAppendOk
+compile_verilog_pass UninitAppendUse.bsv sysUninitAppendUse

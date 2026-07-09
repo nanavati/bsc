@@ -4051,18 +4051,22 @@ conAp' i (ICPrim _ PrimArrayAppend) f
   when doDebug $ traceM ("conAp': PrimArrayAppend!")
   norm <- getTypeNormalizer
   let arrType = norm (ITAp itPrimArray a_ty)
-  withNormalizedArray True arr1_e arrType $ \p1 arr1_e' ->
+  withNormalizedArray False arr1_e arrType $ \p1 arr1_e' ->
     case arr1_e' of
-      ICon ci (ICLazyArray _ arr1 _) ->
-        withNormalizedArray True arr2_e arrType $ \p2 arr2_e' ->
+      ICon ci (ICLazyArray _ arr1 u1) ->
+        withNormalizedArray False arr2_e arrType $ \p2 arr2_e' ->
           case arr2_e' of
-            ICon _ (ICLazyArray _ arr2 _) -> do
+            ICon _ (ICLazyArray _ arr2 u2) -> do
+              -- Cells are copied lazily (doUH=False), so an uninitialized
+              -- input defers its error to element use, as the old library
+              -- loop did; keep the first uninit marker for that diagnostic.
               let (_, hi1) = Array.bounds arr1
                   (_, hi2) = Array.bounds arr2
                   cells = Array.elems arr1 ++ Array.elems arr2
                   arr' = Array.listArray (0, hi1 + hi2 + 1) cells
+                  uninit' = case u1 of { Just _ -> u1 ; Nothing -> u2 }
               addPredG (pConj p1 p2) $
-                return $ pExpr $ ICon ci (ICLazyArray arrType arr' Nothing)
+                return $ pExpr $ ICon ci (ICLazyArray arrType arr' uninit')
             _ -> nfError "primArrayAppend" $
                    mkAp f [T a_ty, E arr1_e', E arr2_e']
       _ -> nfError "primArrayAppend" $
@@ -4074,26 +4078,30 @@ conAp' i (ICPrim _ PrimArrayConcat) f
   norm <- getTypeNormalizer
   let innerArrType = norm (ITAp itPrimArray a_ty)
       outerArrType = norm (ITAp itPrimArray innerArrType)
-  withNormalizedArray True arr_e outerArrType $ \p_outer outer_e ->
+  withNormalizedArray False arr_e outerArrType $ \p_outer outer_e ->
     case outer_e of
-      ICon ci (ICLazyArray _ outerArr _) -> do
+      ICon ci (ICLazyArray _ outerArr u_out) -> do
         cellLists <- mapM (\(ArrayCell ptr ref) -> do
             let inner_e = IRefT innerArrType ptr S.empty ref
             P p_inner inner_e' <- eval1 inner_e >>= unheap
             mArr <- expandDynUpdateToLazy inner_e'
             let inner_e'' = case mArr of Just a -> a; Nothing -> inner_e'
             case inner_e'' of
-              ICon _ (ICLazyArray _ innerArr _) ->
-                return (p_inner, Array.elems innerArr)
+              ICon _ (ICLazyArray _ innerArr u_in) ->
+                return (p_inner, u_in, Array.elems innerArr)
               _ -> nfError "primArrayConcat" $
                      mkAp f [T a_ty, E inner_e'']
           ) (Array.elems outerArr)
-        let p_all = pConjs (p_outer : map fst cellLists)
-            allCells = concatMap snd cellLists
+        -- Keep the first uninit marker so an uninitialized input still
+        -- gets its deferred diagnostic (element cells stay lazy).
+        let p_all = pConjs (p_outer : [ p | (p, _, _) <- cellLists ])
+            allCells = concatMap (\(_, _, cs) -> cs) cellLists
             n = length allCells
             arr' = Array.listArray (0, toInteger n - 1) allCells
+            uninit' = listToMaybe $ catMaybes $
+                        u_out : [ u | (_, u, _) <- cellLists ]
         addPredG p_all $
-          return $ pExpr $ ICon ci (ICLazyArray innerArrType arr' Nothing)
+          return $ pExpr $ ICon ci (ICLazyArray innerArrType arr' uninit')
       _ -> nfError "primArrayConcat" $ mkAp f [T a_ty, E outer_e]
 
 conAp' i (ICPrim _ PrimArrayReverse) f
