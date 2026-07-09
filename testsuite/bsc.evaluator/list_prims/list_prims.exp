@@ -38,3 +38,8 @@ test_c_veri_bsv ImplCondZipListArr "sysImplCondZipList.out.expected" "" "" 1
 
 # --- Basic correctness: select and length ---
 test_c_veri_bsv ListSelectTest
+
+
+# --- A self-referential list dies with too-many-steps, not a hang ---
+compile_verilog_fail_error CyclicList.bs G0024 1 "" {-steps-warn-interval 5000 -steps-max-intervals 1}
+

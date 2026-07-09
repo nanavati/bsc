@@ -4666,30 +4666,34 @@ doArrayGenWith f@(ICon _ (ICPrim {primOp = PrimArrayGenWith}))
 doArrayGenWith f _ _ _ = internalError("IExpand.doArrayGenWith : " ++ ppReadable f)
 
 -- Walk a list spine, handling PrimIf/PrimWhenPred/ICUndet at each node.
--- Calls nilHandler on Nil, consHandler on Cons with (pred, head, tail).
+-- Calls undetHandler on ICUndet, nilHandler on Nil, consHandler on Cons
+-- with (pred, head, tail).  Charges the prim one step per spine node so
+-- that the -steps budget bounds the walk (a self-referential list would
+-- otherwise hang the compiler instead of reporting too many steps).
 -- result_ty is used for improveIf merging on PrimIf branches.
-evalListOp :: HExpr -> IType -> IType ->
+evalListOp :: Id -> HExpr -> IType -> IType ->
+              (Id -> UndefKind -> HPred -> G PExpr) ->
               (HPred -> G PExpr) ->
               (HPred -> HExpr -> HExpr -> G PExpr) ->
               G PExpr
-evalListOp e elem_ty result_ty nilHandler consHandler = do
+evalListOp prim_i e elem_ty result_ty undetHandler nilHandler consHandler = do
+  step prim_i
   (_, P p e') <- evalUH e
+  let recurse e2 = evalListOp prim_i e2 elem_ty result_ty
+                     undetHandler nilHandler consHandler
   case e' of
-    ICon i (ICUndet { iuKind = k }) -> do
-      let kind_integer = undefKindToInteger k
-      addPredG p $ doBuildUndefined result_ty (getPosition i) kind_integer []
+    ICon i (ICUndet { iuKind = k }) -> undetHandler i k p
 
     IAps f@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els] -> do
-      P pthn thn' <- evalListOp thn elem_ty result_ty nilHandler consHandler
-      P pels els' <- evalListOp els elem_ty result_ty nilHandler consHandler
+      P pthn thn' <- recurse thn
+      P pels els' <- recurse els
       (e'', _) <- improveIf f result_ty cnd thn' els'
       p' <- pIf cnd (pConj p pthn) (pConj p pels)
       return (P p' e'')
 
     IAps (ICon _ (ICPrim _ PrimWhenPred)) [_]
          [ICon _ (ICPred _ p_when), e_body] -> do
-      P p_body e_body' <-
-          evalListOp e_body elem_ty result_ty nilHandler consHandler
+      P p_body e_body' <- recurse e_body
       return (P (pConj p (pConj p_when p_body)) e_body')
 
     IAps (ICon i _) _ [a]
@@ -4703,8 +4707,15 @@ evalListOp e elem_ty result_ty nilHandler consHandler = do
 
     _ -> nfError "evalListOp" e'
 
+-- Default ICUndet handling for list operations: an undetermined spine
+-- makes the whole result undetermined, since its length is unknowable.
+listOpUndet :: IType -> Id -> UndefKind -> HPred -> G PExpr
+listOpUndet result_ty i k p = do
+  let kind_integer = undefKindToInteger k
+  addPredG p $ doBuildUndefined result_ty (getPosition i) kind_integer []
+
 doListMap :: HExpr -> IType -> IType -> HExpr -> HExpr -> G PExpr
-doListMap f@(ICon _ (ICPrim {primOp = PrimListMap}))
+doListMap f@(ICon prim_i (ICPrim {primOp = PrimListMap}))
           a_ty b_ty func list_e = do
     norm <- getTypeNormalizer
     func' <- toHeap "list-map-fn" (norm (a_ty `itFun` b_ty)) func Nothing
@@ -4712,7 +4723,7 @@ doListMap f@(ICon _ (ICPrim {primOp = PrimListMap}))
         a_ty' = norm a_ty
         result_ty = norm (itList b_ty)
     let mapList e =
-          evalListOp e a_ty' result_ty
+          evalListOp prim_i e a_ty' result_ty (listOpUndet result_ty)
             (\p -> return $ P p $ iMkNil b_ty')
             (\p e_h e_t -> do
               mapped_h <- toHeap "list-map-elem" b_ty' (pExprToHExpr (P p (iAp func' e_h))) Nothing
@@ -4723,7 +4734,7 @@ doListMap f@(ICon _ (ICPrim {primOp = PrimListMap}))
 doListMap f _ _ _ _ = internalError("IExpand.doListMap : " ++ ppReadable f)
 
 doListZipWith :: HExpr -> IType -> IType -> IType -> HExpr -> HExpr -> HExpr -> G PExpr
-doListZipWith f@(ICon _ (ICPrim {primOp = PrimListZipWith}))
+doListZipWith f@(ICon prim_i (ICPrim {primOp = PrimListZipWith}))
               a_ty b_ty c_ty func list1_e list2_e = do
     norm <- getTypeNormalizer
     func' <- toHeap "list-zipwith-fn" (norm (a_ty `itFun` b_ty `itFun` c_ty)) func Nothing
@@ -4732,10 +4743,10 @@ doListZipWith f@(ICon _ (ICPrim {primOp = PrimListZipWith}))
         c_ty' = norm c_ty
         result_ty = norm (itList c_ty)
         zipLists e1 e2 =
-          evalListOp e1 a_ty' result_ty
+          evalListOp prim_i e1 a_ty' result_ty (listOpUndet result_ty)
             (\p -> return $ P p $ iMkNil c_ty')
             (\p1 e_h1 e_t1 ->
-              evalListOp e2 b_ty' result_ty
+              evalListOp prim_i e2 b_ty' result_ty (listOpUndet result_ty)
                 (\p2 -> return $ P (pConj p1 p2) $ iMkNil c_ty')
                 (\p2 e_h2 e_t2 -> do
                   mapped_h <- toHeap "list-zipwith-elem" c_ty' (pExprToHExpr (P (pConj p1 p2) (iAp (iAp func' e_h1) e_h2))) Nothing
@@ -4747,14 +4758,14 @@ doListZipWith f _ _ _ _ _ _ = internalError("IExpand.doListZipWith : " ++ ppRead
 
 
 doListFoldL :: HExpr -> IType -> IType -> HExpr -> HExpr -> HExpr -> [Arg] -> G PExpr
-doListFoldL f@(ICon _ (ICPrim {primOp = PrimListFoldL}))
+doListFoldL f@(ICon prim_i (ICPrim {primOp = PrimListFoldL}))
             b_ty a_ty func init_e list_e as = do
     norm <- getTypeNormalizer
     func' <- toHeap "list-foldl-fn" (norm (b_ty `itFun` a_ty `itFun` b_ty)) func Nothing
     let a_ty' = norm a_ty
         b_ty' = norm b_ty
         foldList e acc =
-          evalListOp e a_ty' b_ty'
+          evalListOp prim_i e a_ty' b_ty' (listOpUndet b_ty')
             (\p -> addPredG p $ return acc)
             (\p e_h e_t -> do
               acc' <- toHeap "list-foldl-acc" b_ty' (pExprToHExpr acc) Nothing
@@ -4768,7 +4779,7 @@ doListFoldL f@(ICon _ (ICPrim {primOp = PrimListFoldL}))
 doListFoldL f _ _ _ _ _ _ = internalError ("IExpand.doListFoldL : " ++ ppReadable f)
 
 doListFoldR :: HExpr -> IType -> IType -> HExpr -> HExpr -> HExpr -> [Arg] -> G PExpr
-doListFoldR f@(ICon _ (ICPrim {primOp = PrimListFoldR}))
+doListFoldR f@(ICon prim_i (ICPrim {primOp = PrimListFoldR}))
             a_ty b_ty func init_e list_e as = do
     norm <- getTypeNormalizer
     func' <- toHeap "list-foldr-fn" (norm (a_ty `itFun` b_ty `itFun` b_ty)) func Nothing
@@ -4776,7 +4787,7 @@ doListFoldR f@(ICon _ (ICPrim {primOp = PrimListFoldR}))
     let a_ty' = norm a_ty
         b_ty' = norm b_ty
         foldList e =
-          evalListOp e a_ty' b_ty'
+          evalListOp prim_i e a_ty' b_ty' (listOpUndet b_ty')
             (\p -> addPredG p $ return init_pe)
             (\p e_h e_t -> do
               rest <- foldList e_t
@@ -4790,13 +4801,13 @@ doListFoldR f@(ICon _ (ICPrim {primOp = PrimListFoldR}))
 doListFoldR f _ _ _ _ _ _ = internalError ("IExpand.doListFoldR : " ++ ppReadable f)
 
 doListAppend :: HExpr -> IType -> HExpr -> HExpr -> G PExpr
-doListAppend f@(ICon _ (ICPrim {primOp = PrimListAppend}))
+doListAppend f@(ICon prim_i (ICPrim {primOp = PrimListAppend}))
              elem_ty xs ys = do
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
         result_ty = norm (itList elem_ty)
     let appendList e =
-          evalListOp e elem_ty' result_ty
+          evalListOp prim_i e elem_ty' result_ty (listOpUndet result_ty)
             (\p -> eval1 ys >>= \(P py ys') -> return (P (pConj p py) ys'))
             (\p e_h e_t -> do
               P p_rest mapped_t <- appendList e_t
@@ -4805,19 +4816,19 @@ doListAppend f@(ICon _ (ICPrim {primOp = PrimListAppend}))
 doListAppend f _ _ _ = internalError ("IExpand.doListAppend : " ++ ppReadable f)
 
 doListConcat :: HExpr -> IType -> HExpr -> G PExpr
-doListConcat f@(ICon _ (ICPrim {primOp = PrimListConcat}))
+doListConcat f@(ICon prim_i (ICPrim {primOp = PrimListConcat}))
              elem_ty xss = do
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
         list_ty  = norm (itList elem_ty)
         appendList ys e =
-          evalListOp e elem_ty' list_ty
+          evalListOp prim_i e elem_ty' list_ty (listOpUndet list_ty)
             (\p -> eval1 ys >>= \(P py ys') -> return (P (pConj p py) ys'))
             (\p e_h e_t -> do
               P p_rest mapped_t <- appendList ys e_t
               return $ P p_rest $ iMkCons elem_ty' e_h mapped_t)
         concatList e =
-          evalListOp e list_ty list_ty
+          evalListOp prim_i e list_ty list_ty (listOpUndet list_ty)
             (\p -> return $ P p $ iMkNil elem_ty')
             (\p e_h e_t -> do
               P p_rest t' <- concatList e_t
@@ -4827,20 +4838,24 @@ doListConcat f@(ICon _ (ICPrim {primOp = PrimListConcat}))
 doListConcat f _ _ = internalError ("IExpand.doListConcat : " ++ ppReadable f)
 
 doListLength :: HExpr -> IType -> HExpr -> G PExpr
-doListLength f@(ICon _ (ICPrim {primOp = PrimListLength}))
+doListLength f@(ICon prim_i (ICPrim {primOp = PrimListLength}))
              elem_ty list_e = do
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
+        -- An undetermined spine yields a silent undetermined Integer: the
+        -- Prelude's select/update wrappers probe possibly-undetermined
+        -- lists and rely on it; user-facing diagnostics live in the
+        -- library's checked listLength.
         -- Count the spine without forcing element values
         countList n e =
-          evalListOp e elem_ty' itInteger
+          evalListOp prim_i e elem_ty' itInteger (listOpUndet itInteger)
             (\p -> return $ P p $ iMkLit itInteger n)
             (\p _e_h e_t -> addPredG p $ countList (n + 1) e_t)
     countList 0 list_e
 doListLength f _ _ = internalError ("IExpand.doListLength : " ++ ppReadable f)
 
 doListSelect :: HExpr -> IType -> HExpr -> HExpr -> G PExpr
-doListSelect f@(ICon _ (ICPrim {primOp = PrimListSelect}))
+doListSelect f@(ICon prim_i (ICPrim {primOp = PrimListSelect}))
              elem_ty list_e idx_e = do
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
@@ -4852,7 +4867,7 @@ doListSelect f@(ICon _ (ICPrim {primOp = PrimListSelect}))
           addPredG p $ selectAt index 0 list_e
         where
           selectAt target cur e =
-            evalListOp e elem_ty' elem_ty'
+            evalListOp prim_i e elem_ty' elem_ty' (listOpUndet elem_ty')
               (\p -> return $ P p $ icUndet elem_ty' UNotUsed)
               (\p e_h e_t ->
                 if cur == target
@@ -4860,6 +4875,22 @@ doListSelect f@(ICon _ (ICPrim {primOp = PrimListSelect}))
                   else addPredG p $ selectAt target (cur + 1) e_t)
       _ -> internalError ("IExpand.doListSelect: index: " ++ ppReadable idx_e')
 doListSelect f _ _ _ = internalError ("IExpand.doListSelect : " ++ ppReadable f)
+
+doArrayToList :: HExpr -> IType -> HExpr -> G PExpr
+doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
+              a_ty arr_e = do
+    norm <- getTypeNormalizer
+    let a_ty' = norm a_ty
+        arrType = norm (ITAp itPrimArray a_ty)
+    withNormalizedArray False arr_e arrType $ \p arr_e' ->
+      case arr_e' of
+        ICon _ (ICLazyArray _ arr _) -> do
+          let cellToExpr (ArrayCell ptr ref) =
+                pExprToHExpr (P p (IRefT a_ty' ptr S.empty ref))
+              elems = map cellToExpr (Array.elems arr)
+          return $ pExpr $ iMkList a_ty' elems
+        _ -> nfError "primArrayToList" $ mkAp f [T a_ty, E arr_e']
+doArrayToList f _ _ = internalError("IExpand.doArrayToList : " ++ ppReadable f)
 
 evalListElems :: IType -> HExpr -> G [HExpr]
 evalListElems elem_ty e = do
@@ -4881,22 +4912,6 @@ evalListElemsP elem_ty e = do
       else if i == idPrimChr then return (p, [])
       else internalError ("evalListElemsP con: " ++ show i)
     _ -> nfError "evalListElemsP" e'
-
-doArrayToList :: HExpr -> IType -> HExpr -> G PExpr
-doArrayToList f@(ICon _ (ICPrim {primOp = PrimArrayToList}))
-              a_ty arr_e = do
-    norm <- getTypeNormalizer
-    let a_ty' = norm a_ty
-        arrType = norm (ITAp itPrimArray a_ty)
-    withNormalizedArray False arr_e arrType $ \p arr_e' ->
-      case arr_e' of
-        ICon _ (ICLazyArray _ arr _) -> do
-          let cellToExpr (ArrayCell ptr ref) =
-                pExprToHExpr (P p (IRefT a_ty' ptr S.empty ref))
-              elems = map cellToExpr (Array.elems arr)
-          return $ pExpr $ iMkList a_ty' elems
-        _ -> nfError "primArrayToList" $ mkAp f [T a_ty, E arr_e']
-doArrayToList f _ _ = internalError("IExpand.doArrayToList : " ++ ppReadable f)
 
 doListToArray :: HExpr -> IType -> HExpr -> G PExpr
 doListToArray f@(ICon fi (ICPrim {primOp = PrimListToArray}))
