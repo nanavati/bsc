@@ -24,6 +24,7 @@ module TIMonad(
         , tiRecoveringFromError
         , tiRecoveringFromErrorxx
         , disambiguateStruct
+        , recordPatObligation, apSubPatObligations, flushPatObligations
         ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -34,10 +35,13 @@ import PFPrint
 import Id
 import IdPrint
 import Position
-import CSyntax(CExpr(..))
+import CSyntax(CExpr(..), CClause)
 import CType
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
-import Flags(Flags, maxTIStackDepth)
+import Flags(Flags, maxTIStackDepth,
+             warnIncompletePatterns, warnOverlappingPatterns)
+import TCPatCheck(PatMatchContext, PatMatchObligation(..),
+                  mkClausesObligation, checkPatMatches)
 import Subst
 import Pred
 import Scheme
@@ -49,6 +53,7 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
+import Data.List(nub)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
@@ -91,7 +96,10 @@ data TStateRecover = TStateRecover {
   -- stack of bound tyvars (list of lists for stuff bound at each level)
   tsBoundTyVarStack :: [[TyVar]],
   tsExplPreds :: [[EPred]],
-  tsSatStack :: TSSuperSatStack
+  tsSatStack :: TSSuperSatStack,
+  -- pattern matches to be checked for exhaustiveness/redundancy once
+  -- the enclosing top-level definition has been typechecked
+  tsPatMatchObligations :: [PatMatchObligation]
 }
 
 type TSSatElement = EPred
@@ -163,7 +171,8 @@ initRecoverState = TStateRecover {
     tsCurSubst = nullSubst,
     tsBoundTyVarStack = [],
     tsExplPreds = [],
-    tsSatStack = mkSizedStack [mkSizedStack []]
+    tsSatStack = mkSizedStack [mkSizedStack []],
+    tsPatMatchObligations = []
   }
 
 data TIResult a = TIResult {
@@ -248,6 +257,9 @@ tiRecoveringFromError' do_something create_fake_output = do
              (after consultation with Ravi.)
             -}
             s <- getSubst
+            -- pattern-match obligations in the state need the same
+            -- treatment as the answer, before their tyvars are trimmed
+            apSubPatObligations s
             updSubst (trimSubst dummy)
             return (apSub s answer)
           ))
@@ -268,6 +280,49 @@ tiRecoveringFromErrorxx do_something _ = do_something
 twarn :: WMsg -> TI ()
 twarn w = lift (modify (addWarning w))
   where addWarning w s = s { tsWarns = w:(tsWarns s) }
+
+-- Record a pattern match for exhaustiveness/redundancy checking.  The
+-- obligations live in the recoverable state, so matches inside a
+-- definition whose typecheck fails are discarded along with it.
+recordPatObligation :: PatMatchContext -> Position -> Type -> [CClause]
+                    -> TI ()
+recordPatObligation ctx pos ty cls = do
+    flags <- getFlags
+    when (warnIncompletePatterns flags || warnOverlappingPatterns flags) $
+        case mkClausesObligation ctx pos ty cls of
+          Just o -> modify (\ st -> st { tsPatMatchObligations =
+                                             o : tsPatMatchObligations st })
+          Nothing -> return ()
+
+-- Apply a substitution to the recorded obligations; must be called
+-- whenever the substitution is about to be trimmed, so that the column
+-- types are resolved before their tyvars disappear.
+apSubPatObligations :: Subst -> TI ()
+apSubPatObligations s =
+    modify (\ st -> st { tsPatMatchObligations =
+                             map (apSub s) (tsPatMatchObligations st) })
+
+-- Check the recorded pattern-match obligations (once the enclosing
+-- top-level definition has typechecked) and report the warnings.
+-- The definition's source file is given so that matches whose source
+-- lives elsewhere can be skipped: typeclass defaults are re-typechecked
+-- (copied) into every instance that inherits them, and an instance of
+-- an imported class should not re-report the imported default's matches.
+flushPatObligations :: Position -> TI ()
+flushPatObligations def_pos = do
+    obs <- gets tsPatMatchObligations
+    when (not (null obs)) $ do
+        s <- getSubst
+        flags <- getFlags
+        r <- getSymTab
+        let def_file = getPositionFile def_pos
+            sameFile o = def_file == "" ||
+                         getPositionFile (pmo_pos o) == def_file
+        -- reverse for source order; nub because the typechecker can
+        -- process the same source clauses more than once
+        let obs' = nub (filter sameFile (map (apSub s) (reverse obs)))
+        mapM_ twarn (concatMap (checkPatMatches flags r) obs')
+        modify (\ st -> st { tsPatMatchObligations = [] })
 
 -- Record that a symbol from a package was used
 recordPackageUse :: Maybe Id -> TI ()
