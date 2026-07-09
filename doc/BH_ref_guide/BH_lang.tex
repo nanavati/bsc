@@ -1338,9 +1338,9 @@ data Bool = False | True
 \EBS
 uses one bit.  \te{False} is represented by 0 and \te{True} by 1.
 \BBS
-struct Två = \{ första :: Bit 8; andra :: Bit 16 \}
+struct Tvï¿½ = \{ fï¿½rsta :: Bit 8; andra :: Bit 16 \}
 \EBS
-uses 24 bits with \te{första} in the upper 8 bits and \te{andra} in the lower 16.
+uses 24 bits with \te{fï¿½rsta} in the upper 8 bits and \te{andra} in the lower 16.
 \BBS
 data Maybe a = Nothing | Just a
 \EBS
@@ -1600,42 +1600,42 @@ can be used for convenience.
 	}\\
 \grammore{
 % ISO 8859-1 symbols
-	             \term{¡}
-%T1	      {\alt} \term{¢}
-	      {\alt} \term{£}
-%T1	      {\alt} \term{¤}
-%T1	      {\alt} \term{¥}
-%T1	      {\alt} \term{¦}
-	      {\alt} \term{§}
-	      {\alt} \term{¨}
-	      {\alt} \term{©}
-	      {\alt} \term{ª}
-	      {\alt} \term{«}
-	      {\alt} $\term{¬}$
-%T1	      {\alt} \term{­}
-	      {\alt} \term{®}
-	      {\alt} \term{¯}
-	      {\alt} \term{°}
-	      {\alt} $\term{±}$
+	             \term{ï¿½}
+%T1	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+%T1	      {\alt} \term{ï¿½}
+%T1	      {\alt} \term{ï¿½}
+%T1	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} $\term{ï¿½}$
+%T1	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} $\term{ï¿½}$
 	      {\alt}
 	} \\
 \grammore{
-	             $\term{²}$
-	      {\alt} $\term{³}$
-	      {\alt} \term{´}
-	      {\alt} $\term{µ}$
-	      {\alt} \term{¶}
-	      {\alt} \term{·}
-	      {\alt} \term{¸}
-	      {\alt} $\term{¹}$
-	      {\alt} \term{º}
-	      {\alt} \term{»}
-	      {\alt} \term{¼}
-	      {\alt} \term{½}
-	      {\alt} \term{¾}
-	      {\alt} \term{¿}
-	      {\alt} $\term{×}$
-	      {\alt} $\term{÷}$
+	             $\term{ï¿½}$
+	      {\alt} $\term{ï¿½}$
+	      {\alt} \term{ï¿½}
+	      {\alt} $\term{ï¿½}$
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} $\term{ï¿½}$
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} \term{ï¿½}
+	      {\alt} $\term{ï¿½}$
+	      {\alt} $\term{ï¿½}$
         }
 
 \index{infix operators!predefined}
@@ -1669,7 +1669,7 @@ precedence and associativity (see the Standard Prelude in section
     \verb"-"     & 10  & Left  \\
     \verb"*"     & 11  & Left  \\
     \verb"/"     & 11  & Left  \\
-    \verb"·"     & 13  & Right \\
+    \verb"ï¿½"     & 13  & Right \\
     user-defined & 15  & Left \\
     \hline
   \end{tabular}
@@ -2544,6 +2544,23 @@ same constructor, and where (recursively) each {\nterm{apat}} argument
 matches its corresponding component in the actual value.  The variable
 bindings produced by the match is the union of the variable bindings
 of the individual {\nterm{apat}} matches.
+
+\index{patterns!literal|textbf}
+
+A constant pattern is a numeric literal, optionally preceded by a
+minus sign.  As in expressions, a negated literal matches the value
+{\mbox{(\te{negate} \emph{literal})}}, which for the unsigned types
+such as {\te{Bit}} wraps around (so {\te{-1}} matches the all-ones
+value).  A negated literal is accepted wherever a full pattern may
+appear, such as a case arm; in an argument position it must be
+parenthesized:
+\begin{verbatim}
+ f :: Int 2 -> Bit 2
+ f (-2) = 0
+ f x = case x of
+         -1 -> 1
+         _ -> 2
+\end{verbatim}
 
 % ----------------------------------------------------------------
 

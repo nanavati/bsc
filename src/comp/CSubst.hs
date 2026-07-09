@@ -264,6 +264,7 @@ instance CSubst CPat where
     cSubst r (CPAs i p) = CPAs i (cSubst r p)
     cSubst r p@(CPAny {}) = p
     cSubst r p@(CPLit {}) = p
+    cSubst r p@(CPNegLit {}) = p
     cSubst r p@(CPMixedLit {}) = p
     cSubst r (CPOper ops) =
         let cSubstOp (CPRand p) = CPRand (cSubst r p)

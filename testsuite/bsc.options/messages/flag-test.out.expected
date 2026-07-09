@@ -22,5 +22,7 @@ Flags:
      -suppress-warnings   T1234:T0001:T0002:T0003
      -unspecified-to   A
      -warn-action-shadowing
+     -warn-incomplete-patterns
      -warn-method-urgency
+     -warn-overlapping-patterns
 

@@ -20,9 +20,9 @@
 -- later arm redundant.  Constructor patterns are resolved against the
 -- (resolved) column type using the symbol table, so tagged unions,
 -- enums, structs and tuples are all handled; literal matches over
--- @Bit n@ and @UInt n@ additionally know the finite domain of the type,
--- so covering all @2^n@ values is recognized as exhaustive (which GHC's
--- checker does not attempt for numeric literals).
+-- @Bit n@, @UInt n@ and @Int n@ additionally know the finite domain of
+-- the type, so covering all @2^n@ values is recognized as exhaustive
+-- (which GHC's checker does not attempt for numeric literals).
 module TCPatCheck(
     PatMatchContext(..),
     PatMatchRow(..),
@@ -172,10 +172,18 @@ data NConDesc = NConDesc {
     nc_fieldIds :: [Id]     -- ^ field names (structs); [] for constructors
 }
 
--- | Literal domains: Bit n and UInt n have 2^n values; everything else
--- is treated as unbounded.
-data LitDomain = LDFinite Integer Integer  -- lo, hi (inclusive)
+-- | Literal domains: Bit n and UInt n have the values [0, 2^n), Int n
+-- has [-2^(n-1), 2^n-1); everything else is treated as unbounded.
+data LitDomain = LDFinite Integer Integer NegRule  -- lo, hi (inclusive)
                | LDInfinite
+    deriving (Eq)
+
+-- | What a negated literal means at the type, mirroring the ranges
+-- accepted by the conversion primitives at elaboration (see
+-- PrimIntegerToBit\/UIntBits\/IntBits in IExpand)
+data NegRule = NegWrap Integer  -- ^ Bit n: wraps; magnitude at most 2^(n-1)
+             | NegNone          -- ^ UInt n: negative literals are invalid
+             | NegExact         -- ^ Int n: the negated value must be in range
     deriving (Eq)
 
 data LitKey = LKInt Integer | LKStr String | LKChar Char | LKReal Double
@@ -205,10 +213,21 @@ colKind r t =
                   -- bound the width, so that the 2^n domain value stays
                   -- cheap to compute and compare
                   [n] | isTNum n, getTNum n <= 65536 ->
-                    CKLit (LDFinite 0 (2^(getTNum n) - 1))
+                    let w = getTNum n
+                        neg = if tcid `qualEq` idBit && w > 0
+                              then NegWrap (2^(w-1))
+                              else NegNone
+                    in  CKLit (LDFinite 0 (2^w - 1) neg)
+                  _ -> CKLit LDInfinite
+            | tcid `qualEq` idInt ->
+                case tyConArgs t' of
+                  [n] | isTNum n, getTNum n >= 1, getTNum n <= 65536 ->
+                    let w = getTNum n
+                    in  CKLit (LDFinite (negate (2^(w-1))) (2^(w-1) - 1)
+                                        NegExact)
                   _ -> CKLit LDInfinite
             | any (qualEq tcid)
-                  [idInt, idInteger, idReal, idChar, idStringTC] ->
+                  [idInteger, idReal, idChar, idStringTC] ->
                 CKLit LDInfinite
             | otherwise ->
                 case findType r tcid of
@@ -321,8 +340,15 @@ normPat r t p =
                 -- typecheck-time literal is only range-checked at
                 -- elaboration) would break the completeness counting
                 case (k, dom) of
-                  (LKInt v, LDFinite lo hi) | v < lo || v > hi -> Nothing
+                  (LKInt v, LDFinite lo hi _) | v < lo || v > hi -> Nothing
                   _ -> Just (NLit k)
+            _ -> Nothing
+      CPNegLit (CLiteral _ l) ->
+          case colKind r t of
+            CKLit dom -> do
+                k <- litKey l
+                k' <- negLitKey k dom
+                Just (NLit k')
             _ -> Nothing
       CPCon1 _ c p' -> normPat r t (CPCon c [p'])
       CPCon c [p1, p2] | c `qualEq` idComma ->
@@ -397,6 +423,25 @@ litKey (LChar c) = Just (LKChar c)
 litKey (LReal d) = Just (LKReal d)
 litKey LPosition = Nothing
 
+-- | The value matched by a negated literal pattern at the column type.
+-- Literals whose negation the type does not accept (an elaboration
+-- error if the match is ever elaborated) abandon the analysis.
+negLitKey :: LitKey -> LitDomain -> Maybe LitKey
+negLitKey (LKInt v) (LDFinite lo hi rule) =
+    case rule of
+      NegWrap maxmag
+        | v <= maxmag -> Just (LKInt (negate v `mod` (hi + 1)))
+        | otherwise -> Nothing
+      NegNone
+        | v == 0 -> Just (LKInt 0)
+        | otherwise -> Nothing
+      NegExact
+        | negate v >= lo -> Just (LKInt (negate v))
+        | otherwise -> Nothing
+negLitKey (LKInt v) LDInfinite = Just (LKInt (negate v))
+negLitKey (LKReal d) _ = Just (LKReal (negate d))
+negLitKey _ _ = Nothing
+
 -- ---------------------------------------------------------------------------
 -- The usefulness analysis
 
@@ -446,7 +491,7 @@ defaultMat :: [[NPat]] -> [[NPat]]
 defaultMat rows = [ ps | (NWild : ps) <- rows ]
 
 litDomainSize :: LitDomain -> Maybe Integer
-litDomainSize (LDFinite lo hi) = Just (hi - lo + 1)
+litDomainSize (LDFinite lo hi _) = Just (hi - lo + 1)
 litDomainSize LDInfinite = Nothing
 
 -- the smallest value in a finite domain not present in the given set
@@ -488,7 +533,7 @@ uncovered r fuel (t : ts) rows =
                 _ ->
                     let wit = case dom of
                                 _ | null lits -> WWild
-                                LDFinite lo hi ->
+                                LDFinite lo hi _ ->
                                     WLit (LKInt (smallestMissing lo hi lits))
                                 LDInfinite -> WLitOther lits
                     in  thenPerLit (prefixDefault (fuel - 1) [wit]) lits

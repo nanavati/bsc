@@ -2358,8 +2358,10 @@ all possible values of the matched expression, along with examples of
 the values that are not matched.  When no pattern matches at
 elaboration time, the result is an undetermined value, which is
 rarely the intent.  Matching over the entire domain of a sized
-numeric type (for example, both literals of \te{Bit\#(1)}, or all
-$2^n$ values of \te{Bit\#(n)}) is recognized as complete.  An arm
+numeric type (for example, both literals of \te{Bit\#(1)}, all
+$2^n$ values of \te{Bit\#(n)} or \te{UInt\#(n)}, or all values of
+\te{Int\#(n)} using negative literal patterns where needed) is
+recognized as complete.  An arm
 with a guard (\te{\&\&\&} or \te{when}) is conservatively assumed to
 be able to fail and does not count towards completeness.  This flag
 is on by default.

@@ -127,6 +127,7 @@ pPat ft (CPAs i p) = do
     return (CPAs i p')
 pPat ft p@(CPAny {}) = return p
 pPat ft p@(CPLit _) = return p
+pPat ft p@(CPNegLit _) = return p
 pPat ft p@(CPMixedLit {}) = return p
 
 -- typed patterns should not appear

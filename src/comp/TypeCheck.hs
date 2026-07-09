@@ -12,7 +12,6 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 
 import PFPrint
-import Position(getPosition)
 import Id
 import Error(internalError, EMsg, WMsg, ErrMsg(..),
              ErrorHandle, bsError, bsErrorNoExit, bsErrorUnsafe, bsWarning)

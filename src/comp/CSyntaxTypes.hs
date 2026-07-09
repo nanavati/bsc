@@ -192,6 +192,7 @@ instance Types CPat where
     apSub s (CPAs i p) = CPAs i (apSub s p)
     apSub s p@(CPAny {}) = p
     apSub s p@(CPLit l) = p
+    apSub s p@(CPNegLit l) = p
     apSub s p@(CPMixedLit {}) = p
     apSub s (CPCon1 ti c p) = CPCon1 ti c (apSub s p)
     apSub s (CPConTs ti c ts ps) = CPConTs ti c (apSub s ts) (apSub s ps)
@@ -202,6 +203,7 @@ instance Types CPat where
     tv (CPAs i p) = tv p
     tv (CPAny {}) = []
     tv (CPLit l) = []
+    tv (CPNegLit l) = []
     tv (CPMixedLit {}) = []
     tv (CPCon1 ti c p) = tv p
     tv (CPConTs ti c ts ps) = tv (ts, ps)

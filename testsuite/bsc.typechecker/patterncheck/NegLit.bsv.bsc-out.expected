@@ -1,0 +1,15 @@
+checking package dependencies
+compiling NegLit.bsv
+Warning: "NegLit.bsv", line 16, column 12: (T0159)
+  Pattern matching in this case expression is not exhaustive. The following
+  pattern is not covered:
+    -2
+Warning: "NegLit.bsv", line 30, column 16: (T0160)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    -1
+Warning: "NegLit.bsv", line 48, column 15: (T0160)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    3
+All packages are up to date.

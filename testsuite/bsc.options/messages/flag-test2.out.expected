@@ -22,5 +22,7 @@ Flags:
      -suppress-warnings   ALL
      -unspecified-to   A
      -warn-action-shadowing
+     -warn-incomplete-patterns
      -warn-method-urgency
+     -warn-overlapping-patterns
 

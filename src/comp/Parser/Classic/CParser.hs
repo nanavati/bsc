@@ -9,7 +9,7 @@ import Data.List(nub)
 import Parse
 import IntLit
 import FStringCompat
-import PreStrings(fsBar, fsStar, fsHash, fsDollar, fsLT, fsLTGT, fsLsh, fsNoinline,
+import PreStrings(fsBar, fsStar, fsHash, fsDollar, fsLT, fsLTGT, fsLsh, fsMinus, fsNoinline,
                   fsASSERT, fsFire, fsEnabled, fsNo, fsImplicit, fsConditions,
                   fsCan, fsSchedule, fsFirst, fsClockCrossing, fsRule,
                   fsEmpty, fsConfOp, fsHide, fsHideAll,
@@ -582,7 +582,19 @@ psEq :: Id -> CParser Id
 psEq i = testp (getIdString i) (\i'->i==i') pAnySym
 
 pPat :: CParser CPat
-pPat = pPatApply ||! pPatOp ||! pAPat
+pPat = pNegLitPat ||! pPatApply ||! pPatOp ||! pAPat
+
+-- A numeric literal preceded by unary minus; as in expressions (and as
+-- in Haskell), it matches the value (negate literal).  Only allowed
+-- where a full pattern can appear (case arms, parenthesized patterns),
+-- so that clauses defining an infix operator still parse.
+pNegLitPat :: CParser CPat
+pNegLitPat = pMinusSym ..+ numericLit >>- toNegPLit
+  where toNegPLit (CLit lit) = CPNegLit lit
+        toNegPLit _ = internalError "CParser.pNegLitPat: not CLit"
+        pMinusSym = lcp "-" (\ _ x -> case x of
+                                        L_varsym fs | fs == fsMinus -> Just ()
+                                        _ -> Nothing)
 
 pPatApply :: CParser CPat
 pPatApply = pConId `into` (\ c -> blockBrOf pPField                        >>- CPstruct Nothing c
