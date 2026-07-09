@@ -29,6 +29,8 @@ import PFPrint
 import Position(Position, noPosition, getPositionLine, cmdPosition)
 import Error(internalError, EMsg, EMsgs(..), ErrMsg(..), ErrorHandle, bsError)
 import ErrorMonad(ErrorMonad(..), convErrorMonadToIO)
+import CFreeVars(getFVD)
+import qualified Data.Set as S
 import Flags(Flags, boundaryInject)
 import FStringCompat
 import PreStrings(fsUnderscore, fs_t, fsTo, fsFrom, fsEmpty, fsEnable, fs_rdy, fsDot)
@@ -163,6 +165,10 @@ data BoundarySpec = BoundarySpec
    -- skeleton construction (increment 11)
    bs_vtis   :: [(Id, CType, ArgInfo)],
    bs_argpts :: [(Id, CType)],
+   -- the Module-tied user def (real body), for the injected
+   -- skeleton's letseq embed (increment 11); Nothing when the
+   -- module is not injected
+   bs_moddef :: Maybe CDef,
    bs_state  :: GenState  -- snapshot of the GenWrap monad state
  }
 
@@ -175,11 +181,15 @@ data WrapInfo = WrapInfo
    wi_prags    :: [PProp],
    wi_injected :: Bool,         -- no skeleton planted: construct it
                                 -- at genModule time (increment 11)
+   wi_deps     :: [Id],         -- free variables of the user def's
+                                -- body: the synthesis-order graph
+                                -- edges, which the package no longer
+                                -- carries when injected
    wi_boundary :: BoundarySpec
  }
 
 instance PPrint WrapInfo where
-    pPrint d p wi@(WrapInfo id1 cqt id2 id3 ps _ _) =
+    pPrint d p wi@(WrapInfo id1 cqt id2 id3 ps _ _ _) =
        text "WrapInfo:" <+> ppId d id1 <> text(" :: ") <> pPrint d 0 cqt <>
        text(" id2: ") <>  ppId d id2 <> text(" id3: ") <>
        ppId d id3 $+$
@@ -386,7 +396,7 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        from_Defs <- mapM mkFrom_ trs
        let ifcConversionDefs = to_Defs ++ from_Defs
 
-       let fixedDefs = map (fixDef doInject) defsWithVector
+       let fixedDefs = map fixDef defsWithVector
 
        instanceDefs <- concatMapM mkInstances trs
        -- XXX we don't update the symbol table with the new instances
@@ -444,15 +454,20 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
            tyinf = TypeInfo (Just qdi) k vs ti Nothing
 
        -- removes the [CClause] from the input, and replaces it with
-       -- singleton list.  Under -boundary-inject the user's def is
-       -- left intact: the injected skeleton calls it by reference,
-       -- and the final wrapper replaces it after synthesis (updDef).
-       fixDef :: Bool -> CDefn -> CDefn
-       fixDef inj (CValueSign (CDef defid t e)) | generating &&
-                                                  not inj &&
-                                                  isGenDef ppmap defid =
+       -- singleton list.  This stub keeps the ORIGINAL (possibly
+       -- polymorphic IsModule) type under the original name -- what
+       -- same-package parents typecheck their instantiations
+       -- against -- while the Module-tied real body lives in the
+       -- skeleton (planted by mkNewModDef, or embedded at genModule
+       -- time by mkInjectedModDef under -boundary-inject; the split
+       -- is load-bearing either way: one def cannot carry both the
+       -- parent-facing polymorphic type and a body that forces
+       -- m == Module).
+       fixDef :: CDefn -> CDefn
+       fixDef (CValueSign (CDef defid t e)) | generating &&
+                                              isGenDef ppmap defid =
            CValueSign (CDef defid t [CClause [] [] (CVar defid)])
-       fixDef _ d = d
+       fixDef d = d
 
 
 -- --------------------
@@ -694,13 +709,17 @@ genWrapInfo injected genifcs (d@(CDef modName oqt@(CQType _ t) cls), cqt, vtis, 
                   EMResult aps -> aps
                   EMWarning _ aps -> aps
                   EMError _ -> []
-   spec <- mkDef iprops pps d cqt vtis argpts
+   let mmoddef = if injected then Just d else Nothing
+       (fv_cs, fv_vs) = getFVD d
+       deps = S.toList (S.union fv_cs fv_vs)
+   spec <- mkDef iprops pps d cqt vtis argpts mmoddef
    return WrapInfo { mod_nm      = modName,
                      orig_cqt    = oqt,
                      wrapper_ifc = ifcName_,
                      wrapped_mod = newModName,
                      wi_prags    = (pps ++ iprops),-- combine pragmas
                      wi_injected = injected,
+                     wi_deps     = deps,
                      wi_boundary = spec }
  where
    --Get interface name from module XXX make disappear
@@ -1487,8 +1506,9 @@ mkNewModDef _ (def,_,_,_) =
 -- computation (see GenBoundary.renderWrapperCDefn).
 
 mkDef :: [PProp] -> [PProp] -> CDef -> CQType ->
-         [(Id, CType, ArgInfo)] -> [(Id, CType)] -> GWMonad BoundarySpec
-mkDef iprags pps (CDef i (CQType _ qt) _) cqt vtis argpts = do
+         [(Id, CType, ArgInfo)] -> [(Id, CType)] -> Maybe CDef ->
+         GWMonad BoundarySpec
+mkDef iprags pps (CDef i (CQType _ qt) _) cqt vtis argpts mmoddef = do
  st0 <- get
  return (BoundarySpec { bs_id     = i,
                         bs_qt     = qt,
@@ -1497,9 +1517,10 @@ mkDef iprags pps (CDef i (CQType _ qt) _) cqt vtis argpts = do
                         bs_pps    = pps,
                         bs_vtis   = vtis,
                         bs_argpts = argpts,
+                        bs_moddef = mmoddef,
                         bs_state  = st0 })
 
-mkDef _ _ def _ _ _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
+mkDef _ _ def _ _ _ _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
 
 
 -- The injected skeleton (increment 11): the same module definition
@@ -1528,6 +1549,10 @@ mkInjectedModDef spec = do
    let arg_infos = thd $ unzip3 vtis
        (vs, ts) = unzip $ concatMap extractVTPairs arg_infos
    exprs <- mapM (convModArg i) arg_infos
+   mdef <- case bs_moddef spec of
+             Just d -> return d
+             Nothing -> internalError
+                          "GenWrap.mkInjectedModDef: no recorded def"
    let mexp = cApply 10 (CVar i) exprs
        arg_sptStmts = map (uncurry saveTopModPortTypeStmt) arg_pts
    ifc_sptStmts <- mkFieldSavePortTypeStmts Nothing ifcId fts
@@ -1536,7 +1561,11 @@ mkInjectedModDef spec = do
               then Cdo False (sptStmts ++ [CSExpr Nothing mexp])
               else mexp
        to = cVApply idLiftM [CVar (to_Id tyId), lexp]
-       cls = CClause (map CPVar vs) [] to
+       -- let-define the user's Module-tied def around the call,
+       -- exactly as the planted skeleton does: the package-level
+       -- def under this name is the polymorphic stub for parents
+       lte = Cletseq [CLValueSign mdef []] to
+       cls = CClause (map CPVar vs) [] lte
    let tvs = map cTVarNum (take (length ts) tmpTyVarIds)
    (ctx, ty') <- foldM mkArgCtx ([], ty) (reverse (zip ts tvs))
    return (CValueSign (CDef (modIdRename pps i) (CQType ctx ty') [cls]))

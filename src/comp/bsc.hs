@@ -561,18 +561,27 @@ compilePackage
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
           where gis = [ qualId pid (mod_nm w) | w <- gs ]
-                -- an injected module (increment 11) has no planted
-                -- skeleton and no stub: its own (intact) def is the
-                -- reference-graph node, so only legacy modules'
-                -- original-name defs are excluded and renamed
-                gis_lgy = [ qualId pid (mod_nm w)
-                                | w <- gs, not (wi_injected w) ]
                 tr = [ (qualId pid (wrapped_mod w), qualId pid (mod_nm w))
                                 | w <- gs, not (wi_injected w) ]
                 ds' = [ IDef (lookupWithDefault tr i i) t e p
-                                | IDef i t e p <- ds, i `notElem` gis_lgy ]
+                                | IDef i t e p <- ds, i `notElem` gis ]
                 is = [ i | IDef i _ _ _ <- ds' ]
-                g  = [ (i, fdVars e `intersect` is) | IDef i _ e _ <- ds' ]
+                -- an injected module (increment 11) has no planted
+                -- skeleton in the package, so the graph gets a
+                -- synthetic node whose edges come from the recorded
+                -- free variables of the user def's body (matched by
+                -- base name against package defs and generated
+                -- modules)
+                inj_nodes = [ qualId pid (mod_nm w)
+                                | w <- gs, wi_injected w ]
+                targets = is ++ inj_nodes
+                inj_g = [ (qualId pid (mod_nm w),
+                           [ n | n <- targets,
+                                 unQualId n `elem` udeps ])
+                            | w <- gs, wi_injected w,
+                              let udeps = map unQualId (wi_deps w) ]
+                g  = [ (i, fdVars e `intersect` targets)
+                                | IDef i _ e _ <- ds' ] ++ inj_g
                 iis = scc g
                 os = concat iis `intersect` gis
                 get i = headOrErr "bsc.orderGens: no WrapInfo"
@@ -633,8 +642,20 @@ compilePackage
                         -- inline top-level def bodies into the
                         -- skeleton's references (it is elaborated
                         -- directly, so it never passes through the
-                        -- package-level fixup)
-                        return (fixupIDef im binmods skelIDef, okS)
+                        -- package-level fixup), and simplify it the
+                        -- way the package pipeline would have (the
+                        -- planted skeleton went through iSimplify;
+                        -- without this, extra beta redexes shift the
+                        -- evaluator's heap numbering and hence the
+                        -- generated wire-name suffixes)
+                        let skelIDef' = fixupIDef im binmods skelIDef
+                            IPackage _ _ _ simp_ds =
+                                iSimplify (IPackage pkgId [] []
+                                               [skelIDef'])
+                            skelIDef'' = case simp_ds of
+                                           [d1] -> d1
+                                           _ -> skelIDef'
+                        return (skelIDef'', okS)
                       else do
                         milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
                         case milog of
