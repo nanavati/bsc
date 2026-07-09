@@ -4722,13 +4722,17 @@ doListMap f@(ICon prim_i (ICPrim {primOp = PrimListMap}))
     let b_ty' = norm b_ty
         a_ty' = norm a_ty
         result_ty = norm (itList b_ty)
+    -- A node's predicate must guard this cons node and everything after it
+    -- (a library case-match on the cons cell guards the whole suffix), so
+    -- it is returned on this node and the tail keeps its own predicate
+    -- structurally via pExprToHExpr.
     let mapList e =
           evalListOp prim_i e a_ty' result_ty (listOpUndet result_ty)
             (\p -> return $ P p $ iMkNil b_ty')
             (\p e_h e_t -> do
               mapped_h <- toHeap "list-map-elem" b_ty' (pExprToHExpr (P p (iAp func' e_h))) Nothing
-              P p_rest mapped_t <- mapList e_t
-              return $ P p_rest $ iMkCons b_ty' mapped_h mapped_t)
+              mapped_t <- mapList e_t
+              return $ P p $ iMkCons b_ty' mapped_h (pExprToHExpr mapped_t))
     mapList list_e
 
 doListMap f _ _ _ _ = internalError("IExpand.doListMap : " ++ ppReadable f)
@@ -4742,6 +4746,7 @@ doListZipWith f@(ICon prim_i (ICPrim {primOp = PrimListZipWith}))
         b_ty' = norm b_ty
         c_ty' = norm c_ty
         result_ty = norm (itList c_ty)
+        -- Node predicates guard the whole suffix; see doListMap.
         zipLists e1 e2 =
           evalListOp prim_i e1 a_ty' result_ty (listOpUndet result_ty)
             (\p -> return $ P p $ iMkNil c_ty')
@@ -4749,9 +4754,10 @@ doListZipWith f@(ICon prim_i (ICPrim {primOp = PrimListZipWith}))
               evalListOp prim_i e2 b_ty' result_ty (listOpUndet result_ty)
                 (\p2 -> return $ P (pConj p1 p2) $ iMkNil c_ty')
                 (\p2 e_h2 e_t2 -> do
-                  mapped_h <- toHeap "list-zipwith-elem" c_ty' (pExprToHExpr (P (pConj p1 p2) (iAp (iAp func' e_h1) e_h2))) Nothing
-                  P p_rest mapped_t <- zipLists e_t1 e_t2
-                  return $ P p_rest $ iMkCons c_ty' mapped_h mapped_t))
+                  let p12 = pConj p1 p2
+                  mapped_h <- toHeap "list-zipwith-elem" c_ty' (pExprToHExpr (P p12 (iAp (iAp func' e_h1) e_h2))) Nothing
+                  mapped_t <- zipLists e_t1 e_t2
+                  return $ P p12 $ iMkCons c_ty' mapped_h (pExprToHExpr mapped_t)))
     zipLists list1_e list2_e
 
 doListZipWith f _ _ _ _ _ _ = internalError("IExpand.doListZipWith : " ++ ppReadable f)
@@ -4806,12 +4812,13 @@ doListAppend f@(ICon prim_i (ICPrim {primOp = PrimListAppend}))
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
         result_ty = norm (itList elem_ty)
+    -- Node predicates guard the whole suffix; see doListMap.
     let appendList e =
           evalListOp prim_i e elem_ty' result_ty (listOpUndet result_ty)
             (\p -> eval1 ys >>= \(P py ys') -> return (P (pConj p py) ys'))
             (\p e_h e_t -> do
-              P p_rest mapped_t <- appendList e_t
-              return $ P p_rest $ iMkCons elem_ty' e_h mapped_t)
+              rest <- appendList e_t
+              return $ P p $ iMkCons elem_ty' e_h (pExprToHExpr rest))
     appendList xs
 doListAppend f _ _ _ = internalError ("IExpand.doListAppend : " ++ ppReadable f)
 
@@ -4821,18 +4828,19 @@ doListConcat f@(ICon prim_i (ICPrim {primOp = PrimListConcat}))
     norm <- getTypeNormalizer
     let elem_ty' = norm elem_ty
         list_ty  = norm (itList elem_ty)
+        -- Node predicates guard the whole suffix; see doListMap.
         appendList ys e =
           evalListOp prim_i e elem_ty' list_ty (listOpUndet list_ty)
             (\p -> eval1 ys >>= \(P py ys') -> return (P (pConj p py) ys'))
             (\p e_h e_t -> do
-              P p_rest mapped_t <- appendList ys e_t
-              return $ P p_rest $ iMkCons elem_ty' e_h mapped_t)
+              rest <- appendList ys e_t
+              return $ P p $ iMkCons elem_ty' e_h (pExprToHExpr rest))
         concatList e =
           evalListOp prim_i e list_ty list_ty (listOpUndet list_ty)
             (\p -> return $ P p $ iMkNil elem_ty')
             (\p e_h e_t -> do
-              P p_rest t' <- concatList e_t
-              P p_app appended <- appendList (pExprToHExpr (P p_rest t')) e_h
+              rest <- concatList e_t
+              P p_app appended <- appendList (pExprToHExpr rest) e_h
               return $ P (pConj p p_app) appended)
     concatList xss
 doListConcat f _ _ = internalError ("IExpand.doListConcat : " ++ ppReadable f)
