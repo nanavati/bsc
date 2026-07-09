@@ -383,14 +383,16 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
 
        -- create new new module definitions for the CPackage.
        -- Under -boundary-inject (increment 11) the skeletons are
-       -- NOT planted: they are constructed at genModule time
-       -- (mkInjectedModDef) and compiled by the same per-module
-       -- pipeline as the final wrapper.  mkNewModDef still runs for
-       -- its user-error checks (port-name sanity, interface args).
+       -- still PLANTED FOR TYPECHECKING -- the package typecheck is
+       -- what renders synthesis errors (T0043 and friends) with
+       -- their positions and what sees the user body's imports --
+       -- but bsc.hs DROPS them from the typechecked package before
+       -- iConv: the package that reaches code generation carries no
+       -- skeleton, and genModule constructs its own from the
+       -- recorded BoundarySpec (mkInjectedModDef).
        flgs_inj <- getFlags
        let doInject = boundaryInject flgs_inj && generating
-       newModule_s_all <- mapM (mkNewModDef genIfcMap) moduledefs
-       let newModule_s = if doInject then [] else newModule_s_all
+       newModule_s <- mapM (mkNewModDef genIfcMap) moduledefs
 
        to_Defs <- mapM mkTo_ trs
        from_Defs <- mapM mkFrom_ trs

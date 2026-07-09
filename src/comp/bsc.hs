@@ -435,8 +435,25 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
-    --putStr (ppReadable mod)
+    (mod0, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
+    -- under -boundary-inject (increment 11), the wrapper skeletons
+    -- were planted for the sake of this typecheck (error rendering
+    -- and import-usage need them); the package that continues to
+    -- iConv and code generation carries no skeleton -- genModule
+    -- constructs its own from the recorded BoundarySpec
+    let inj_skels = [ unQualId (wrapped_mod w)
+                    | w <- gens, wi_injected w ]
+        dropSkel (CValueSign (CDef di _ _)) =
+            unQualId di `elem` inj_skels
+        dropSkel (CValueSign (CDefT di _ _ _)) =
+            unQualId di `elem` inj_skels
+        dropSkel _ = False
+        mod = if null inj_skels
+              then mod0
+              else case mod0 of
+                     CPackage pi_ exps imps impsigs fixs pds incs ->
+                         CPackage pi_ exps imps impsigs fixs
+                             (filter (not . dropSkel) pds) incs
     t <- dump errh flags t DFtypecheck dumpnames mod
 
     --when (early flags) $ return ()
