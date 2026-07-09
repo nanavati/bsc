@@ -25,7 +25,7 @@ erase "inject_decisions.log"
 
 compile_verilog_pass HierInj.bsv mkHierInj
 compile_verilog_pass ArgInj.bsv mkArgInj
-compile_fail_error BadArgInj.bsv T0032
+compile_verilog_fail_error BadArgInj.bsv T0043
 
 # ----------
 # injection: fresh state, the flag, and the decision census
@@ -53,7 +53,7 @@ find_regexp mkArgInj.v {input  \[7 : 0\] k_1}
 
 # a user error in the module's argument types survives (its phase
 # moves to genModule; the message does not disappear)
-compile_fail_error BadArgInj.bsv T0032 1 {-boundary-inject}
+compile_verilog_fail_error BadArgInj.bsv T0043 1 mkBadArgInj {-boundary-inject}
 
 # the injection substrate composes with the description substrate:
 # fold + shadow + inject together
