@@ -91,13 +91,12 @@ import ISyntax(IPackage(..), IModule(..),
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
-import FixupDefs(fixupDefs, updDef, fixupIDef)
+import FixupDefs(fixupDefs, updDef)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
-import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..), GenState(..),
-               isRdyToRemoveField, mkInjectedModDef, runGWMonadNoFail)
+import GenWrap(genWrap, WrapInfo(..), BoundarySpec(..), isRdyToRemoveField)
 import GenBoundary(renderWrapperCDefn)
 import BoundaryDesc(boundaryIdForIfc, readBoundaryEntries, codecShadowErrs, wrapperCodecs,
                     shadowBoundaryErrs)
@@ -435,25 +434,8 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod0, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
-    -- under -boundary-inject (increment 11), the wrapper skeletons
-    -- were planted for the sake of this typecheck (error rendering
-    -- and import-usage need them); the package that continues to
-    -- iConv and code generation carries no skeleton -- genModule
-    -- constructs its own from the recorded BoundarySpec
-    let inj_skels = [ unQualId (wrapped_mod w)
-                    | w <- gens, wi_injected w ]
-        dropSkel (CValueSign (CDef di _ _)) =
-            unQualId di `elem` inj_skels
-        dropSkel (CValueSign (CDefT di _ _ _)) =
-            unQualId di `elem` inj_skels
-        dropSkel _ = False
-        mod = if null inj_skels
-              then mod0
-              else case mod0 of
-                     CPackage pi_ exps imps impsigs fixs pds incs ->
-                         CPackage pi_ exps imps impsigs fixs
-                             (filter (not . dropSkel) pds) incs
+    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
+    --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
     --when (early flags) $ return ()
@@ -573,32 +555,39 @@ compilePackage
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
 
+    -- under -boundary-inject (increment 11): the wrapper skeletons
+    -- rode the ENTIRE package pipeline -- typecheck (error rendering
+    -- and import-usage see them), iConv, fixup, iSimplify -- so each
+    -- finished IDef is byte-for-byte what the legacy path would have
+    -- elaborated.  Here they are CAPTURED and DROPPED: the package
+    -- that continues to code generation and the .bo carries no
+    -- skeleton, and genModule elaborates the captured def directly
+    -- (the one application, injected post-typecheck).
+    let inj_skel_ids = [ unQualId (wrapped_mod w)
+                       | w <- gens, wi_injected w ]
+        (skel_idefs, imods') =
+            if null inj_skel_ids
+            then ([], imods)
+            else case imods of
+                   IPackage pi_ lps ps ds ->
+                       let isSkelD (IDef di _ _ _) =
+                               unQualId di `elem` inj_skel_ids
+                           (sds, ds') = partition isSkelD ds
+                       in  (sds, IPackage pi_ lps ps ds')
+        skelIMap = M.fromList [ (unQualId di, d)
+                              | d@(IDef di _ _ _) <- skel_idefs ]
+
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
         orderGens (IPackage pid _ _ ds) gs =
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
           where gis = [ qualId pid (mod_nm w) | w <- gs ]
                 tr = [ (qualId pid (wrapped_mod w), qualId pid (mod_nm w))
-                                | w <- gs, not (wi_injected w) ]
+                                | w <- gs ]
                 ds' = [ IDef (lookupWithDefault tr i i) t e p
                                 | IDef i t e p <- ds, i `notElem` gis ]
                 is = [ i | IDef i _ _ _ <- ds' ]
-                -- an injected module (increment 11) has no planted
-                -- skeleton in the package, so the graph gets a
-                -- synthetic node whose edges come from the recorded
-                -- free variables of the user def's body (matched by
-                -- base name against package defs and generated
-                -- modules)
-                inj_nodes = [ qualId pid (mod_nm w)
-                                | w <- gs, wi_injected w ]
-                targets = is ++ inj_nodes
-                inj_g = [ (qualId pid (mod_nm w),
-                           [ n | n <- targets,
-                                 unQualId n `elem` udeps ])
-                            | w <- gs, wi_injected w,
-                              let udeps = map unQualId (wi_deps w) ]
-                g  = [ (i, fdVars e `intersect` targets)
-                                | IDef i _ e _ <- ds' ] ++ inj_g
+                g  = [ (i, fdVars e `intersect` is) | IDef i _ e _ <- ds' ]
                 iis = scc g
                 os = concat iis `intersect` gis
                 get i = headOrErr "bsc.orderGens: no WrapInfo"
@@ -643,36 +632,22 @@ compilePackage
                   (elab_def, okS) <-
                       if wi_injected wi
                       then do
-                        let st = (bs_state (wi_boundary wi))
-                                     { symtable = symt }
-                        skel <- runGWMonadNoFail
-                                    (mkInjectedModDef (wi_boundary wi))
-                                    st
                         milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
                         case milog of
                           Just fn -> appendFile fn
                               ("inject " ++ getIdBaseString i ++ "\n")
                           Nothing -> return ()
-                        (skelIDef, okS) <-
-                            compileCDefToIDef errh flags dumpnames'
-                                symt imods skel
-                        -- inline top-level def bodies into the
-                        -- skeleton's references (it is elaborated
-                        -- directly, so it never passes through the
-                        -- package-level fixup), and simplify it the
-                        -- way the package pipeline would have (the
-                        -- planted skeleton went through iSimplify;
-                        -- without this, extra beta redexes shift the
-                        -- evaluator's heap numbering and hence the
-                        -- generated wire-name suffixes)
-                        let skelIDef' = fixupIDef im binmods skelIDef
-                            IPackage _ _ _ simp_ds =
-                                iSimplify (IPackage pkgId [] []
-                                               [skelIDef'])
-                            skelIDef'' = case simp_ds of
-                                           [d1] -> d1
-                                           _ -> skelIDef'
-                        return (skelIDef'', okS)
+                        -- the captured skeleton rode the whole
+                        -- package pipeline (typecheck, iConv, fixup,
+                        -- iSimplify): it IS the def the legacy path
+                        -- would have elaborated, minus its presence
+                        -- in the outgoing package
+                        let skel = case M.lookup (unQualId i') skelIMap of
+                                     Just d -> d
+                                     Nothing -> internalError
+                                        ("bsc.gen: no captured skeleton "
+                                         ++ ppReadable i')
+                        return (skel, True)
                       else do
                         milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
                         case milog of
@@ -760,7 +735,7 @@ compilePackage
             gen (im', success && ok && ok2) xs
 
 
-    (imodr, success) <- gen (imods, True) ordgens
+    (imodr, success) <- gen (imods', True) ordgens
 
     t <- getNow
     -- Finally, generate interface files
