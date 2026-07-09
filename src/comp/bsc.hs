@@ -91,7 +91,7 @@ import ISyntax(IPackage(..), IModule(..),
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
-import FixupDefs(fixupDefs, updDef, fixupIDef)
+import FixupDefs(fixupDefs, updDef, fixupIDefSel)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -612,6 +612,8 @@ compilePackage
     --   doesn't update "alldefs"; this is likely OK because it is only used
     --   to build undefined values (in IExpand) and to insert RWires
     --   (in AAddSchedAssumps)
+    let genNmSet = S.fromList
+            [ qualId pkgId (mod_nm w) | w <- gens ]
     let gen :: (IPackage HeapData, Bool) -> [WrapInfo] -> IO (IPackage HeapData, Bool)
         gen (im, !success) []  = return (im, success)
         gen (im, !success) (wi@(WrapInfo { mod_nm = i, wrapped_mod = i' }) : xs) = do
@@ -645,17 +647,19 @@ compilePackage
                         -- were knotted at capture time, though --
                         -- against pre-synthesis stubs -- and a
                         -- legacy skeleton gets re-knotted by every
-                        -- updDef; re-fix the captured def against
-                        -- the CURRENT package, so references to
-                        -- already-generated members see their
+                        -- updDef; re-fix ONLY its references to
+                        -- same-package generated members against
+                        -- the CURRENT package, so they see their
                         -- post-synthesis wrappers (mkOneOf's
-                        -- boundary walk depends on it)
+                        -- boundary walk depends on it) -- and
+                        -- nothing else is touched, preserving every
+                        -- inner position (EBigLit3's T0051)
                         let skel = case M.lookup (unQualId i') skelIMap of
                                      Just d -> d
                                      Nothing -> internalError
                                         ("bsc.gen: no captured skeleton "
                                          ++ ppReadable i')
-                        return (fixupIDef im binmods skel, True)
+                        return (fixupIDefSel genNmSet im skel, True)
                       else do
                         milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
                         case milog of

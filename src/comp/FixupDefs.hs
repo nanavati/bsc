@@ -1,7 +1,8 @@
-module FixupDefs(fixupDefs, updDef, fixupIDef) where
+module FixupDefs(fixupDefs, updDef, fixupIDef, fixupIDefSel) where
 
 import Data.List(nub)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import PFPrint
 import ErrorUtil(internalError)
 import Id
@@ -64,6 +65,29 @@ fixupIDef (IPackage _ _ _ ds) ipkgs d =
     in  case iDefsMap (fixUp m) [d] of
           [d'] -> d'
           _ -> internalError "FixupDefs.fixupIDef"
+
+-- ===============
+
+-- Replace the bodies of ICDef references to SELECTED ids with their
+-- current bodies from the (already-knotted) package, leaving every
+-- other node -- and every position -- untouched.  Used to re-knot a
+-- captured skeleton's references to same-package generated members,
+-- whose defs updDef replaces as generation proceeds (increment 11);
+-- the full fixupIDef re-stamps positions (updateIExprPosition),
+-- which degraded inner error positions on a second application.
+fixupIDefSel :: S.Set Id -> IPackage a -> IDef a -> IDef a
+fixupIDefSel keep (IPackage _ _ _ ds) (IDef di dt de dp) =
+    let m = M.fromList [ (i, e) | IDef i _ e _ <- ds,
+                                  i `S.member` keep ]
+        fixSel (ILam i t e) = ILam i t (fixSel e)
+        fixSel (ILAM i k e) = ILAM i k (fixSel e)
+        fixSel (IAps f ts es) = IAps (fixSel f) ts (map fixSel es)
+        fixSel e@(ICon i (ICDef t _)) =
+            case M.lookup i m of
+              Just b -> ICon i (ICDef t b)
+              Nothing -> e
+        fixSel e = e
+    in  IDef di dt (fixSel de) dp
 
 -- ===============
 
