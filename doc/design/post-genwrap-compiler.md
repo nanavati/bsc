@@ -3773,6 +3773,46 @@ re-typecheck (`compileCDefToIDef`'s one-def
 ctxreduce/typecheck/simplify/iConv pipeline, `bsc.hs:2430-2457`,
 which re-solves per module what the description already records).
 
+**10 — codecs by reference, verified (re-scoped).** Planned as the
+ISyntax-direct renderer; re-scoped when ground truth changed the
+economics. Dumps of every wrapper shape at the `DFwrapper_*` stages
+showed the final wrapper IDef is a fixed template (monad-bind spine
+→ one `ICVerilog` → `saveFieldPortTypes` chain → interface
+construction) whose inline `WrapField` dictionaries are exactly the
+closed expressions the descriptions record — the renderer is fully
+designed (template spec, typed-CSyntax-into-`iConvDef` shape, and
+the constructor-encoding hazards are archived in this increment's
+commit history and the session notes) — but the per-wrapper
+pipeline it would bypass (`compileCDefToIDef`: a one-def
+ctxreduce/typecheck/simplify/iConv per module, `bsc.hs:2430-2457`)
+costs single-digit milliseconds, and the §5.3 relocation does not
+need the bypass (that pipeline already runs post-typecheck inside
+genModule and is reusable as-is). So the increment proves the
+codecs instead: under `-check-wrap-shadow`, after each wrapper
+compiles, every `fromWrapField` application in the compiled
+definition is located, its let-bound dictionary inlined (wrapper
+lets are applied-lambda shapes), and compared STRUCTURALLY against
+the recorded `CodecRef` — recorded codecs made self-contained at
+read time by inlining the description def's own lets. One real
+finding, immediately: a noinline wrapper regenerated in an
+importing package (b1356) re-solves its `TupleSize` proviso — an
+EVIDENCE-ONLY class, numeric fundep evidence, no methods — to a
+differently CONSTRUCTED but observationally identical dictionary
+(structural `ICTuple` vs the source instance chain), so
+evidence-only nodes compare by their fully-applied class type
+(methodness judged from the symtab) while method-bearing
+dictionaries stay strictly structural. Verified: corpus 211/0
+byte-identical; fourteen suites; the full lane's failure set
+byte-identical to baseline with censuses 3781 folds / 0 fallbacks
+and 3704 dictionary comparisons across 3788 modules (a
+non-vacuousness census hook, `BSC_CODEC_SHADOW_LOG`); the whole
+shadow stack (boundary + types + codecs) costs ~8% on a
+wrapper-heavy slice, less at suite scale, in the diagnostic lane
+only. With naming (8), types (9), and codecs (10) all proven, the
+description fully determines the wrapper's semantic content: the
+ISyntax renderer is now an optimization, not a prerequisite — the
+§5.3 injection (increment 11) proceeds on the mini-pipeline.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
