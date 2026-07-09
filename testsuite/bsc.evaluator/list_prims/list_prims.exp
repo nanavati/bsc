@@ -67,3 +67,13 @@ test_c_veri_bsv OverApplyListSelect
 # --- A self-referential list dies with too-many-steps, not a hang ---
 compile_verilog_fail_error CyclicList.bs G0024 1 "" {-steps-warn-interval 5000 -steps-max-intervals 1}
 
+# --- Instance naming pins for monadic traversals ---
+# Vector mapM/replicateM yields indexed names; List yields collision
+# suffixes.  These names are user-visible hierarchy; do not let library
+# or evaluator changes shift them silently.
+compile_verilog_pass MapMNames.bsv sysMapMNames
+find_regexp sysMapMNames.v {xs_0}
+find_regexp sysMapMNames.v {xs_1}
+find_regexp sysMapMNames.v {xs_2}
+find_regexp sysMapMNames.v {ls_1}
+find_regexp sysMapMNames.v {ls_2}
