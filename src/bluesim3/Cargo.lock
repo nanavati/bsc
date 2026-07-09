@@ -34,6 +34,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bsim3-capi"
+version = "0.0.1"
+dependencies = [
+ "bsim3-interp",
+ "bsim3-ir",
+ "libc",
+]
+
+[[package]]
 name = "bsim3-codegen"
 version = "0.0.1"
 dependencies = [
