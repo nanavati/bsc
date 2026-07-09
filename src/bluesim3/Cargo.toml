@@ -7,6 +7,7 @@ members = [
     "crates/bsim3-rt",
     "crates/bsim3-wave",
     "crates/bsim3-codegen",
+    "crates/bsim3-capi",
     "crates/bsim3",
 ]
 # bsim3-codegen needs llvm-18-dev; everything else builds without it.
@@ -16,6 +17,7 @@ default-members = [
     "crates/bsim3-kernel",
     "crates/bsim3-rt",
     "crates/bsim3-wave",
+    "crates/bsim3-capi",
     "crates/bsim3",
 ]
 
