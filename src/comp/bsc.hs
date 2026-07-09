@@ -91,7 +91,7 @@ import ISyntax(IPackage(..), IModule(..),
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
-import FixupDefs(fixupDefs, updDef)
+import FixupDefs(fixupDefs, updDef, fixupIDef)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -641,13 +641,21 @@ compilePackage
                         -- package pipeline (typecheck, iConv, fixup,
                         -- iSimplify): it IS the def the legacy path
                         -- would have elaborated, minus its presence
-                        -- in the outgoing package
+                        -- in the outgoing package.  Its references
+                        -- were knotted at capture time, though --
+                        -- against pre-synthesis stubs -- and a
+                        -- legacy skeleton gets re-knotted by every
+                        -- updDef; re-fix the captured def against
+                        -- the CURRENT package, so references to
+                        -- already-generated members see their
+                        -- post-synthesis wrappers (mkOneOf's
+                        -- boundary walk depends on it)
                         let skel = case M.lookup (unQualId i') skelIMap of
                                      Just d -> d
                                      Nothing -> internalError
                                         ("bsc.gen: no captured skeleton "
                                          ++ ppReadable i')
-                        return (skel, True)
+                        return (fixupIDef im binmods skel, True)
                       else do
                         milog <- lookupEnv "BSC_BOUNDARY_INJECT_LOG"
                         case milog of
