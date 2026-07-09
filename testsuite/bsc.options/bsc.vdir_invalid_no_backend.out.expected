@@ -35,5 +35,7 @@ Flags:
      -unspecified-to   A
      -vdir   INVALID
      -warn-action-shadowing
+     -warn-incomplete-patterns
      -warn-method-urgency
+     -warn-overlapping-patterns
 

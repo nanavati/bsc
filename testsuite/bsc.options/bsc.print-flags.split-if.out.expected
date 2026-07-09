@@ -22,5 +22,7 @@ Flags:
     -steps-warn-interval 100000
     -unspecified-to A
     -warn-action-shadowing
+    -warn-incomplete-patterns
     -warn-method-urgency
+    -warn-overlapping-patterns
 

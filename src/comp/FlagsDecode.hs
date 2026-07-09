@@ -657,7 +657,9 @@ defaultFlags bluespecdir = Flags {
         verilogDeclareAllFirst = True,
         verilogFilter = [],
         warnActionShadowing = True,
+        warnIncompletePatterns = True,
         warnMethodUrgency = True,
+        warnOverlappingPatterns = True,
         warnUndetPred = False
         }
 
@@ -1711,9 +1713,17 @@ externalFlags = [
          (Toggle (\f x -> f {warnActionShadowing=x}) (showIfTrue warnActionShadowing),
           "warn when a rule's action is overwritten by a later rule", Visible)),
 
+        ("warn-incomplete-patterns",
+         (Toggle (\f x -> f {warnIncompletePatterns=x}) (showIfTrue warnIncompletePatterns),
+          "warn when pattern matching does not cover all possible values", Visible)),
+
         ("warn-method-urgency",
          (Toggle (\f x -> f {warnMethodUrgency=x}) (showIfTrue warnMethodUrgency),
           "warn when a method's urgency is arbitrarily chosen", Visible)),
+
+        ("warn-overlapping-patterns",
+         (Toggle (\f x -> f {warnOverlappingPatterns=x}) (showIfTrue warnOverlappingPatterns),
+          "warn when a pattern can never match (shadowed by earlier patterns)", Visible)),
 
         ("warn-undet-predicate",
          (Toggle (\f x -> f {warnUndetPred=x}) (showIfTrue warnUndetPred),
@@ -1953,7 +1963,9 @@ showFlagsRaw flags =
           ("vpp", show (vpp flags)),
           ("vsim", show (vsim flags)),
           ("warnActionShadowing", show (warnActionShadowing flags)),
+          ("warnIncompletePatterns", show (warnIncompletePatterns flags)),
           ("warnMethodUrgency", show (warnMethodUrgency flags)),
+          ("warnOverlappingPatterns", show (warnOverlappingPatterns flags)),
           ("warnUndetPred", show (warnUndetPred flags))
          ]
         in "Flags {\n" ++

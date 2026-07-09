@@ -131,6 +131,8 @@ Flags {
 	vpp = True,
 	vsim = Nothing,
 	warnActionShadowing = True,
+	warnIncompletePatterns = True,
 	warnMethodUrgency = True,
+	warnOverlappingPatterns = True,
 	warnUndetPred = False
 }
