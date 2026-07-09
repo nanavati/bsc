@@ -4616,28 +4616,27 @@ doArrayZipWith f@(ICon _ (ICPrim {primOp = PrimArrayZipWith}))
     let resultType = norm (ITAp itPrimArray c_ty)
         a_ty' = norm a_ty
         b_ty' = norm b_ty
-        c_ty' = norm c_ty
     withNormalizedArray True arr1_e (ITAp itPrimArray a_ty') $ \p1 arr1_e' ->
       case arr1_e' of
         ICon ci1 (ICLazyArray _ arr1 _) ->
           withNormalizedArray True arr2_e (ITAp itPrimArray b_ty') $ \p2 arr2_e' ->
             case arr2_e' of
               ICon _ (ICLazyArray _ arr2 _) -> do
+                -- The result is as long as the shorter input (zipWithAny
+                -- permits different sizes), and cells are built lazily like
+                -- doArrayMap so that unconsumed elements are never forced.
                 let p12 = pConj p1 p2
-                    bounds = Array.bounds arr1
-                    (lo, hi) = bounds
+                    (lo, hi1) = Array.bounds arr1
+                    (_,  hi2) = Array.bounds arr2
+                    hi = min hi1 hi2
                     zipCell i = do
                       let (ArrayCell pt1 r1) = arr1 Array.! i
                           (ArrayCell pt2 r2) = arr2 Array.! i
                           e1 = IRefT a_ty' pt1 S.empty r1
                           e2 = IRefT b_ty' pt2 S.empty r2
-                      pe <- addPredG p12 $
-                              evalAp "array-zipwith" func' [E e1, E e2]
-                      IRefT _ ref_p _ ref_r
-                          <- toHeapWHNFCon "array-zipwith" c_ty' (pExprToHExpr pe) Nothing
-                      return (ArrayCell ref_p ref_r)
+                      mkArrayCell (pExprToHExpr (P p12 (iAp (iAp func' e1) e2)))
                 cells <- mapM zipCell [lo..hi]
-                let arr' = Array.listArray bounds cells
+                let arr' = Array.listArray (lo, hi) cells
                 return $ pExpr $ ICon ci1 (ICLazyArray resultType arr' Nothing)
               _ -> nfError "primArrayZipWith" $
                      mkAp f [T a_ty, T b_ty, T c_ty, E func, E arr1_e, E arr2_e']
