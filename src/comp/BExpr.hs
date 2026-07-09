@@ -5,11 +5,10 @@ module BExpr(BExpr, bNothing, bAdd, bImplies, bImpliesB) where
 import Prelude hiding ((<>))
 #endif
 
-import Util(isOrdSubset, mergeOrdNoDup)
+import qualified Data.Set as S
 import PPrint
 import ISyntax
 import ISyntaxUtil
---import BDD
 import Prim
 
 --import Debug.Trace
@@ -27,68 +26,35 @@ bAdd :: IExpr a -> BExpr a -> BExpr a
 bImplies :: BExpr a -> IExpr a -> Bool
 bImpliesB :: BExpr a -> BExpr a -> Bool
 
-{-
--- This implementation is exact, but slow.
-newtype BExpr = B (BDD IExpr)
-
-instance PPrint BExpr where
-    pPrint d p _ = text "BExpr"
-
-toBExpr :: IExpr -> BDD IExpr
-toBExpr (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = bddAnd (toBExpr e1) (toBExpr e2)
-toBExpr (IAps (ICon _ (ICPrim _ PrimBOr))  _ [e1, e2]) = bddOr  (toBExpr e1) (toBExpr e2)
-toBExpr (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = bddNot (toBExpr e)
-toBExpr e = if e == iTrue then bddTrue else if e == iFalse then bddFalse else bddVar e
-
-bNothing = B bddTrue
-
-bAdd e (B bdd) = B (bddAnd (toBExpr e) bdd)
-
-bImplies (B bdd) e = bddIsTrue (bddImplies bdd (toBExpr e))
--}
-
----------
-
-{-
--- Trivial implementation.
-
-newtype BExpr a = B ()
+-- The facts are a set of conjuncts known to be true.  Queries and new
+-- facts are split into their conjuncts (getAnds . norm); a query is
+-- implied when every conjunct is a known fact.
+newtype BExpr a = A (S.Set (IExpr a))
 
 instance PPrint (BExpr a) where
-    pPrint d p _ = text "BExpr"
+    pPrint d p (A es) = text "(B" <+> pPrint d 0 (S.toList es) <> text ")"
 
-bNothing = B ()
+bNothing = A (S.singleton iTrue)
 
-bAdd _ _ = B ()
+bAdd e (A es) = A $ foldr S.insert es (get e)
 
-bImplies _ e = isTrue e
+-- The conjunct list is produced lazily (invert builds thunks and
+-- getAnds streams the spine), so this stops at the first conjunct that
+-- is not a known fact without ever materializing the rest of the
+-- (possibly large) inverted expression.
+bImplies (A es) e = all (`S.member` es) (get e)
 
-bImpliesB _ _ = False
-
----------
--}
-
-newtype BExpr a = A [IExpr a]
-
-instance PPrint (BExpr a) where
-    pPrint d p (A es) = text "(B" <+> pPrint d 0 es <> text ")"
-
-bNothing = A [iTrue]
-
-bAdd e (A es) = A $ mergeOrdNoDup (get e) es
-
-bImplies (A es) e =
---        if length es > 1 then trace (ppReadable (e, es, isOrdSubset (get e) es)) $ isOrdSubset (get e) es
-        isOrdSubset (get e) es
-
-bImpliesB b (A es) = all (bImplies b) es
+bImpliesB b (A es) = all (bImplies b) (S.toList es)
 
 get :: IExpr a -> [IExpr a]
 get = getAnds . norm
 
+-- split a PrimBAnd spine into its conjuncts (accumulator, no dedup:
+-- the consumers are set operations, which deduplicate themselves)
 getAnds :: IExpr a -> [IExpr a]
-getAnds (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = mergeOrdNoDup (getAnds e1) (getAnds e2)
-getAnds e = [e]
+getAnds e0 = go e0 []
+  where go (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) acc = go e1 (go e2 acc)
+        go e acc = e : acc
 
 norm :: IExpr a -> IExpr a
 norm (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = invert e
