@@ -1,9 +1,12 @@
 # -boundary-inject (hidden flag; increment 11 pilot of the design
-# doc's section-5.3 injection relocation): GenWrap does NOT plant the
-# wrapper skeleton in the package -- the user's def stays a
-# top-level def, unrenamed and unstubbed, typechecked as written --
-# and the skeleton is constructed at genModule time from the
-# recorded BoundarySpec and compiled by the same per-module pipeline
+# doc's section-5.3 injection relocation): the wrapper skeleton is
+# planted at GenWrap time exactly as today and rides the whole
+# package pipeline (typecheck renders user errors and marks import
+# usage; iConv; fixupDefs; iSimplify), but its finished IDef is then
+# CAPTURED and the def DROPPED from the package before the
+# generation loop -- the .bo carries no skeleton -- and at its
+# module's genModule turn the captured IDef is re-knotted against
+# the current package and compiled by the same per-module pipeline
 # as the final wrapper.  The generated hardware must be identical
 # (the byte-identity gate lives in the corpus comparison; here the
 # census, the boundary port names, behavior on Bluesim, and the
@@ -25,6 +28,7 @@ erase "inject_decisions.log"
 
 compile_verilog_pass HierInj.bsv mkHierInj
 compile_verilog_pass ArgInj.bsv mkArgInj
+compile_verilog_pass SiblingInj.bsv mkSibTop
 compile_verilog_fail_error BadArgInj.bsv T0043
 
 # ----------
@@ -41,6 +45,15 @@ set env(BSC_BOUNDARY_INJECT_LOG) "inject_decisions.log"
 
 compile_verilog_pass HierInj.bsv mkHierInj {-boundary-inject}
 compile_verilog_pass ArgInj.bsv mkArgInj {-boundary-inject}
+
+# two generated modules in ONE package, the second instantiating the
+# first: the parent's captured skeleton reaches the sibling only
+# through the renamed user def, so the genModule re-knot must
+# refresh every same-package reference, not just generated members
+# (the generated-members-only re-knot spun the evaluator forever --
+# found by bsc.scheduler's IgnoreRdy)
+compile_verilog_pass SiblingInj.bsv mkSibTop {-boundary-inject}
+find_regexp mkSibTop.v {mkSibSub s\(}
 
 # the injected boundary is the same boundary: prefixed subifc ports,
 # and the argument ports/parameters all present
@@ -71,6 +84,8 @@ if { [info exists saved_inject_log] } {
 # every generated module went through the injected path
 find_regexp inject_decisions.log {inject mkHierInj}
 find_regexp inject_decisions.log {inject mkArgInj}
+find_regexp inject_decisions.log {inject mkSibSub}
+find_regexp inject_decisions.log {inject mkSibTop}
 find_regexp_fail inject_decisions.log {legacy}
 
 # ----------

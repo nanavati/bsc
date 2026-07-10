@@ -2,7 +2,6 @@ module FixupDefs(fixupDefs, updDef, fixupIDef, fixupIDefSel) where
 
 import Data.List(nub)
 import qualified Data.Map as M
-import qualified Data.Set as S
 import PFPrint
 import ErrorUtil(internalError)
 import Id
@@ -68,17 +67,26 @@ fixupIDef (IPackage _ _ _ ds) ipkgs d =
 
 -- ===============
 
--- Replace the bodies of ICDef references to SELECTED ids with their
+-- Replace the bodies of same-package ICDef references with their
 -- current bodies from the (already-knotted) package, leaving every
 -- other node -- and every position -- untouched.  Used to re-knot a
--- captured skeleton's references to same-package generated members,
--- whose defs updDef replaces as generation proceeds (increment 11);
+-- captured skeleton against the current package, whose generated
+-- members updDef replaces as generation proceeds (increment 11);
 -- the full fixupIDef re-stamps positions (updateIExprPosition),
 -- which degraded inner error positions on a second application.
-fixupIDefSel :: S.Set Id -> IPackage a -> IDef a -> IDef a
-fixupIDefSel keep (IPackage _ _ _ ds) (IDef di dt de dp) =
-    let m = M.fromList [ (i, e) | IDef i _ e _ <- ds,
-                                  i `S.member` keep ]
+--
+-- EVERY package def on the skeleton's spine must be re-fixed, not
+-- just the generated members: a stale generated-member body can be
+-- embedded at any depth behind a non-generated package def (the
+-- renamed user def of one module instantiating a sibling module of
+-- the same package -- bsc.scheduler's IgnoreRdy spun the evaluator
+-- forever on exactly that), and the current knot is the only
+-- globally consistent source.  Import refs stay untouched: imports
+-- cannot reference this package, so their embedded knots are
+-- current by construction.
+fixupIDefSel :: IPackage a -> IDef a -> IDef a
+fixupIDefSel (IPackage _ _ _ ds) (IDef di dt de dp) =
+    let m = M.fromList [ (i, e) | IDef i _ e _ <- ds ]
         fixSel (ILam i t e) = ILam i t (fixSel e)
         fixSel (ILAM i k e) = ILAM i k (fixSel e)
         fixSel (IAps f ts es) = IAps (fixSel f) ts (map fixSel es)
