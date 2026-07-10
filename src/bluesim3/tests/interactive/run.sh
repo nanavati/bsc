@@ -122,8 +122,13 @@ fi
 # this witnesses the COMPILED path's post-finish writes; a mid-edge
 # abort answers mark=0)
 if build FinishPeek.bsv sysFinishPeek; then
-    export BSIM3_CAPI_ENGINES=jit
+    # BSIM3_JIT_SYNC pins warmth: without it the compiled-path
+    # coverage is a wall-clock race (the assertion itself is
+    # race-immune, but the witness must deterministically exercise
+    # the COMPILED finish edge)
+    export BSIM3_CAPI_ENGINES=jit BSIM3_JIT_SYNC=1
     check sysFinishPeek finishpeek.cmd
+    unset BSIM3_JIT_SYNC
     export BSIM3_CAPI_ENGINES=interp
 fi
 # BDPI-under-Tcl (task #10 packaging): the companion .bdpi.so travels

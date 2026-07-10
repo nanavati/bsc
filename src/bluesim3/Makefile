@@ -38,6 +38,9 @@ install: build
 	$(INSTALL) -m 755 -d $(BINDIR)
 	$(INSTALL) -m 755 target/release/bsim3 $(BINDIR)/bsim3
 	$(INSTALL) -m 644 target/release/libbsim3_capi.a $(BINDIR)/libbsim3_capi.a
+	# debuginfo in the staticlib is dead weight at .so link time
+	# (~420MB -> tens of MB); the interactive link strips the model
+	strip --strip-debug $(BINDIR)/libbsim3_capi.a
 
 .PHONY: clean full_clean
 clean full_clean:
