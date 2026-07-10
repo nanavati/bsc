@@ -12,8 +12,8 @@ upstream main (d2f996c0)
 ├── PR-A #1033  claude/coherence-keywords-coverage OPEN     4 commits  3e91add7
 │   (independent of PR1; both merge into the integration base)
 └── integration base 20271cb1 = main + PR1 + PR-A (linearized)
-    └── PR2  claude/ordered-clause-commitment     PUSHED   6 commits  be57c20c
-        ├── PR3  claude/sat-batching-settlement   PUSHED   2 commits  cbc061db
+    └── PR2  claude/ordered-clause-commitment     SEALED   7 commits  ff278307
+        ├── PR3  claude/sat-batching-settlement   PUSHED   2 commits  d8a5cab9
         ├── PR6  bound-variable discipline        NEXT CARVE (parallel to PR3)
         └── PR4  solved-dictionary pool           LAST (needs PR3 + PR6)
 ```
@@ -40,26 +40,31 @@ suppresses T0160; `coherent` forbids unforced selection regardless of the
 flag.  Docs: BSV/BH grammar + annotation + coverage sections.
 Pins: coverage-warning and keyword tests.
 
-### PR2 — ordered-clause commitment (pushed, be57c20c)
-The semantic core. Six commits, born-in-place history:
+### PR2 — ordered-clause commitment (SEALED, ff278307)
+The semantic core. Seven commits, born-in-place history:
 
 1. `91a67022` Give the constraint solver's results proper types —
    `data Match a = NoMatch | Conflict | Match a` + `firstMatch` +
    `matchFDRow` row core; records `SatResult` (with `Commitment`:
    `Committable | Provisional`), `SolveResult`, `Reduction`, `InstMatch`.
    Pure refactor, no behavior change.
-2. `60aea861` Ordered-clause fundep semantics: outputs never bar a match.
-3. `999da4d3` Commit coherent instance matches by default, with predicate
+2. `8001b1b7` Ordered-clause fundep semantics: outputs never bar a match.
+3. `11f19c0d` Commit coherent instance matches by default, with predicate
    ancestry (the commitment machinery; `earlierInstanceMayCapture` modal
    check; incoherent classes + `-legacy-defer-instances` keep fall-through).
-4. `4eba5bf1` Report ordered-clause fundep conflicts (T0159), failing fast
+4. `3056de98` Report ordered-clause fundep conflicts (T0159), failing fast
    when final (`matchTopIsReducible`, `findFunDepConflict`).
-5. `23a6e9ab` testsuite: ordered-clause commitment pins
+5. `8f809755` Keep diagnostics rooted, positioned, and complete under
+   commitment (position carrying in reportedPwp, EBadIfcType position
+   fallback, self-contained "could also be deduced" hints, fail-fast
+   deferral to the definition-level report; regenerated goldens for
+   gh221/gh894/BuildList/BuildVector/noinline/signature, b1225 restored).
+6. `08e6966c` testsuite: ordered-clause commitment pins
    (`bsc.typechecker/instances/commit`).
-6. `be57c20c` Document coherent instance selection in the user-facing
+7. `ff278307` Document coherent instance selection in the user-facing
    guides (BSV/BH ref guides + user guide; note BH_lang.tex is latin-1).
 
-### PR3 — SAT batching + settlement (pushed, cbc061db)
+### PR3 — SAT batching + settlement (pushed, d8a5cab9)
 2 commits on PR2. Removes the per-predicate proviso-SAT fallback in
 `reducePred`; numeric residuals stream to a single settlement point per
 definition (`batchSolveNumericPreds`: one solver session per batch,
@@ -83,7 +88,8 @@ their modal checks unguarded (`predUnify []`).  Plus T0161 skolem-escape
 rejection at generalization, `_tc` temporary suppression in EUnify.
 Pins: higherrank skolemization, bound-type-vars goldens, ModalCapture,
 noinline/signature T0043 golden updates.
-Carve by replaying dev-port commits `b608d09a..11b25ffa` onto be57c20c.
+Carve by replaying the dev branch's first six commits above PR3
+(`04e277c6..6d19cdb4`) onto ff278307.
 
 ### PR4 — solved-dictionary pool (last)
 SolvedBinds ordering at emission; intra-pass `solved` sharing through
@@ -91,52 +97,43 @@ sat/satMany; cross-pass EPred pool (propagateFunDeps no longer discards);
 non-ground pool entries; closed-certificate hardening + diagnostics;
 `markIncoherent` (information-dependent choices never pooled); modal pool
 guard.  Pins: `bsc.typechecker/dictpool`, vector_interfaces golden.
-Dev commits: dedc068c, 7e7b7f1e, 3002b4d6, f9bb0919, 3fc386f4 (+ pieces
-of 81a9554e).  Being adapted onto the records refactor on dev-port now.
+Already adapted onto the records refactor on the dev branch (commits
+`1cfc8a59..dd16eae9`); carve by replaying those seven commits.
 
 ## Verification state
 
 - PR-A: full suite sealed earlier (18,138 passes; 3 environment artifacts).
-- PR2/PR3: build + full `bsc.typechecker` tree green (45 dirs) at each tip;
-  numeric-settle dual variants 4/4.
-- **PR2 full suite: the run that completed today is INVALID** — the runner
-  script (`run-suite-pra.sh`) hardcodes the PR-A install, so it tested the
-  PR-A binary against the PR2 test tree.  Diagnostic: all 32 non-artifact
-  failures are exactly the pins that require PR1/PR2 semantics.  A real run
-  with `run-suite-pr2.sh` (correct install) is queued behind the comment
-  restack below.
-- Known permanent artifacts when running as root in this container:
-  `b1595` (ccomp), `bsc.driver/imports` UnreadableTop,
-  `bsc.preprocessor/include` DupInclude — file-permission tests.
+- **PR2 SEALED at ff278307: full suite 18,117 passes, 0 regressions** —
+  the only failures are the three file-permission tests that always fail
+  running as root (b1595 ccomp, driver/imports UnreadableTop,
+  preprocessor/include DupInclude).
+- PR3: full `bsc.typechecker` tree + numeric-settle dual variants green
+  at its tip.
+- Dev branch (port): build green; sweep (full typechecker tree +
+  vector_interfaces, getput, b675, SquareRoot) 1,519 passes / 0 fail;
+  endpoint tree verified byte-identical through the final restack.
 - Testsuite hygiene: always scrub untracked artifacts before a run
   (`git ls-files --others testsuite | xargs rm -f`); stale `.bo` files make
-  `bsc -u` skip recompiles and poison compare_file/warning-count tests
-  (signature: "expected 1 copies ... found 0", or a test failing both its
-  should- and shouldn't-compile variants).
+  `bsc -u` skip recompiles and poison compare_file/warning-count tests.
+- Run the suite with the MATCHING install: the run-suite-*.sh wrappers pin
+  BSC per worktree — a mismatched wrapper invalidates the whole run.
 
 ## Pending / known issues
 
-1. **Comment-only restack of PR2 before opening the PR** (in progress):
-   - `sat`'s doc comment still says "The Bool in the result…" — predates
-     the `Commitment` type (review asked for this; one site was missed).
-   - `satisfy'`/`sMany` doc says a committed pred is "made available as a
-     given" — that's pool-era behavior (PR4); PR2 explicitly does not do
-     this (its inline comment in the commit branch says so).
-   PR3 restacks on top; both branches force-pushed after gates.
-2. Real PR2 full suite with the correct binary (after the restack).
-3. `-Wall` cosmetics, non-blocking: the new records' selectors are unused
-   (warning), and the `anyTExpr` import is unused (pre-exists upstream —
-   dev removed it in the pool commit).  Could fold into the restack.
-4. Dev-branch port (`dev-port` in /home/user/bsc): rebuilding dev as
-   PR3-tip + PR6 (done, 6 commits) + pool commits adapted to the records
-   types (in progress) + one consolidated dev-notes commit; then
-   force-update `claude/typechecker-coherent-instances-dkmn8w` and push.
-   Design decisions made during the port: `Defer` propagates through
-   `firstMatch` (no dead pattern arms); `byInst`/walk/`findFunDepConflict`
-   handle it explicitly; `SatResult` gains `satSolved`, `SolveResult`
-   gains `solveSolved` for the pool thread.
-5. PR3 body first line: replace branch reference with `#NNNN` once PR2
-   is opened.
+1. PR2 and PR3 are ready to open (`gh pr create` commands below); PR3's
+   body needs PR2's `#NNNN` substituted once PR2 is opened.
+2. `-Wall` cosmetics, non-blocking: the new records' selectors are unused
+   (warning), and the `anyTExpr` import is unused (pre-exists upstream;
+   the dev branch removes it in the pool commit).
+3. Dev branch is fully ported and pushed (`1b35eb7d`): PR3 tip + PR6
+   content + pool commits adapted to the records types + dev note.  The
+   old dev tip is preserved locally as `backup-dev-pre-port` (26f5493e)
+   in /home/user/bsc.
+4. PR6 carve is next (six commits, content already proven on the dev
+   branch), then PR4 (pool, five commits + modal-guard fix).
+5. A full-suite seal has not been re-run on the ported dev branch (its
+   sweep is green and its tree is byte-identical to the validated
+   endpoint); run one before treating dev as sealed.
 6. Ledger (not started): poly-kinded TypeEq stage 2; stage-1 wall-clock
    profiling; misc.
 
