@@ -1298,7 +1298,7 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system_opt <- simPackageOpt errh flags sim_system
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
 
-       -- export the Bluesim 3 IR when requested
+       -- export the TRS IR when requested
        when (genBir flags) $ do
             -- the debug-tier symbol set: defs surviving as C++
             -- members (post-SimCOpt public defs, isOkId-filtered) —
@@ -1317,9 +1317,9 @@ genModuleC errh flags dumpnames time0 toplevel abis =
             writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags)
                          symMap sim_system_opt
 
-       -- the -sim3 backend stops here: the .bir plus the user's C files
+       -- the -trs backend stops here: the .bir plus the user's C files
        -- (compiled separately for dlopen) are the whole simulation
-       if (genSim3 flags)
+       if (genTrs flags)
         then do let TimeInfo _ t_TOD = time
                 _ <- return t_TOD
                 return (time, [], [], time)
@@ -1599,9 +1599,9 @@ simLink errh flags toplevel afilenames cfilenames = do
                  user_ofiles ++ compiled_user_ofiles ++
                  ofiles_reused
 
-    -- under -bir, also package the user's BDPI objects for the bsim3
+    -- under -bir, also package the user's BDPI objects for the trs
     -- runtime (dlopen), named next to the .bir
-    when (genBir flags && not (genSim3 flags)
+    when (genBir flags && not (genTrs flags)
           && not (null (user_ofiles ++ compiled_user_ofiles))) $ do
         pwd3 <- getCurrentDirectory
         let name3 = createEncodedFullFilePath "placeholder" pwd3
@@ -1615,8 +1615,8 @@ simLink errh flags toplevel afilenames cfilenames = do
     -- if generating a SystemC model or only generating code,
     -- there is nothing to link; otherwise link a Bluesim executable
     start flags DFbluesimlink
-    if (genSim3 flags)
-      then sim3Link errh flags toplevel user_cfiles user_ofiles
+    if (genTrs flags)
+      then trsLink errh flags toplevel user_cfiles user_ofiles
       else when (not (genSysC flags) && not (blockCodegen flags)) $
              cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
@@ -2005,12 +2005,12 @@ cleanseSharedLib errh flags soFile = do
         ExitFailure n -> exitFailWith errh n
 
 -- ===============
--- sim3Link: the Bluesim 3 backend's link step.  The simulation is the
--- exported .bir executed by the bsim3 runtime; user BDPI C files are
+-- trsLink: the TRS backend's link step.  The simulation is the
+-- exported .bir executed by the trs runtime; user BDPI C files are
 -- compiled into a companion shared object that the runtime dlopens.
 
-sim3Link :: ErrorHandle -> Flags -> String -> [String] -> [String] -> IO ()
-sim3Link errh flags toplevel user_cfiles user_ofiles = do
+trsLink :: ErrorHandle -> Flags -> String -> [String] -> [String] -> IO ()
+trsLink errh flags toplevel user_cfiles user_ofiles = do
     pwd <- getCurrentDirectory
     let name = createEncodedFullFilePath "placeholder" pwd
         prefix = (dirName name) ++ "/"
@@ -2031,31 +2031,31 @@ sim3Link errh flags toplevel user_cfiles user_ofiles = do
                    (map show (cofs ++ user_ofiles))
         unless (quiet flags) $
             putStrLnF ("BDPI shared library created: " ++ soFile)
-    -- AOT: let the bsim3 driver compile the design and write the
+    -- AOT: let the trs driver compile the design and write the
     -- artifact (wrapper script + model .so + pinned options) — the
     -- same amortization as the C++ backend's g++ link, at a fraction
-    -- of the cost.  Any failure (bsim3 not on PATH, built without the
+    -- of the cost.  Any failure (trs not on PATH, built without the
     -- jit feature, infra error) falls back to the interpreter wrapper.
-    let linkCmd = "\"${BSIM3:-bsim3}\" link \"" ++ outFile ++ ".bir\" -o \""
+    let linkCmd = "\"${TRS:-trs}\" link \"" ++ outFile ++ ".bir\" -o \""
                   ++ outFile ++ "\""
     rc <- system linkCmd
     case rc of
       ExitSuccess ->
         unless (quiet flags) $
-            putStrLnF ("Bluesim 3 simulation created (compiled): " ++ outFile)
+            putStrLnF ("TRS simulation created (compiled): " ++ outFile)
       _ -> do
         writeFileCatch errh outFile $
             unlines [ "#!/bin/sh"
                     , ""
-                    , "BSIM3=${BSIM3:-bsim3}"
-                    , "exec \"$BSIM3\" run \"$0.bir\" \"$@\""
+                    , "TRS=${TRS:-trs}"
+                    , "exec \"$TRS\" run \"$0.bir\" \"$@\""
                     ]
         stat <- getFileStatus outFile
         let mode = fileMode stat
             mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
         setFileMode outFile mode'
         unless (quiet flags) $
-            putStrLnF ("Bluesim 3 simulation created: " ++ outFile)
+            putStrLnF ("TRS simulation created: " ++ outFile)
 
 -- ===============
 -- vLink

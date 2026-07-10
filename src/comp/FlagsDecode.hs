@@ -608,7 +608,7 @@ defaultFlags bluespecdir = Flags {
         finalcleanup = 1,
         genABin = False,
         genBir = False,
-        genSim3 = False,
+        genTrs = False,
         genName = [],
         genSysC = False,
         -- The ifcPath value will be produced from the raw value,
@@ -1231,7 +1231,7 @@ externalFlags = [
 
         ("bir",
          (Toggle (\f x -> f {genBir=x}) (showIfTrue genBir),
-          "generate a .bir (Bluesim 3 IR) file when linking with -sim", Hidden)),
+          "generate a .bir (TRS IR) file when linking with -sim", Hidden)),
 
         ("expand-ATS-limit",
          (Arg "n"
@@ -1607,15 +1607,6 @@ externalFlags = [
          in  (NoArg setFn (Just getFn),
               "compile BSV generating Bluesim object", Visible)),
 
-        ("sim3",
-         let setFn f = case setBackend f Bluesim of
-                         Left f' -> Left f' { genABin = True, genBir = True,
-                                              genSim3 = True }
-                         Right e -> Right e
-             getFn f = genSim3 f
-         in  (NoArg setFn (Just getFn),
-              "compile BSV generating a Bluesim 3 (bsim3) simulation", Visible)),
-
         ("simdir",
          (Arg "dir" (\f s -> Left (f {cdir = Just s})) (Just (FRTMaybeString cdir)),
           "output directory for Bluesim intermediate files", Visible)),
@@ -1689,6 +1680,15 @@ externalFlags = [
         ("tcl-show-hidden",
          (Toggle (\f x -> f {tclShowHidden=x}) (showIfTrue tclShowHidden),
           "show hidden levels of instance hierarchy in bluetcl", Hidden)),
+
+        ("trs",
+         let setFn f = case setBackend f Bluesim of
+                         Left f' -> Left f' { genABin = True, genBir = True,
+                                              genTrs = True }
+                         Right e -> Right e
+             getFn f = genTrs f
+         in  (NoArg setFn (Just getFn),
+              "compile BSV generating a TRS simulation", Visible)),
 
         ("u",
          (Toggle (\f x -> f {updCheck=x}) (showIfTrue updCheck),
@@ -1956,7 +1956,7 @@ showFlagsRaw flags =
           ("finalcleanup", show (finalcleanup flags)),
           ("genABin", show (genABin flags)),
           ("genBir", show (genBir flags)),
-          ("genSim3", show (genSim3 flags)),
+          ("genTrs", show (genTrs flags)),
           ("genName", show (genName flags)),
           ("genSysC", show (genSysC flags)),
           ("ifLift", show (ifLift flags)),

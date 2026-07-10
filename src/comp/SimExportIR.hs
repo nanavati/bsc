@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | BIR export: serialize the post-scheduling simulation system for the
--- Bluesim 3 backend (src/bluesim3).
+-- TRS backend (src/trs).
 --
--- The format is specified in src/bluesim3/BIR.md and defined operationally
--- by the Rust types in src/bluesim3/crates/bsim3-ir; @bsim3 ir dump@
+-- The format is specified in src/trs/BIR.md and defined operationally
+-- by the Rust types in src/trs/crates/trs-ir; @trs ir dump@
 -- round-trips the output.  The input is the same 'SimSystem' that
 -- 'simMakeCBlocks' consumes today (post 'simExpand' / 'simPackageOpt'),
 -- so schedule merging and package optimization stay in this compiler.
@@ -62,7 +62,7 @@ import ASyntax
 import SimPackage
 
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
--- bsim3-ir/src/lib.rs.
+-- trs-ir/src/lib.rs.
 birVersion :: Word32
 birVersion = 1
 

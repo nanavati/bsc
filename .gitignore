@@ -14,5 +14,5 @@ build
 .vagrant/
 vagrant-out/
 
-# BIR run artifacts (bsim3) are never source
+# BIR run artifacts (trs) are never source
 *.bir

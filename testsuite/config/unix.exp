@@ -1180,10 +1180,10 @@ proc bsc2bsv {source} {
 # -u -sim compile
 # returns true iff compilation succeeded
 # The Bluesim backend flag used by compile_object/link_objects/gen_modules:
-# "-sim" (default) or "-sim3" (the bsim3 backend) via env SIM_BACKEND_FLAG.
+# "-sim" (default) or "-trs" (the trs backend) via env SIM_BACKEND_FLAG.
 # Tests that inspect the C++ backend's generated artifacts (.cxx files,
 # "Bluesim object created" link messages, parallel make output) apply
-# only when the Bluesim tests use the C++ backend, not -sim3.
+# only when the Bluesim tests use the C++ backend, not -trs.
 proc cxx_codegen_tests {} {
     return [expr {[sim_backend_flag] eq "-sim"}]
 }

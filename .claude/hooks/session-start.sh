@@ -1,7 +1,7 @@
 #!/bin/bash
 # SessionStart hook: prepare a Claude Code on the web container for bsc +
-# Bluesim 3 development.  Installs the Haskell toolchain and libraries the
-# bsc build needs, the LLVM 18 dev packages the bsim3-codegen crate needs,
+# TRS development.  Installs the Haskell toolchain and libraries the
+# bsc build needs, the LLVM 18 dev packages the trs-codegen crate needs,
 # initializes the yices submodule, and warms the Rust workspace.
 #
 # Deliberately NOT done here: the full bsc build (`make install-src`,
@@ -39,7 +39,7 @@ if ! ghc-pkg list 2>/dev/null | grep -q strict-concurrency; then
   rm -rf "$tmp"
 fi
 
-# --- LLVM 18 + zstd for bsim3-codegen (feature "llvm")
+# --- LLVM 18 + zstd for trs-codegen (feature "llvm")
 apt-get install -y -qq llvm-18-dev libpolly-18-dev libzstd-dev >/dev/null
 
 # --- yices submodule (needed by the bsc build)
@@ -47,8 +47,8 @@ git submodule update --init --recursive >/dev/null 2>&1 || true
 
 # --- Warm the Rust workspace (build + test caches)
 if command -v cargo >/dev/null; then
-  (cd src/bluesim3 && cargo build -q && cargo test -q --no-run) || true
+  (cd src/trs && cargo build -q && cargo test -q --no-run) || true
 fi
 
-echo "bsc/bluesim3 session setup complete"
+echo "bsc/trs session setup complete"
 echo "  full bsc build (when needed): make -C \$CLAUDE_PROJECT_DIR install-src   (~30-60 min)"

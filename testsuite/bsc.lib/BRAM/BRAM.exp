@@ -11,7 +11,7 @@
 test_veri_only_bsv BRAMWidthTest
 compile_object_pass BRAMWidthTest.bsv
 # The C++ backend fails to compile/link the generated code (Bug 1731);
-# -sim3 has no generated C++, so the link succeeds there
+# -trs has no generated C++, so the link succeeds there
 if { [cxx_codegen_tests] } {
     link_objects_pass_bug {} sysBRAMWidthTest 1731
 } else {
