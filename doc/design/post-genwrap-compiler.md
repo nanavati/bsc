@@ -3813,6 +3813,88 @@ description fully determines the wrapper's semantic content: the
 ISyntax renderer is now an optimization, not a prerequisite — the
 §5.3 injection (increment 11) proceeds on the mini-pipeline.
 
+**11 — the §5.3 injection relocation, piloted.** Under hidden
+`-boundary-inject`, the wrapper skeleton stops being package
+content: it is not typechecked into the parent-visible environment
+beyond its stub, it is absent from the `.bo`, and it is compiled at
+`genModule` time by the same per-module `compileCDefToIDef`
+pipeline that has always compiled the final wrapper. (The opening
+bid — don't plant the skeleton at all, assemble it from the
+recorded `BoundarySpec` with the user's def left unrenamed and
+unstubbed — did not survive contact; the rounds below are the
+story of WHY, and the recording infrastructure it built —
+`bs_vtis`/`bs_argpts`/`bs_moddef` on `BoundarySpec`, the shared
+`convModArg`/`mkArgCtx`/`collectIfcInfoW` — stays as increment
+11b's seed.) Seven discovery rounds fixed the architecture, each a
+real finding. (1) A genModule-built skeleton's
+cross-package references carry iConv's placeholder bodies —
+undefined-value stubs that elaborate into `∀`-typed ICE — so a
+captured definition must be re-knotted against real definitions
+(the hunt instrumented `PrimTypeOf`/`PrimPrintType`/`evalCExpr`
+with recursive `ITForAll` guards, kept as permanent diagnostics).
+(2)+(3) One def cannot be both parent-facing (polymorphic
+`∀ m c. IsModule` — importers typecheck against it) and
+Module-forcing (the skeleton body needs `m := Module`): tying it
+forces T0029 "too general" locally or G0013 mismatches in parents —
+the legacy stub/body SPLIT is load-bearing and stays. (4) The
+skeleton cannot skip the package pipeline either: typecheck of the
+planted skeleton is what renders user errors in module argument
+types (T0043 with position, vs positionless T0031 later) and what
+marks imports used (spurious T0157 otherwise). (5) It cannot skip
+`iSimplify` — but iSimplify deep-forces, so running it per-def
+after re-knotting materializes the transitively-inlined import
+graph (256MB heap exhaustion), and running it before fixup inlines
+the placeholder bodies away. (6) The whole-package `fixUp`
+re-stamps positions, clobbering inner error positions (EBigLit3's
+T0051 moved). (7) The re-knot must refresh EVERY same-package
+reference, not just the generated members: two generated modules in
+one package, the second instantiating the first, reach the sibling
+only through the renamed user def — a non-generated package def
+whose capture-time embedded body still carries the pre-synthesis
+knot — and elaborating the parent against that stale knot spun the
+evaluator forever (bsc.scheduler's IgnoreRdy; it was also the
+silent killer of the early full-lane attempts, which sat in the
+spin until the session's container was recycled). Completeness of
+the widened set is structural: any path from the skeleton's spine
+to a stale reference passes through a first `ICon`; a package def's
+replaced body is globally current, and an import cannot reference
+this package at all. The settled shape follows from those
+constraints:
+the skeleton is PLANTED at GenWrap exactly as today and rides the
+entire package pipeline — typecheck, iConv, fixupDefs, iSimplify —
+then its finished IDef is CAPTURED and the def DROPPED from the
+package before the generation loop, so the `.bo` carries no
+skeleton (verified by dumpbo); at its module's genModule turn the
+captured IDef is re-knotted SELECTIVELY (`fixupIDefSel`: only
+same-package generated-member `ICDef` bodies, from the
+already-updDef'd current package, no position rewriting) and handed
+to the existing wrapper pipeline. Net: the wrapper definition is no
+longer package content — not typechecked into the parent-visible
+environment beyond its stub, not in the `.bo`, constructed
+per-generation — which is the §5.3 relocation's pilot invariant,
+with the pre-typecheck ADDITIVE half (flat types, codecs,
+descriptions, the stub) still planted and scheduled to move in the
+derived-flat-types increment (11b). Verified: corpus 233 files
+byte-identical flag-on vs flag-off (IgnoreRdy's own schedule dump
+included); fifteen boundary suites pass both modes (370) including
+the new `bsc.boundary/inject` suite (census `inject`-per-module
+with zero `legacy`, prefixed-subifc and param/port/vector-arg
+boundary names, the same-package sibling regression, a moved-phase
+user error that keeps its message and tag, composition with
+`-boundary-fold -check-wrap-shadow`, Bluesim behavior); and the
+full ~18.6k-test suite under ALL THREE flags — every module
+generation injected, folded, and shadow-compared — shows a failure
+set byte-identical to the known baseline, with censuses (
+accumulated across the lane's salvage reruns; the invariants are
+exact): 4867 injected generations / ZERO legacy, 4163 folds / ZERO
+fallbacks, 3925 codec dictionary comparisons. Residue: the
+ISyntax-direct renderer (archived design) would drop the
+per-generation `compileCDefToIDef`; increment 11b derives the flat
+interface types instead of planting them (per-instantiation
+minting, the flat type demoted to derived data + a temporary
+compatibility key with an explicit consumer burn-down); then the
+default flip.
+
 ---
 
 ## Appendix A. Codebase fact sheet (verified citations)
