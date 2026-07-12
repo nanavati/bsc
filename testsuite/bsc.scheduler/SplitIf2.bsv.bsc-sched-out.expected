@@ -62,6 +62,7 @@ Logical execution order: toggle1, toggle2, xfer
 Warning: "SplitIf2.bsv", line 6, column 8: (G0022)
   According to the generated schedule, method `xfer' is never ready.
 Verilog file created: mkSplitIf2_Test.v
+Elaborated module file created: mkSplitIf2_Test.ba
 code generation for sysSplitIf2 starts
 === schedule (SplitIf2 sysSplitIf2):
 parallel: [esposito: [RL_toggleDir -> [], RL_r -> [], RL_incr -> [], RL_done -> []]]
@@ -75,7 +76,7 @@ order: [RL_r, RL_toggleDir, RL_done, RL_incr]
  (dir.read, [(dir.read, 1)]),
  (dir.write, [(dir.write NOT_dir___d2, 1)]),
  (test.RDY_xfer, [(test.RDY_xfer, 1)]),
- (test.xfer, [(test.xfer dir__h208, 1)])]
+ (test.xfer, [(test.xfer dir___d1, 1)])]
 
 -----
 
@@ -109,4 +110,5 @@ Logical execution order: r, toggleDir, done, incr
 
 ===========================================
 Verilog file created: sysSplitIf2.v
+Elaborated module file created: sysSplitIf2.ba
 All packages are up to date.

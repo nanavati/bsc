@@ -19,6 +19,7 @@ module SimCCBlock( SBId
                  , mkGateConst
                  , mkLiteralName
                  , mkStringLiteralName
+                 , isOkId
                  , simCCBlockToClassDeclaration
                  , simCCBlockToClassDefinition
                  , simCCScheduleToFunctionDefinition
@@ -367,6 +368,7 @@ aTypeToCType :: AType -> (CCFragment -> CCFragment)
 aTypeToCType (ATBit size) = (`ofType` (bitsType size CTunsigned))
 aTypeToCType (ATString _) = (`ofType` (classType "std::string"))
 aTypeToCType (ATReal) = (`ofType` doubleType)
+aTypeToCType (ATTuple _) = userType "WideData"
 aTypeToCType (ATArray _ _) = internalError "Unexpected array"
 aTypeToCType (ATAbstract _ _) = internalError "Unexpected abstract type"
 
@@ -522,6 +524,8 @@ adjustInstQuals id =
 -- check if an aexpr is just a var id, or other situation not to deal by wop
 hasWop :: AExpr -> Bool
 hasWop (APrim { aprim_prim = p }) = (p /= PrimIf)
+hasWop (ATuple _ _) = True
+hasWop (ATupleSel _ _ _) = True
 hasWop _ = False
 
 -- ---------------------
@@ -638,8 +642,7 @@ getWDataTest = do
    return f
 
 isWideDef :: (AType, AId) -> Bool
-isWideDef x@(ATBit sz, aid) | sz > 64 = True
-isWideDef x                           = False
+isWideDef (t, _) = wideDataType t
 
 mkUndetVal :: AType -> State ConvState CCExpr
 mkUndetVal ty = do
@@ -874,6 +877,7 @@ mkPrimCall ret sz name args =
         mkArg expr = if (isConst expr)              ||
                         (isStringType (aType expr)) ||
                         ((aType expr) == ATReal) ||
+                        (isTupleType (aType expr)) ||
                         ((aSize expr) > 64)
                      then aExprToCExpr noRet expr
                      else do cexpr <- aExprToCExpr noRet expr
@@ -1066,8 +1070,18 @@ aExprToCExpr _ p@(APrim _ _ PrimStringConcat args) = argCount (==2) args $
 aExprToCExpr _ p@(APrim _ _ _ _) =
   internalError ("unhandled primitive: " ++ (show p))
 aExprToCExpr _ (AMethCall _ id mid args) =
-  do arg_list <- mapM (aExprToCExpr noRet) args
+  do arg_list <- mapM (aExprToCExpr noRet) (concatMap argInputPorts args)
      return $ (aInstMethIdToC id mid) `cCall` arg_list
+-- a tuple is laid out in wide data as a concatenation of its elements,
+-- with the first element in the most-significant bits (Verilog {e1,...,en})
+aExprToCExpr ret e@(ATuple _ exprs) =
+  wideConcatPrim ret (aSize e) exprs
+-- NB: idx is 1-based (see AConv and AState), so 'genericDrop idx' yields the
+-- elements strictly below the selected one; sizeAfter is therefore the low bit
+-- of element idx, and [aSize t + sizeAfter - 1 : sizeAfter] is its bit range.
+aExprToCExpr ret (ATupleSel t e idx) =
+  wideExtractPrim ret (aSize t) e hi lo
+  where (hi, lo) = tupleElemRange (ae_type e) idx
 aExprToCExpr _ e@(AMGate _ id clkid) =
   do gmap <- gets gate_map
      case (M.lookup e gmap) of
@@ -1145,7 +1159,7 @@ simFnStmtToCStmt (SFSDef isPort (ty,aid) Nothing) =
   let w = aSize ty
       dst = if isPort then aPortIdToCLval aid else aDefIdToCLval aid
       typed_id = (aTypeToCType ty) dst
-  in if w > 64   -- for wide data, use (bits,false) constructor to avoid initialization penalty
+  in if w > 64 || isTupleType ty   -- for wide data, use (bits,false) constructor to avoid initialization penalty
      then return $ construct typed_id [mkUInt32 w, mkBool False]
      else return $ decl typed_id
 simFnStmtToCStmt (SFSDef isPort (ty@(ATString (Just sz)),aid) (Just expr)) =
@@ -1270,12 +1284,9 @@ simFnStmtToCStmt (SFSOutputReset rstId expr) =
 -- for embedding in a larger CC statement
 aActionToCFunCall :: (Maybe (Bool,AId)) -> AAction
                      -> State ConvState (ReturnStyle, CCExpr, CCExpr)
-aActionToCFunCall _ c@(ACall id mth_id aargs) =
-  do cargs <- mapM (aExprToCExpr noRet) aargs
-     let (cond, arg_list) =
-           case cargs of
-             (x:xs) -> (x, xs)
-             _ -> internalError ("aActionToCFunCall: missing cond in ACall args")
+aActionToCFunCall _ c@(ACall id mth_id (cond_e:srcArgs)) =
+  do cond <- aExprToCExpr noRet cond_e
+     arg_list <- mapM (aExprToCExpr noRet) (concatMap argInputPorts srcArgs)
      let call = (aInstMethIdToC id mth_id) `cCall` arg_list
      return (Direct, cond, call)
 aActionToCFunCall Nothing act@(AFCall {}) =
@@ -1422,6 +1433,11 @@ mkPortInit ((ATBit n),_,vn) | n > 32 =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt64 0) ]
 mkPortInit ((ATBit n),_,vn) =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt32 0) ]
+mkPortInit (t@(ATTuple _),_,vn) =
+  let p = aPortIdToC (vName_to_id vn)
+  in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 $ aSize t ]
+     , stmt $ p `cDot` "clear" `cCall` []
+     ]
 mkPortInit p = internalError ("SimCCBlock.mkPortInit: " ++ ppReadable p)
 
 -- Create a call to the "set_reset_fn" for submodules with output resets
@@ -1580,8 +1596,8 @@ isOkId i = not ((isInternal i) || (isBadId i) || (isFromRHSId i))
 -- Generate a class declaration for the SimCCBlock.
 -- The declaration will include all of the state elements and local
 -- defs, along with rule and method declarations.
-simCCBlockToClassDeclaration :: SBMap -> SimCCBlock -> CCFragment
-simCCBlockToClassDeclaration sb_map sb =
+simCCBlockToClassDeclaration :: Bool -> SBMap -> SimCCBlock -> CCFragment
+simCCBlockToClassDeclaration genVCD sb_map sb =
   let clks        = [ decl $ clockType (mkVar (mkClkDefName dom))
                     | dom <- sb_domains sb]
       clk_defs    = [comment "Clock handles" (private clks)]
@@ -1650,14 +1666,16 @@ simCCBlockToClassDeclaration sb_map sb =
       vcd_hdr     = decl $ vcdHdrFnProto Nothing
       is_string_type (ATString _) = True
       is_string_type _            = False
-      has_members = any (not . null) [ sb_resetDefs sb
+      -- with -dump-formats none (genVCD False) no VCD helper functions are
+      -- emitted, so their prototypes must not be declared either
+      has_members = genVCD && any (not . null) [ sb_resetDefs sb
                                      , [ (t,i)
                                        | (t,i) <- ((sb_privateDefs sb) ++ (sb_publicDefs sb))
                                        , not (is_string_type t)
                                        ]
                                      ]
-      has_prims = or [ isPrimBlock sub | (sub,_,_) <- sb_state sb ]
-      has_submodules = or [ not (isPrimBlock sub) | (sub,_,_) <- sb_state sb ]
+      has_prims = genVCD && or [ isPrimBlock sub | (sub,_,_) <- sb_state sb ]
+      has_submodules = genVCD && or [ not (isPrimBlock sub) | (sub,_,_) <- sb_state sb ]
       vcd_changes = [ decl $ vcdFnProto sb Nothing ]
                     ++
                     (if has_members
@@ -1708,6 +1726,8 @@ mkCtorInit task_id_set (aty@(ATBit sz),aid)
                 = let val = ASInt defaultAId aty (ilHex (aaaa sz))
                   in  Just (aid,[val])
   | otherwise   = Nothing
+mkCtorInit _ (aty@(ATTuple _),aid) =
+  Just (aid, [ aNat (aSize aty) ])
 -- system tasks shouldn't be returning other types (like String),
 -- so no need to consult the task_id_set
 mkCtorInit _ _  = Nothing
@@ -1746,9 +1766,9 @@ symOrd (str1,sym1) (str2,sym2) =
                       GT -> GT
               GT -> GT
 
-simCCBlockToClassDefinition :: SBMap -> M.Map (Bool,AId) ClockDomain ->
+simCCBlockToClassDefinition :: Bool -> SBMap -> M.Map (Bool,AId) ClockDomain ->
                                SimCCBlock -> StmtsConv
-simCCBlockToClassDefinition sb_map sch_map sb =
+simCCBlockToClassDefinition genVCD sb_map sch_map sb =
   do let scope = Just (pfxMod ++ (sb_name sb))
          state_defs = map (addSBArgs sb_map) (sb_state sb)
          task_id_set = S.fromList (sb_taskDefs sb)
@@ -1900,12 +1920,15 @@ simCCBlockToClassDefinition sb_map sch_map sb =
                          ]
          meth_map = M.fromList [ (i,d) | (d,is) <- ids_by_clock', i <- is ]
          clk_map = M.unions [ rl_map, meth_map, sch_map ]
-         prims = sortBy cmpIdByName
+         -- with -dump-formats none (genVCD False) these are emptied, which (via
+         -- the null-checks below) collapses the per-signal VCD defs, the value-
+         -- dumping helpers, and the submodule recursion to empty method stubs
+         prims = if not genVCD then [] else sortBy cmpIdByName
                         (catMaybes [ if isPrimBlock sub
                                      then Just inst
                                      else Nothing
                                    | (sub,inst,_) <- sb_state sb ])
-         sub_modules = sortBy cmpIdByName
+         sub_modules = if not genVCD then [] else sortBy cmpIdByName
                               (catMaybes [ if isPrimBlock sub
                                            then Nothing
                                            else Just inst
@@ -1913,7 +1936,7 @@ simCCBlockToClassDefinition sb_map sch_map sb =
          cmp_def (_,i1,_) (_,i2,_) = i1 `cmpIdByName` i2
          is_string_type (ATString _) = True
          is_string_type _            = False
-         members = sortBy cmp_def $
+         members = if not genVCD then [] else sortBy cmp_def $
                           [ (t,i,True)
                           | (t,i) <- (sb_resetDefs sb)
                           ] ++
@@ -1922,7 +1945,7 @@ simCCBlockToClassDefinition sb_map sch_map sb =
                                       (sb_publicDefs sb))
                           , not (is_string_type t)
                           ]
-         ports = sortBy cmp_def
+         ports = if not genVCD then [] else sortBy cmp_def
                         [ (t,vName_to_id vn,True)
                         | (t,_,vn) <- sb_methodPorts sb ]
          num_ids = (length members) + (length ports) + (length prims)
@@ -1967,7 +1990,11 @@ simCCBlockToClassDefinition sb_map sch_map sb =
          vcd_recurse =
            [ decl $ (unsigned . int) $ (mkVar "l") `assign` new_l ] ++
            sub_calls
-         scope_start = [ stmt $ (var "vcd_write_scope_start") `cCall` [var "sim_hdl", var "inst_name"] ]
+         -- the module name is recorded as the scope's component type;
+         -- formats that can express it (FST) make it visible to viewers
+         scope_start = [ stmt $ (var "vcd_write_scope_start") `cCall`
+                                  [ var "sim_hdl", var "inst_name"
+                                  , mkStr (sb_name sb) ] ]
          scope_end = [ stmt $ (var "vcd_write_scope_end") `cCall` [var "sim_hdl"] ]
          vcd_dump_defs_body =
            block (scope_start ++
@@ -2142,11 +2169,11 @@ wideLocalDef (SFSDef _ (ty, aid) _) = if wideDataType ty
                                       else []
 wideLocalDef _ = []
 
--- return True if this type is wider than 64 bits
+-- return True if this type is represented as wide data
+-- (i.e. it is larger than 64 bits, or it is a tuple)
 wideDataType :: AType -> Bool
-wideDataType (ATBit sz)
-    | sz > 64 = True
-    | otherwise = False
+wideDataType (ATBit sz) = sz > 64
+wideDataType (ATTuple _) = True
 wideDataType _ = False
 
 

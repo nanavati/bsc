@@ -16,8 +16,11 @@ dumpbo
 dumpba
 bsc2bsv
 bsv2bsc
+fstcheck
+fstscopes
 showrules
 vcdcheck
+bo2bloogle
 
 # Ignore TAGS files
 TAGS

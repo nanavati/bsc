@@ -4,19 +4,20 @@ module ABinUtil (
                  readAndCheckABin,
                  readAndCheckABinPath,
                  readAndCheckABinPathCatch,
+                 isStaleABinFile,
                  ) where
 
 import Data.List(nub, partition)
 import Data.Maybe(isJust, fromJust)
-import Data.Word
 import Control.Monad(when)
+import qualified Data.ByteString as BS
 import Control.Monad.Except(ExceptT, throwError)
 import Control.Monad.State(StateT, runStateT, lift, get, put)
 
 import Version(bscVersionStr)
 import Backend
 import FileNameUtil(abinSuffix)
-import FileIOUtil(readBinaryFileCatch, readBinFilePath)
+import FileIOUtil(readBinaryFileCatch, readBinFilePath, readBinaryFileMaybe)
 import Util(fromMaybeM)
 
 import Error(internalError, EMsg, EMsgs(..), ErrMsg(..),
@@ -29,7 +30,9 @@ import ASyntaxUtil(getForeignCallNames)
 import VModInfo(vName, getVNameString, vImpls, setVName)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap)
 import ABin
-import GenABin(readABinFile)
+import GenABin(readABinFile, readABinFileMaybe)
+
+import qualified Control.Exception as CE
 
 import qualified Data.Map as M
 
@@ -572,7 +575,7 @@ readAndCheckABinPathCatch errh be_verbose path backend mod_name errmsg = do
       Nothing -> bsError errh [errmsg]
       Just abi -> return abi
 
-decodeABin :: ErrorHandle -> Maybe Backend -> String -> [Word8] ->
+decodeABin :: ErrorHandle -> Maybe Backend -> String -> BS.ByteString ->
               Either [EMsg] ABin
 decodeABin errh backend filename contents =
     let (abi, _) = readABinFile errh filename contents
@@ -602,5 +605,32 @@ decodeABin errh backend filename contents =
             -- backend check not required, since codegen cannot proceed
             -- from this point
             (ABinModSchedErr {}) -> Right abi
+
+-- Tolerant counterpart of the decodeABin checks, for deciding whether
+-- an existing .ba file can be used by the current compilation: it must
+-- be readable, in the current format and BSC version, and elaborated
+-- for a compatible backend.  A missing file returns False (not stale);
+-- absence is the timestamp check's concern.  Used by the -u
+-- recompilation check, where an unusable .ba (e.g. one left by
+-- "-verilog -g" when compiling with -sim, or written by another BSC
+-- version) must force re-elaboration rather than be trusted as an
+-- up-to-date generated product.
+isStaleABinFile :: Maybe Backend -> String -> IO Bool
+isStaleABinFile be fname = do
+    mbytes <- readBinaryFileMaybe fname
+    case mbytes of
+      Nothing -> return False
+      Just bytes ->
+          let beOf (ABinMod mi _) = apkg_backend (abmi_apkg mi)
+              beOf (ABinModSchedErr mi _) = apkg_backend (abmsei_apkg mi)
+              beOf (ABinForeignFunc {}) = Nothing
+              stale = case readABinFileMaybe bytes of
+                        Nothing -> True
+                        Just abin ->
+                            (ab_version abin /= bscVersionStr True) ||
+                            not (backendMatches be (beOf abin))
+          in  CE.evaluate stale `CE.catch` handler
+  where handler :: CE.SomeException -> IO Bool
+        handler _ = return True
 
 -- ===============

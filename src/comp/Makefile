@@ -147,6 +147,7 @@ PACKAGES = \
 	text \
 	deepseq \
 	strict-concurrency \
+	cborg \
 
 # GHC can compile either a single file (use GHCCOMPILEFLAGS) or
 # in make mode where it follows dependencies (use GHCMAKEFLAGS).
@@ -164,7 +165,17 @@ GHC += -optl -headerpad_max_install_names
 endif
 
 # flags for the haskell compiler RTS
-GHCRTSFLAGS ?= +RTS -M4G -A128m -RTS
+#
+# GHC's parallel --make compiles up to GHCJOBS modules concurrently in
+# ONE process sharing ONE heap, and -A128m gives each job its own
+# 128 MB allocation area inside it.  A flat max-heap sized for one job
+# therefore overflows intermittently as the number of GHC jobs
+# increases, depending on which large modules the scheduler happens to
+# compile at the same time.  Scale the cap with the job count: the
+# single-job baseline (4G, the previous fixed value) plus 1G for each
+# additional job.
+GHCMAXHEAP ?= $(shell expr 3 + $(GHCJOBS))G
+GHCRTSFLAGS ?= +RTS -M$(GHCMAXHEAP) -A128m -RTS
 
 # flags for the haskell compile
 GHCINCLUDES =  \
@@ -174,10 +185,18 @@ GHCINCLUDES =  \
 	-i$(YICES_HS) \
 	-i$(HTCL_HS)
 GHCTMP = '-tmpdir $(TMPDIR)'
-# Default RTS flags for programs built with a Haskell main
-# 256MB heap, 10MB stack, 1 second interval between heap profiles
+# Default RTS flags for programs built with a Haskell main:
+# 256MB heap, 1 second interval between heap profiles, and a -K
+# stack cap.  The profiling build uses a much larger -K because
+# -fprof-auto adds a cost-centre frame around every closure entry,
+# which inflates peak stack usage by roughly an order of magnitude
+# on the perf regression suite.
 # If you modify this, also update rts_opts in ../vendor/htcl/haskell.c
+ifeq ($(BSC_BUILD),PROF)
+RTSFLAGS = "-with-rtsopts=-H256m -K256m -i1"
+else
 RTSFLAGS = "-with-rtsopts=-H256m -K10m -i1"
+endif
 FVIA ?= -fasm
 GHCFLAGS = \
 	-hide-all-packages \
@@ -240,10 +259,11 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck
+BO2BLOOGLEEXES = bo2bloogle
+UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
 
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES)
 
 .PHONY: all
 all: $(EXES)
@@ -335,8 +355,49 @@ vcdcheck: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
+# fstscopes and fstcheck read FST files with libfst (the
+# src/vendor/libfst submodule), whose sources are compiled into the
+# executables here, with the <config.h> that fstapi.c includes
+# supplied from src/libfst_config
+LIBFST_SRC = ../vendor/libfst/src
+LIBFST_CFLAGS = -O2 -I$(LIBFST_SRC) -I../libfst_config
+# The C objects are compiled explicitly into $(BUILDDIR) and the
+# objects passed to GHC: letting GHC compile the C sources places
+# their objects at the source-relative path under -odir, which
+# escapes the build directory
+LIBFST_OBJS = $(BUILDDIR)/fstscopes_hier.o $(BUILDDIR)/fstapi.o \
+	$(BUILDDIR)/fastlz.o $(BUILDDIR)/lz4.o
+
+$(BUILDDIR)/fstscopes_hier.o: fstscopes_hier.c $(LIBFST_SRC)/fstapi.h
+	mkdir -p $(BUILDDIR)
+	$(CC) $(LIBFST_CFLAGS) -c -o $@ $<
+
+$(BUILDDIR)/%.o: $(LIBFST_SRC)/%.c
+	mkdir -p $(BUILDDIR)
+	$(CC) $(LIBFST_CFLAGS) -c -o $@ $<
+
+.PHONY: fstscopes
+fstscopes: $(SOURCES) $(LIBFST_OBJS)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS) \
+		$(LIBFST_OBJS) -lz
+	$(POSTBUILDCOMMAND)
+
+.PHONY: fstcheck
+fstcheck: $(SOURCES) $(LIBFST_OBJS)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS) \
+		$(LIBFST_OBJS) -lz
+	$(POSTBUILDCOMMAND)
+
 .PHONY: showrules
 showrules: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
+	$(POSTBUILDCOMMAND)
+
+.PHONY: bo2bloogle
+bo2bloogle: $(SOURCES)
 	$(PREBUILDCOMMAND)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
@@ -376,7 +437,7 @@ endif
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) install-bsc install-bluetcl install-bo2bloogle
 
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
@@ -400,6 +461,11 @@ install-bsc: $(PKGINFO)
 install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
 install-bluetcl: $(addprefix $(BINDIR)/core/,$(TCLEXES))
 install-bluetcl: $(PKGINFO)
+
+.PHONY: install-bo2bloogle
+install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(PKGINFO)
 
 .PHONY: install-utils
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))

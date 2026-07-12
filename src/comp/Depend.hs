@@ -28,11 +28,12 @@ import FStringCompat
 import Lex
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
-                    bscSrcSuffix, bsvSrcSuffix, binSuffix,
+                    bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix,
                     mkAName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
                   removeFileCatch, readBinaryFileCatch)
+import ABinUtil(isStaleABinFile)
 import Id
 import PreIds(idPrelude, idPreludeBSV)
 import Parser.Classic(pPackage, errSyntax, classicWarnings)
@@ -238,6 +239,15 @@ getGenFs flags pi =
             in  foreign_abin_files ++ mod_abin_files
          Just Verilog ->
             let mod_ver_files = map mkVerFileName (gens pi)
+                -- With DPI, only *polymorphic* foreign imports produce a
+                -- generated file (a "dpi_wrapper_<name>.c"); monomorphic ones
+                -- are called directly with no wrapper.  PkgInfo only records
+                -- the foreign import's Id (from the pragma), not its type, so
+                -- we can't tell here which imports are polymorphic -- and
+                -- listing a wrapper file that wasn't generated would force a
+                -- spurious rebuild every run (getModTime of a missing file).
+                -- So DPI wrapper files are not tracked for incremental rebuild;
+                -- they are regenerated whenever the package itself is compiled.
                 foreign_vpi_files = if (useDPI flags)
                                     then []
                                     else concatMap mkVPIFileNames (foreigns pi)
@@ -293,7 +303,14 @@ chkUpd errh flags doneMap resultList (pi:pis) = do
         --putStrLn (show genfs)
         genfsClks <- mapM getModTime genfs
         incfsClks <- mapM getModTime incfs
-        let needGenUpd = any (srcMod pi >) genfsClks
+        -- a .ba that exists (and is fresh by timestamp) is still not a
+        -- valid generated product if it cannot be read (another BSC
+        -- version's format) or was elaborated for an incompatible backend
+        -- (a Verilog-tagged .ba left by "-verilog -g" must not satisfy a
+        -- -sim compile, or vice versa); codegen must run again
+        staleAbins <- mapM (isStaleABinFile (backend flags))
+                          (filter (hasDotSuf abinSuffix) genfs)
+        let needGenUpd = any (srcMod pi >) genfsClks || or staleAbins
             needIncUpd = any (lastMod pi <) incfsClks
         --putStrLn (show (fileName pi, genfs, map (srcMod pi >) genfsClks))
         --putStr (ppReadable (pkgName pi, imports pi, DM.keys doneMap))

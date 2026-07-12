@@ -112,6 +112,7 @@ instance TclObjCvt DefProp where
   toTclObj (DefP_Method i) = do ti <- toTclObj i ; toTclObj (TLst [TStr "DefP_Method", TCL ti])
   toTclObj (DefP_Instance i) = do ti <- toTclObj i ; toTclObj (TLst [TStr "DefP_Instance", TCL ti])
   toTclObj DefP_NoCSE = toTclObj "DefP_NoCSE"
+  toTclObj DefP_Boundary = toTclObj "DefP_Boundary"
 
 instance TclObjCvt Type where
     toTclObj x = toTclObj (pfPrint PDReadable 0 x)

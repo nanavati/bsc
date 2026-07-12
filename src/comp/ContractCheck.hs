@@ -749,14 +749,19 @@ argWireDesc _ (InoutArg vn _ _) = "inout " ++ getVNameString vn
 -- multiplicities 0 and 1 both mean a single set of ports (0 is the
 -- declared-boundary spelling of an unserialized method), so they are
 -- wire-compatible; above 1 the port sets replicate and must agree
-methodShapeOf :: VFieldInfo -> ([VName], Maybe VName, Maybe VName, Integer)
-methodShapeOf m = (map fst (vf_inputs m), fmap fst (vf_output m),
+-- (vf_inputs is the per-replica nesting, vf_outputs the output port
+-- list; both sides of the comparison come from the same VModInfo
+-- machinery, so the nested structure is compared faithfully)
+methodShapeOf :: VFieldInfo -> ([[VName]], [VName], Maybe VName, Integer)
+methodShapeOf m = (map (map fst) (vf_inputs m), map fst (vf_outputs m),
                    fmap fst (vf_enable m), max 1 (toInteger (vf_mult m)))
 
-showMethodShape :: ([VName], Maybe VName, Maybe VName, Integer) -> String
-showMethodShape (ins, out, en, mult) =
-    "(args " ++ intercalate "," (map getVNameString ins) ++
-    maybe "" ((", result " ++) . getVNameString) out ++
+showMethodShape :: ([[VName]], [VName], Maybe VName, Integer) -> String
+showMethodShape (inss, outs, en, mult) =
+    "(args " ++ intercalate "," (map getVNameString (concat inss)) ++
+    (if null outs
+     then ""
+     else ", result " ++ intercalate "," (map getVNameString outs)) ++
     maybe "" ((", enable " ++) . getVNameString) en ++
     ", mult " ++ show mult ++ ")"
 

@@ -10,16 +10,18 @@ module BoundaryDesc(
 
 import qualified Data.Map as M
 import Data.Char(isAlphaNum)
+import Data.List(isPrefixOf)
 
 import Id
 import PreIds(idBuildUndef, idFromWrapField)
 import Position(noPosition)
 import FStringCompat(mkFString, getFString)
 import ISyntax
+import ISyntaxUtil(itGetArrows, leftmost)
 import ISyntaxSubst(tSubst)
 import VModInfo(VFieldInfo(..))
 import SymTab(SymTab, findType, findSClass, TypeInfo(..))
-import CType(TISort(..), CTypeclass(..))
+import CType(TISort(..), StructSubType(..), CTypeclass(..))
 import Pred(Class(..))
 import Pragma(PProp, isAlwaysRdy)
 import Prim(PrimOp(..))
@@ -108,13 +110,48 @@ expandVars n env e0 =
 -- bodies behind ICDef references (a same-package reference carries
 -- the real body, a cross-package one an undet placeholder -- the
 -- def Id is the identity), and application-spine nesting (compared
--- through the headTypes-normalized view).  A node of an
--- EVIDENCE-ONLY class (no methods -- numeric evidence like
--- TupleSize) compares by its fully-applied dictionary type alone:
--- different compiles legitimately construct such dictionaries
--- differently (a structural ICTuple vs the source instance chain,
--- the b1356 finding), and with no methods the construction is
--- observationally irrelevant
+-- through the headTypes-normalized view).  A node where both sides
+-- are dictionaries of the SAME fully-applied class type compares
+-- equal by coherence: different compiles legitimately construct the
+-- same dictionary differently (a structural ICTuple vs the source
+-- instance chain -- the b1356 finding for evidence-only classes
+-- like TupleSize, and post-merge for any class: the coherent-dict
+-- map in FixupDefs.fixUp itself replaces dictionaries by type, so
+-- type identity under coherence is exactly the invariant the
+-- compiler maintains).  The evOnly predicate is retained by the
+-- callers to identify evidence-only classes but the escape no
+-- longer depends on it.
+--
+-- The dict-lifting pass (LiftDicts) names solver dictionaries as
+-- top-level `_lifted_dictN' CAFs, so a recorded CodecRef can hold
+-- the lifted NAME while a per-module re-solve builds the structural
+-- application; comparison looks through the lifted reference to its
+-- knotted body before judging.
+-- look through a reference to a lifted dictionary CAF at the head of
+-- an application spine (one step; dictEq re-enters per node, so
+-- chains and inner occurrences unfold as the comparison descends)
+unfoldLifted :: IExpr a -> [IType] -> [IExpr a] -> Maybe (IExpr a)
+unfoldLifted (ICon i (ICDef _ body)) ts es
+    | "_lifted_dict" `isPrefixOf` getIdBaseString i =
+        Just (if null ts && null es then body else IAps body ts es)
+unfoldLifted _ _ _ = Nothing
+
+-- fully normalize an expression's lifted-dict references, at the
+-- spine head and (bounded) through argument positions -- for
+-- rendering in diagnostics
+lookThroughLifted :: IExpr a -> IExpr a
+lookThroughLifted = go (40 :: Int)
+  where
+    go n e | n <= 0 = e
+    go n e =
+      let (h, ts, es) = headTypes M.empty e
+      in  case unfoldLifted h ts es of
+            Just e' -> go (n - 1) e'
+            Nothing ->
+              if null ts && null es
+              then e
+              else IAps h ts (map (go (n - 1)) es)
+
 dictEq :: (IType -> Bool) -> IExpr a -> IExpr a -> Bool
 dictEq evOnly a b =
     let (ha, tsa, esa) = headTypes M.empty a
@@ -123,9 +160,15 @@ dictEq evOnly a b =
                  length esa == length esb &&
                  and (zipWith (dictEq evOnly) esa esb)
         evid = case (appliedTy ha tsa esa, appliedTy hb tsb esb) of
-                 (Just ta, Just tb) -> ta == tb && evOnly ta
+                 (Just ta, Just tb) -> ta == tb && isDictTy ta
                  _ -> False
-    in  strict || evid
+        isDictTy t | null (fst (itGetArrows t)),
+                     ITCon _ _ (TIstruct SClass _) <- leftmost t = True
+        isDictTy _ = False
+    in  case (unfoldLifted ha tsa esa, unfoldLifted hb tsb esb) of
+          (Just a', _) -> dictEq evOnly a' b
+          (_, Just b') -> dictEq evOnly a b'
+          _ -> strict || evid
   where
     appliedTy (ICon _ ci) ts es =
         do t <- itInst (iConType ci) ts
@@ -307,7 +350,8 @@ codecShadowErrs symt entries pairs =
                      | otherwise ->
                          ["codec of `" ++ nm ++ "' differs from the " ++
                           "description's recorded dictionary\n" ++
-                          "  recorded: " ++ ppReadable rec_d ++
+                          "  recorded: " ++
+                          ppReadable (lookThroughLifted rec_d) ++
                           "  re-solved: " ++ ppReadable got_d] ]
 
 -- ==================================================
@@ -412,11 +456,11 @@ shadowBoundaryErrs pps entries fields =
         -- per-kind port shape for the leaves present on both sides
         shapeErrs =
             [ err
-            | Method { vf_name = n, vf_enable = en, vf_output = out }
+            | Method { vf_name = n, vf_enable = en, vf_outputs = outs }
                   <- fields,
               k : _ <- [matchesLeaf (getIdBaseString n)],
               err <- let hasEn = maybe False (const True) en
-                         hasOut = maybe False (const True) out
+                         hasOut = not (null outs)
                          m = getIdBaseString n
                      -- output-port presence is deliberately not
                      -- required: a zero-width result drops its port

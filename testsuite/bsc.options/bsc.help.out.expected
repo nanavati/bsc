@@ -21,12 +21,14 @@ Compiler flags:
 -Xv arg                 pass argument to the Verilog link process
 -aggressive-conditions  construct implicit conditions aggressively
 -bdir dir               output directory for .bo and .ba files
+-c module               generate code for ``module'' from its elaborated .ba file
 -check-assert           test assertions with the Assert library
 -continue-after-errors  aggressively continue compilation after an error has been detected
 -cpp                    preprocess the source with the C preprocessor
 -demote-errors list     treat a list of errors as warnings (``:'' sep list of tags)
+-dump-formats formats   waveform formats to compile into the simulation (comma-separated subset of vcd,fst,fsdb; or none)
 -e module               top-level module for simulation
--elab                   generate a .ba file after elaboration and scheduling
+-elab                   generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)
 -fdir dir               working directory for relative file paths during elaboration
 -g module               generate code for ``module'' (requires -sim or -verilog)
 -help                   generate help message
@@ -67,6 +69,7 @@ Compiler flags:
 -show-timestamps        include timestamps in generated files
 -show-version           include compiler version in generated files
 -sim                    compile BSV generating Bluesim object
+-sim-codegen-only       generate Bluesim C++ files but do not compile or link them
 -simdir dir             output directory for Bluesim intermediate files
 -split-if               split "if" in actions
 -steps n                terminate elaboration after this many function unfolding steps
@@ -75,12 +78,12 @@ Compiler flags:
 -suggest-contract       print a paste-able contract_<Ifc> literal from the inferred schedule
 -suppress-warnings list ignore a list of warnings (``:'' sep list of tags)
 -systemc                generate a SystemC model
+-trs                    compile BSV generating a TRS simulation
 -u                      check and recompile packages that are not up to date
 -unspecified-to val     remaining unspecified values are set to: 'X', '0', '1', 'Z', or 'A'
 -use-dpi                use DPI instead of VPI in generated Verilog
 -use-impl name=key      select an alternate implementation when linking (instance or module name = key)
 -v                      same as -verbose
--v95                    generate strict Verilog 95 code
 -vdir dir               output directory for .v files
 -verbose                be more talkative
 -verilog                compile BSV generating Verilog file

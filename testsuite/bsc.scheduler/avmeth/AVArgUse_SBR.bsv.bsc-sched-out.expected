@@ -30,6 +30,7 @@ Logical execution order: m
 
 ==============================================
 Verilog file created: mkAVArgUse_SBR.v
+Elaborated module file created: mkAVArgUse_SBR.ba
 code generation for sysAVArgUse_SBR starts
 Warning: "AVArgUse_SBR.bsv", line 22, column 8: (G0117)
   Rule `rA' shadows the effects of `rB' when they execute in the same clock
@@ -43,7 +44,7 @@ order: [RL_rB, RL_rA]
 -----
 
 === resources (AVArgUse_SBR sysAVArgUse_SBR):
-[(dut.m, [(dut.m r1__h275 32'd1, 1), (dut.m 32'd5 r1__h275, 1)]),
+[(dut.m, [(dut.m r1___d1 32'd1, 1), (dut.m 32'd5 r1___d1, 1)]),
  (r1.read, [(r1.read, 1)]),
  (r1.write, [(r1.write r1_PLUS_1___d4, 1)])]
 
@@ -71,4 +72,5 @@ Logical execution order: rB, rA
 
 ===============================================
 Verilog file created: sysAVArgUse_SBR.v
+Elaborated module file created: sysAVArgUse_SBR.ba
 All packages are up to date.

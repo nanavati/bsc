@@ -26,6 +26,10 @@ data Flags = Flags {
         backend :: Maybe Backend,
         bdir :: Maybe String,
         biasMethodScheduling :: Bool,
+        -- internal: set by the driver when in -c mode (generate a module's
+        -- code from its .ba, as a reusable block rather than a runnable top);
+        -- never settable from the command line -- see codegenNames
+        blockCodegen :: Bool,
         bluespecDir :: String,
         cIncPath :: [String],
         cLibPath :: [String],
@@ -43,15 +47,19 @@ data Flags = Flags {
         passThroughAssertions :: Bool,
         doICheck :: Bool,
         dumpAll :: Maybe (Maybe FilePath), -- maybe dump to file or stdout
+        dumpFormats :: [String], -- waveform dump formats compiled into the sim
+                                 -- (subset of vcd/fst/fsdb; [] means none)
         dumps :: [(DumpFlag, Maybe FilePath)], -- dump to file or stdout
         enablePoisonPills :: Bool,
+        codegenNames :: [String],
         entry :: Maybe String,
         expandATSlimit :: Int,
         expandIf :: Bool,
         fdir :: Maybe String,
         finalcleanup :: Int,
         genABin :: Bool,
-        genABinVerilog :: Bool,
+        genBir :: Bool,
+        genTrs :: Bool,
         genName :: [String],
         genSysC :: Bool,
         ifcPathRaw :: [String],
@@ -86,7 +94,6 @@ data Flags = Flags {
         optMuxConst :: Bool,
         optSched :: Bool,
         optUndet :: Bool,
-        crossInfo :: Bool,
         parallelSimLink :: Integer,
         printFlags :: Bool,
         printFlagsHidden :: Bool,
@@ -127,11 +134,12 @@ data Flags = Flags {
         suggestContract :: Bool,
         showStats :: Bool,
         showUpds :: Bool,
+        simCodegenOnly :: Bool,
         simplifyCSyntax :: Bool,
         strictMethodSched :: Bool,
         suppressWarnings :: MsgListFlag,
         synthesize :: Bool,
-        systemVerilogTasks :: Bool,
+        systemVerilogOutput :: Bool,
         tclShowHidden :: Bool,
         timeStamps :: Bool,
         showVersion :: Bool,
@@ -145,7 +153,6 @@ data Flags = Flags {
         usePrelude :: Bool,
         useProvisoSAT :: Bool,
         stdlibNames :: Bool,
-        v95 :: Bool,
         vFlags :: [String],
         vdir :: Maybe String,
         vPathRaw :: [String],
@@ -235,9 +242,11 @@ data DumpFlag
         | DFgenforeign
         | DFgenVPI
         | DFsimplified
+        | DFliftdicts
         | DFinternal
         | DFbinary
         | DFfixup
+        | DFisimpdicts
         | DFisimplify
         | DFwriteBin
 

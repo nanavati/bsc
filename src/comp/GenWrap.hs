@@ -618,7 +618,9 @@ getDef generating ds (i, pps) =
               let ext = (CQType ctx t_ext)
               let vts = getDefArgs e t_ext
               vtis <- mapM expandArg vts
-              let pps' = renamePProps vtis pps
+              -- attributes for the default clock/reset apply to arguments
+              -- designated with the default_clock/default_reset attributes
+              let pps' = applyDefaultArgAttrs (renamePProps vtis pps)
               -- check pragmas for every def
               convEM $ checkModuleArgPragmas (getPosition i) pps pps' vtis
               -- only return info for the defs which are generated
@@ -782,13 +784,13 @@ fixCModuleVerilog n (ss,ts,ps)
          in  [mStmtSPTO vp e]
        saveArgTypes _ = []
    let saveFieldTypes finf (Method { vf_inputs = inps,
-                                     vf_output = mo }) = do
+                                     vf_outputs = outs }) = do
          let rt = ret_type finf
          isAV <- isActionValue rt
          output_type <- if isAV then getAVType "fixCModVer" rt else return rt
-         let output_stmt = maybeToList (fmap ((flip mStmtSPT) rt) mo)
+         let output_stmt = map ((flip mStmtSPT) rt) outs
          -- we let the type-checker error on mismatches
-         return (output_stmt ++ (zipWith mStmtSPT inps (arg_types finf)))
+         return (output_stmt ++ (zipWith mStmtSPT (concat inps) (arg_types finf)))
        saveFieldTypes finf (Inout { vf_inout = vn }) = do
          let rt = ret_type finf
              vp = (vn,[])
@@ -894,7 +896,7 @@ procType (n, ns, as, ts, ctx) ty = do
   if isAV then do
     av_t <- getAVType "procType" ty
     return (n+1, newId:ns, newSVar:as,
-            (ty, (TAp tActionValue_  (cTVarNum newId))):ts,
+            (ty, (TAp tActionValue_ (TAp tBit (cTVarNum newId)))):ts,
             (bitsCtx av_t newSVar):ctx)
    else do
      isInout <- isInoutType ty
@@ -1210,10 +1212,15 @@ genTo pps ty mk =
                    localPrefix = joinStrings_  currentPre localPrefix1
                    prefix = stringLiteralAt noPosition localPrefix
                    arg_names = mkList (getPosition f) [stringLiteralAt (getPosition i) (getIdString i) | i <- aIds]
-                   fnp = mkTypeProxyExpr $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f)(getIdPosition f)
+                   localResult1 = fromMaybe (getIdBaseString f) (lookupResultIfcPragma ciPrags)
+                   localResult = joinStrings_ currentPre localResult1
+                   result = stringLiteralAt noPosition localResult
+                   fnp = mkTypeProxyExpr $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f) (getIdPosition f)
                -- XXX idEmpty is a horrible way to know no more selection is required
                let ec = if f == idEmpty then sel else CSelect sel (setInternal f)
-               let e = CApply (CVar idToWrapField) [fnp, prefix, arg_names, ec]
+               -- positioned at the field, so the WrapField proviso this
+               -- mints reports there rather than at "Unknown position"
+               let e = CApply (CVar (setIdPosition (getPosition f) idToWrapField)) [fnp, prefix, arg_names, result, ec]
                return [CLValue (binId prefixes f) [CClause [] [] e] []]
 
 -- --------------------
@@ -1307,7 +1314,7 @@ genFrom pps ty var =
               -- Call fromWrapField with a proxy for the field name as a type level string,
               -- and the field selection from the unwrapped module.
               let fnp = mkTypeProxyExpr $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f) (getIdPosition f)
-              let e = CApply (CVar idFromWrapField) [fnp, sel binf]
+              let e = CApply (CVar (setIdPosition (getPosition f) idFromWrapField)) [fnp, sel binf]
               return (f, e, qs)
 
 
@@ -1716,7 +1723,7 @@ mkFromBind true_ifc_ids var ft =
               -- Call fromWrapField with a proxy for the field name as a type level string,
               -- and the field selection from the unwrapped module.
               let fnp = mkTypeProxyExpr $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f) (getIdPosition f)
-              let e = CApply (CVar idFromWrapField) [fnp, sel binf]
+              let e = CApply (CVar (setIdPosition (getPosition f) idFromWrapField)) [fnp, sel binf]
               return (f, e, qs)
 
 
@@ -1888,10 +1895,10 @@ fixupVeriField _ _ f@(Reset { }) = f
 fixupVeriField _ _ f@(Inout { }) = f
 fixupVeriField pps vportprops m@(Method { }) =
         m { vf_inputs = inputs',
-            vf_output = output',
+            vf_outputs = outputs',
             vf_enable = enable'' }
-  where inputs'  =  map fixup (vf_inputs m)
-        output'  = fmap fixup (vf_output m)
+  where inputs'  = map (map fixup) (vf_inputs m)
+        outputs' = map fixup (vf_outputs m)
         enable'  = fmap fixup (vf_enable m)
         fixup    = fixupPort vportprops
         alwaysEnabled = isAlwaysEn pps (vf_name m)
@@ -2065,7 +2072,7 @@ isParamType :: Type -> GWMonad Bool
 isParamType t =
   do
     t' <- expandSynSym t
-    return (t' == tReal || t' == tString)
+    return (t' == tReal || t' == tString || t' == tInteger)
 
 isClockType :: Type -> GWMonad Bool
 isClockType t =
@@ -2295,10 +2302,8 @@ genNewMethodIfcPragmas ifcp pragmas fieldId newFieldId  =
           ar = if (isAlwaysReadyIfc joinedPrags)   then [PIAlwaysRdy     ] else []
           ae = if (isAlwaysEnabledIfc joinedPrags) then [PIAlwaysEnabled ] else []
           -- The result names used the prefix plus the given of generated name
-          mResName = lookupResultIfcPragma pragmas
-          resultName =  case mResName of
-                        Just str -> joinStrings_ currentPre str
-                        Nothing  -> joinStrings_ currentPre methodStr
+          localResult1 = fromMaybe (getIdString fieldId) (lookupResultIfcPragma pragmas)
+          resultName = joinStrings_  currentPre localResult1
           --
           resName = (PIResultName resultName)
           -- The ready name
@@ -2646,14 +2651,11 @@ mkFieldSavePortTypeStmts v ifcId = concatMapM $ meth noPrefixes ifcId
             _ -> do
               -- Compute the local prefix and result name for this field in the flattened interface
               -- from the current prefixes and pragmas from the field definition.
-              let methodStr = getIdBaseString f
-                  currentPre  = ifcp_renamePrefixes prefixes -- the current rename prefix
+              let currentPre  = ifcp_renamePrefixes prefixes -- the current rename prefix
                   localPrefix1 = fromMaybe (getIdBaseString f) (lookupPrefixIfcPragma ciPrags)
                   localPrefix = joinStrings_  currentPre localPrefix1
-                  mResName = lookupResultIfcPragma ciPrags
-                  resultName =  case mResName of
-                        Just str -> joinStrings_ currentPre str
-                        Nothing  -> joinStrings_ currentPre methodStr
+                  localResult1 = fromMaybe (getIdBaseString f) (lookupResultIfcPragma ciPrags)
+                  localResult = joinStrings_ currentPre localResult1
 
               -- Arguments to saveFieldPortTypes: proxies for the field name as a type level string and the field type,
               -- and the values for the prefix, arg_names, and result pragmas.
@@ -2661,7 +2663,7 @@ mkFieldSavePortTypeStmts v ifcId = concatMapM $ meth noPrefixes ifcId
                   proxy = mkTypeProxyExpr $ foldr arrow r as
                   prefix = stringLiteralAt noPosition localPrefix
                   arg_names = mkList (getPosition f) [stringLiteralAt (getPosition i) (getIdString i) | i <- aIds]
-                  result = stringLiteralAt noPosition resultName
+                  result = stringLiteralAt noPosition localResult
               return [
                 CSExpr Nothing $
                   cVApply idLiftModule $

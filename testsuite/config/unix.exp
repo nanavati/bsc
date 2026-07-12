@@ -272,6 +272,23 @@ proc which_dumpbo {} {
     return $dumpbo
 }
 
+proc which_dumpba {} {
+    global env
+
+    if { [info exists DUMPBA] && [file exists $DUMPBA] } then {
+        set dumpba [absolute_filename $DUMPBA]
+    } elseif { [info exists env(DUMPBA)] && [file exists $env(DUMPBA)] } then {
+        set dumpba [absolute_filename $env(DUMPBA)]
+    } else {
+        set dumpba [which dumpba]
+    }
+    if {$dumpba == 0} then {
+        perror "can't find dumpba -- set DUMPBA to /path/filename"
+        exit 1
+    }
+    return $dumpba
+}
+
 proc which_vcdcheck {} {
     global env
 
@@ -287,6 +304,57 @@ proc which_vcdcheck {} {
         exit 1
     }
     return $vcdcheck
+}
+
+
+# Locate the fstscopes utility (which dumps an FST waveform file's
+# hierarchy, including scope module types).  Unlike which_vcdcheck,
+# this probes softly: it returns 0 when the tool is not available, and
+# tests skip the checks that need it (fstscopes is built and installed
+# by `make install-extra` in src/comp, like vcdcheck).
+proc find_fstscopes {} {
+    global env
+
+    if { [info exists env(FSTSCOPES)] && [file exists $env(FSTSCOPES)] } {
+        return [absolute_filename $env(FSTSCOPES)]
+    }
+    return [which fstscopes]
+}
+
+# Locate the fstcheck utility (vcdcheck's checks for FST waveform
+# files), with the same soft probing as find_fstscopes
+proc find_fstcheck {} {
+    global env
+
+    if { [info exists env(FSTCHECK)] && [file exists $env(FSTCHECK)] } {
+        return [absolute_filename $env(FSTCHECK)]
+    }
+    return [which fstcheck]
+}
+
+# Run fstcheck assertions against an FST file, skipping silently when
+# the fstcheck utility is not available
+proc fstcheck_pass { fstfile options } {
+    set fstcheck [find_fstcheck]
+    if { $fstcheck == 0 } {
+        return
+    }
+
+    incr_stat "fstcheck_pass"
+
+    global srcdir
+    global subdir
+
+    set here [pwd]
+    cd [file join [absolute $srcdir] $subdir]
+    set output "$fstfile.fstcheck-out"
+    set status [exec_with_log "fstcheck" "$fstcheck $options $fstfile >& $output"]
+    cd $here
+    if { $status == 0 } {
+        pass "checks on `$fstfile' succeed"
+    } else {
+        fail "checks on `$fstfile' should succeed"
+    }
 }
 
 
@@ -908,6 +976,11 @@ proc make_dumpbo_output_name { file } {
     return $filename
 }
 
+proc make_dumpba_output_name { file } {
+    set filename "$file.dumpba-out"
+    return $filename
+}
+
 proc make_vcdcheck_output_name { file } {
     set filename "$file.vcdcheck-out"
     return $filename
@@ -1085,6 +1158,26 @@ proc dumpbi {source} {
     return [expr $status == 0]
 }
 
+# file needs to be an *absolute* path for invoking dumpba
+proc dumpba {source} {
+    global dumpba
+    global srcdir
+    global subdir
+
+    bsc_initialize
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set output [make_dumpba_output_name $source]
+    set cmd "$dumpba $source >& $output"
+    verbose "Executing: $cmd" 4
+    set status [exec_with_log "dumpba" $cmd 2]
+
+    cd $here
+    return [expr $status == 0]
+}
+
 # file needs to be an *absolute* path for invoking vcdcheck
 proc vcdcheck {source options} {
     global vcdcheck
@@ -1128,6 +1221,23 @@ proc bsc2bsv {source} {
 
 # -u -sim compile
 # returns true iff compilation succeeded
+# The Bluesim backend flag used by compile_object/link_objects/gen_modules:
+# "-sim" (default) or "-trs" (the trs backend) via env SIM_BACKEND_FLAG.
+# Tests that inspect the C++ backend's generated artifacts (.cxx files,
+# "Bluesim object created" link messages, parallel make output) apply
+# only when the Bluesim tests use the C++ backend, not -trs.
+proc cxx_codegen_tests {} {
+    return [expr {[sim_backend_flag] eq "-sim"}]
+}
+
+proc sim_backend_flag {} {
+    global env
+    if { [info exists env(SIM_BACKEND_FLAG)] } {
+        return $env(SIM_BACKEND_FLAG)
+    }
+    return "-sim"
+}
+
 proc bsc_compile_to_object { source { module ""} { options "" } } {
     global bsc
     global srcdir
@@ -1140,7 +1250,7 @@ proc bsc_compile_to_object { source { module ""} { options "" } } {
     cd [file join $here $subdir]
     set output [make_bsc_ccomp_output_name $source]
 
-    set c_comp_options "-no-show-timestamps -no-show-version -u -sim"
+    set c_comp_options "-no-show-timestamps -no-show-version -u [sim_backend_flag]"
     if { [string length $module] > 0 } {
         append c_comp_options " -g $module"
     }
@@ -1180,12 +1290,36 @@ proc bsc_link_objects { objects toplevel { options "" } } {
     }
     set objects $mods
 
-    set link_options "-no-show-timestamps -no-show-version -sim -e $toplevel -o $exefile"
+    set link_options "-no-show-timestamps -no-show-version [sim_backend_flag] -e $toplevel -o $exefile"
     set cmd "$bsc $link_options $options $objects >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_link_objects" $cmd 2]
     cd $here
     return [expr $status == 0]
+}
+
+# -sim -c codegen (generate a module's code from its elaborated .ba file)
+# returns true iff code generation succeeded for all modules
+proc bsc_gen_modules { modules { options "" } } {
+    global bsc
+    global srcdir
+    global subdir
+
+    bsc_initialize
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set ok 1
+    foreach mod $modules {
+        set output [make_bsc_ccomp_output_name $mod]
+        set gen_options "-no-show-timestamps -no-show-version [sim_backend_flag] -c $mod"
+        set cmd "$bsc $gen_options $options >& $output"
+        verbose "Executing: $cmd" 4
+        set status [exec_with_log "bsc_gen_modules" $cmd 2]
+        if { $status != 0 } { set ok 0 }
+    }
+    cd $here
+    return $ok
 }
 
 # -verilog -u compile
@@ -1536,16 +1670,73 @@ proc dumpbo_pass { source xfail } {
     }
 }
 
-# check the .bi and .bo files generated by source
-proc check_intermediate_files { source xfail {options ""} } {
+proc dumpba_pass { source xfail } {
+
+    if {[do_internal_checks] && $xfail != 1} {
+
+        incr_stat "dumpba"
+
+        if [dumpba $source] then {
+           pass "Intermediate file `$source' can be loaded"
+        } else {
+           fail "Intermediate file `$source' should load"
+        }
+    }
+}
+
+# Return the list of synthesised modules for which a .ba file is
+# expected after a verilog compile.  Only -elab compiles produce .ba.
+proc verilog_ba_modules { module options } {
+    if {[regexp -- {(^| )-elab( |$)} $options]} {
+        return $module
+    } else {
+        return ""
+    }
+}
+
+# check the .bi and .bo files generated by source.
+# `modules' is a (possibly empty) list of synthesised modules for
+# which a .ba file is expected; pass it for sim compiles, which
+# always produce .ba, and for verilog compiles invoked with -elab.
+proc check_intermediate_files { source xfail {options ""} {modules ""} } {
 
     if [regexp -- {-bdir ([^ ]+)} $options bdirflag bdir] then {
         set source "$bdir/$source"
+    } else {
+        set bdir ""
     }
 
     set base [file rootname $source]
 
     dumpbo_pass $base.bo $xfail
+
+    if {$xfail != 1} {
+        global srcdir
+        global subdir
+        set test_dir [file join [absolute $srcdir] $subdir]
+        foreach module $modules {
+            if {$module == ""} { continue }
+            if {$bdir != ""} {
+                set ba_file "$bdir/$module.ba"
+            } else {
+                set ba_file "$module.ba"
+            }
+            # Resolve relative to the test's subdir (bsc_compile_*
+            # cd's back to srcdir after running bsc, so a bare relative
+            # path would miss the file).
+            if {[file pathtype $ba_file] eq "relative"} {
+                set check_path [file join $test_dir $ba_file]
+            } else {
+                set check_path $ba_file
+            }
+            if {[file exists $check_path]} {
+                pass "Intermediate file `$ba_file' exists"
+                dumpba_pass $check_path $xfail
+            } else {
+                fail "Intermediate file `$ba_file' should exist"
+            }
+        }
+    }
 }
 
 # straight compile  no backend
@@ -1644,7 +1835,7 @@ proc compile_object_pass { source { module "" } {options "" }} {
           fail "module `$module' in `$source' should compile to `$module.ba'"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options $module
     }
 }
 
@@ -1666,7 +1857,7 @@ proc compile_object_pass_warning { source tag {expcount 1} {module ""} {options 
           fail "module `$module' in `$source' should compile to `$module.ba'"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options $module
   }
 }
 
@@ -1734,6 +1925,21 @@ proc link_objects_pass { objects toplevel {options ""}} {
           pass "`$objects' link to executable `$toplevel'"
       } else {
           fail "`$objects' should link to executable `$toplevel'"
+      }
+    }
+}
+
+# generate code for modules from their .ba files (-sim -c)
+proc gen_modules_pass { modules {options ""}} {
+    global ctest
+
+    if {$ctest == 1} {
+      incr_stat "gen_modules_pass"
+
+      if [bsc_gen_modules $modules $options] then {
+          pass "`$modules' generate code"
+      } else {
+          fail "`$modules' should generate code"
       }
     }
 }
@@ -1831,7 +2037,8 @@ proc compile_verilog_schedule_pass { source { module "" } {options ""} } {
           fail "module `$module' in `$source' should compile to Verilog"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options \
+          [verilog_ba_modules $module $options]
     }
 }
 
@@ -1897,7 +2104,8 @@ proc compile_verilog_pass { source { module "" } {options ""}} {
           fail "module `$module' in `$source' should compile to Verilog"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options \
+          [verilog_ba_modules $module $options]
     }
 }
 
@@ -1920,7 +2128,8 @@ proc compile_verilog_pass_warning { source tag {expcount 1} {module ""} {options
           fail "module `$module' in `$source' should compile to Verilog"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options \
+          [verilog_ba_modules $module $options]
   }
 }
 
@@ -1946,7 +2155,8 @@ proc compile_verilog_pass_warning_bug { source tag {bug ""} {expcount 1} {module
           fail "module `$module' in `$source' should compile to Verilog"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options \
+          [verilog_ba_modules $module $options]
   }
 }
 
@@ -1968,7 +2178,8 @@ proc compile_verilog_pass_no_warning { source {module ""} {options ""} } {
           fail "module `$module' in `$source' should compile to Verilog"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options \
+          [verilog_ba_modules $module $options]
   }
 }
 
@@ -1995,7 +2206,8 @@ proc compile_verilog_pass_no_warning_bug { source tag {bug ""} {expcount 1} {mod
           fail "module `$module' in `$source' should compile to Verilog"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options \
+          [verilog_ba_modules $module $options]
   }
 }
 
@@ -2015,7 +2227,8 @@ proc compile_synthesize_verilog_pass { source { module "" } {options ""}} {
           fail "module `$module' in `$source' should synthesize to Verilog"
       }
 
-      check_intermediate_files $source $current_xfail $options
+      check_intermediate_files $source $current_xfail $options \
+          [verilog_ba_modules $module $options]
     }
 }
 
@@ -2809,7 +3022,15 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
         }
 
         set cmods [concat $sysmod $modules]
-        link_objects_pass $cmods $sysmod $link_options
+        set c_link_options $link_options
+        if { $check_vcd == 1 } {
+            # link FST support in as well, so that waveform dumping
+            # can be checked in both formats below; the flag goes
+            # first because link_options may end with file arguments,
+            # and bsc requires flags to appear before files
+            set c_link_options "-dump-formats vcd,fst $link_options"
+        }
+        link_objects_pass $cmods $sysmod $c_link_options
         sim_output $sysmod $sim_options
 
 	set outfile $sysmod.c.out
@@ -2844,9 +3065,74 @@ proc test_c_veri_worker_int { top sysmod modules extension doC doV gen_options l
             }
 
             erase $sysmod.c.vcd
+
+            # check that Bluesim fst dumping is not totally broken
+            sim_output $sysmod "+bscfst=$sysmod.c.fst $sim_options"
+            move $sysmod.out $sysmod.c-fst.out
+
+            # clean up to be safe
+            erase $sysmod.out
+
+            # check that fst dumping does not change behavior
+            # (assuming this is not a known simulator bug)
+            if {[string compare $cbug ""] == 0} {
+                compare_file $sysmod.c-fst.out $sysmod.c.out
+            }
+
+            erase $sysmod.c.fst
+        }
+
+        # Each bsc-generated submodule's Bluesim C++ must be identical whether
+        # it is generated as part of this design or on its own with
+        # the -c codegen mode, so the object can be generated/compiled once and
+        # shared across simulations (and reused by the dependency analysis).
+        if { [llength $modules] > 0 } {
+            check_block_codegen_modules $modules $link_options
         }
     }
 
+}
+
+# For each bsc-generated submodule, regenerate its Bluesim C++ on its own with
+# the -c codegen mode and confirm it is byte-identical to the version generated
+# as part of building the enclosing design (which the caller has just built, so
+# the per-module files are present in the test directory).  Source-only:
+# byte-identity makes compiling or simulating the -c output unnecessary.
+proc check_block_codegen_modules { modules link_options } {
+    global srcdir
+    global subdir
+    # -show-timestamps embeds the wall-clock time, and -show-version the build
+    # version, into the generated files.  Those legitimately differ between two
+    # separate bsc invocations, so byte-identity is not expected when they are
+    # requested; skip the check in that case.
+    if { [regexp -- {-show-(timestamps|version)} $link_options] } {
+        return
+    }
+    set here [absolute $srcdir]
+    foreach mod $modules {
+        # only handle bsc-generated modules: a bare module name or an explicit
+        # ".ba".  Skip anything else in the module list (pre-built objects,
+        # C/C++ sources, etc.).
+        set ext [file extension $mod]
+        if { ($ext != "") && ($ext != ".ba") } { continue }
+        set modname [file rootname $mod]
+        set bcgdir "blockcg_$modname"
+        mkdir $bcgdir
+        # Use bsc_gen_modules directly (not gen_modules_pass) so that entries
+        # which cannot stand alone as a -c root -- e.g. an imported "BDPI"
+        # function rather than a synthesized submodule -- are silently
+        # skipped rather than reported as failures.  (Elaboration-affecting
+        # options are already baked into the .ba that -c reads, so they need
+        # not be replayed here.)
+        if { [bsc_gen_modules [list $modname] "-simdir $bcgdir"] && \
+             [file exists [file join $here $subdir $modname.cxx]] && \
+             [file exists [file join $here $subdir $bcgdir $modname.cxx]] } {
+            compare_file $bcgdir/$modname.cxx $modname.cxx "check_block_codegen"
+            compare_file $bcgdir/$modname.h   $modname.h   "check_block_codegen"
+        }
+        # remove the scratch directory (so no per-test cleanup rule is needed)
+        file delete -force [file join $here $subdir $bcgdir]
+    }
 }
 
 proc check_verilog_output { output expected veribug } {
@@ -3410,6 +3696,7 @@ proc bsc_initialize {} {
     global DO_INTERNAL_CHECKS
 
     global dumpbo
+    global dumpba
     global vcdcheck
     global bsc2bsv
 
@@ -3426,6 +3713,7 @@ proc bsc_initialize {} {
         # the binaries if we are running internal tests.
         if [do_internal_checks] {
             set dumpbo [which_dumpbo]
+            set dumpba [which_dumpba]
             set vcdcheck [which_vcdcheck]
             set bsc2bsv [which_bsc2bsv]
         }

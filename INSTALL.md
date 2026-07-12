@@ -52,10 +52,12 @@ symlinks in `/usr/bin/` that point to the executables in
 ## Requirements
 
 To build a complete release of BSC, you will need:
- - The standard Haskell compiler [GHC]. The recommended version is the
-   latest 9.6 point release, but the Bluespec compiler should work
-   with any release from 7.10.3 through 9.12.  We recommend installing
-   GHC via the popular installer [GHCup].
+ - The standard Haskell compiler [GHC]. The recommended version is
+   9.6.7, which is the primary version built and tested by this
+   project's continuous integration (CI); newer versions are also
+   tested (see the [CI workflow] for the exact set).  Older versions
+   are untested and may not work.  We recommend installing GHC via
+   the popular installer [GHCup].
  - A few additional Haskell libraries: `regex-compat`, `syb`,
    `old-time`, `split`, and `strict-concurrency`.
  - The GNU Multiple Precision Arithmetic Library (GMP). `libgmp` is
@@ -81,6 +83,7 @@ The following dependencies are optional, though recommended:
    additional fonts.
  - To format release notes for publication, the [Asciidoctor] tool.
 
+[CI workflow]: .github/workflows/ci.yml
 [GHC]: https://www.haskell.org/ghc/
 [GHCUp]: https://www.haskell.org/ghcup/
 [Icarus Verilog]: https://steveicarus.github.io/iverilog/
@@ -95,6 +98,7 @@ sudo apt-get install \
    build-essential \
    tcl-dev \
    libgmp-dev \
+   zlib1g-dev \
    pkg-config \
    autoconf \
    gperf \
@@ -157,6 +161,7 @@ sudo dnf install \
    dejagnu \
    tcl-devel \
    gmp-devel \
+   zlib-devel \
    gperf \
    latex \
    texlive-boxedminipage \
@@ -198,11 +203,11 @@ sudo dnf install \
    ghc-old-time-prof \
    ghc-split-prof
 ```
-
 Note that there are currently no `ghc-strict-concurrency-devel` or
-`ghc-strict-concurrency-prof` packages.  Until such packages are
-created, that library would need to be installed using `cabal`, which
-is available via the `cabal-install` package.
+`ghc-strict-concurrency-prof` packages in upstream Fedora, however
+they can be installed using the [Terra
+repository](https://terrapkg.com/).  You can also install using
+`cabal`, which is available via the `cabal-install` package.
 
 ### MacOS systems
 
@@ -331,6 +336,18 @@ from that repository will be added.
 Both the Yices and STP solvers are optional to build, although
 recommended. To skip these builds, see "Optionally avoiding the
 compile of STP or Yices" below.
+
+### Waveform dumping (libfst)
+
+The repository for GTKWave's [libfst library] is cloned as a submodule
+of this repository, at `src/vendor/libfst`.  Building the BSC tools
+will compile libfst into the Bluesim kernel library, where it is used
+to write FST waveform dumps (see the `-dump-formats` flag).  Compiling
+it requires the zlib development headers (`zlib1g-dev` on
+Debian/Ubuntu, `zlib-devel` on Fedora; on macOS, zlib is provided by
+the SDK), which are included in the dependency lists above.
+
+[libfst library]: https://github.com/gtkwave/libfst
 
 ## Clone the repository
 

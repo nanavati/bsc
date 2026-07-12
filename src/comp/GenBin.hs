@@ -3,7 +3,6 @@
 module GenBin(genBinFile, readBinFile) where
 
 import Control.Monad(when)
-import Data.Word
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
@@ -27,21 +26,25 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260708-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260712-1"
+
+headerBS :: B.ByteString
+headerBS = B.pack header
 
 genBinFile :: ErrorHandle ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh fn bi_sig bo_sig ipkg =
     writeBinaryFileCatch errh fn (header ++ encode (bi_sig, bo_sig, ipkg))
 
-readBinFile :: ErrorHandle -> String -> [Word8] ->
+readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String)
 readBinFile errh nm s =
-    if take (length header) s == header
-    then let ((bi_sig, bo_sig, ipkg), hash) =
-                 decodeWithHash $ drop (length header) s
-         in return (bi_sig, bo_sig, ipkg, hash)
-    else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+    let hlen = B.length headerBS
+    in if B.take hlen s == headerBS
+       then let ((bi_sig, bo_sig, ipkg), hash) =
+                    decodeWithHash $ B.drop hlen s
+            in return (bi_sig, bo_sig, ipkg, hash)
+       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 -- ----------
 -- Bin CSignature
@@ -535,15 +538,18 @@ instance Bin (IPackage a) where
            toBin (ipkg_depends pkg)
            toBin (ipkg_pragmas pkg)
            toBin (ipkg_defs pkg)
+           toBin (ipkg_atf_cache pkg)
     readBytes = do when doTrace $ traceM("read IPackage")
-                   name    <- fromBin
-                   depends <- fromBin
-                   pragmas <- fromBin
-                   defs    <- fromBin
-                   return $ IPackage { ipkg_name    = name
-                                     , ipkg_depends = depends
-                                     , ipkg_pragmas = pragmas
-                                     , ipkg_defs    = defs
+                   name      <- fromBin
+                   depends   <- fromBin
+                   pragmas   <- fromBin
+                   defs      <- fromBin
+                   atfCache  <- fromBin
+                   return $ IPackage { ipkg_name      = name
+                                     , ipkg_depends   = depends
+                                     , ipkg_pragmas   = pragmas
+                                     , ipkg_defs      = defs
+                                     , ipkg_atf_cache = atfCache
                                      }
 
 -- ----------
@@ -569,7 +575,7 @@ instance Bin (IExpr a) where
     writeBytes (IVar i)       = do putI 2; toBin i
     writeBytes (ILAM i k e)   = do putI 3; toBin i; toBin k; toBin e
     writeBytes (ICon i ic)    = do putI 4; toBin i; toBin ic
-    writeBytes (IRefT _ _ _)  = internalError "GenBin.Bin(IExpr).writeBytes: IRefT"
+    writeBytes (IRefT _ _ _ _) = internalError "GenBin.Bin(IExpr).writeBytes: IRefT"
     readBytes = do tag <- getI
                    case tag of
                      0 -> do i <- fromBin
@@ -604,8 +610,8 @@ instance Bin ConTagInfo where
 instance Bin (IConInfo a) where
     writeBytes (ICDef t _)      = do putI 0; toBin t
     writeBytes (ICPrim t p)     = do putI 1; toBin t; toBin (fromEnum p)
-    writeBytes (ICForeign t n isC ps Nothing) =
-        do putI 2; toBin t; toBin n; toBin isC; toBin ps
+    writeBytes (ICForeign t n isC ps tvns Nothing) =
+        do putI 2; toBin t; toBin n; toBin isC; toBin ps; toBin tvns
     writeBytes (ICForeign { fcallNo = (Just _) }) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICForeign with cookie"
     writeBytes (ICCon t cti)    = do putI 3; toBin t; toBin cti
@@ -646,6 +652,10 @@ instance Bin (IConInfo a) where
         internalError "GenBin.Bin(IConInfo).writeBytes: ICInout"
     writeBytes (ICLazyArray _ _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyArray"
+    writeBytes (ICLazyPack {}) =
+        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyPack"
+    writeBytes (ICLazyUnpack {}) =
+        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyUnpack"
     writeBytes (ICPred _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICPred"
     writeBytes (ICHandle { }) =
@@ -663,7 +673,8 @@ instance Bin (IConInfo a) where
                      2  -> do n <- fromBin
                               isC <- fromBin
                               ps <- fromBin
-                              return (ICForeign t n isC ps Nothing)
+                              tvns <- fromBin
+                              return (ICForeign t n isC ps tvns Nothing)
                      3  -> do cti <- fromBin; return (ICCon t cti)
                      4  -> do cti <- fromBin; return (ICIs t cti)
                      5  -> do cti <- fromBin; return (ICOut t cti)

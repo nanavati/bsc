@@ -30,6 +30,7 @@ Logical execution order: m
 
 ============================================
 Verilog file created: mkAVArgUse_C.v
+Elaborated module file created: mkAVArgUse_C.ba
 code generation for sysAVArgUse_C starts
 Warning: "AVArgUse_C.bsv", line 19, column 8: (G0010)
   Rule "rA" was treated as more urgent than "rB". Conflicts:
@@ -45,7 +46,7 @@ order: [RL_rA, RL_rB]
 -----
 
 === resources (AVArgUse_C sysAVArgUse_C):
-[(dut.m, [(dut.m r1__h275 32'd1, 1), (dut.m 32'd5 r1__h275, 1)]),
+[(dut.m, [(dut.m r1___d1 32'd1, 1), (dut.m 32'd5 r1___d1, 1)]),
  (r1.read, [(r1.read, 1)]),
  (r1.write, [(r1.write r1_PLUS_1___d4, 1)])]
 
@@ -75,4 +76,5 @@ Logical execution order: rA, rB
 Warning: "AVArgUse_C.bsv", line 30, column 10: (G0021)
   According to the generated schedule, rule `rB' can never fire.
 Verilog file created: sysAVArgUse_C.v
+Elaborated module file created: sysAVArgUse_C.ba
 All packages are up to date.

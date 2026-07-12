@@ -1,17 +1,44 @@
-module FixupDefs(fixupDefs, updDef, fixupIDef, fixupIDefSel) where
+module FixupDefs(fixupDefs, updDef, fixupIDefSel, mkCoherentDictMap) where
 
 import Data.List(nub)
 import qualified Data.Map as M
 import PFPrint
+import CType
+import ISyntaxUtil
 import ErrorUtil(internalError)
+import IOUtil(progArgs)
 import Id
 import ISyntax
 import ISyntaxXRef(updateIExprPosition)
-import ISyntaxUtil(iDefsMap)
---import Debug.Trace
+import Util(tracep)
 
+trace_drop_dicts :: Bool
+trace_drop_dicts = "-trace-drop-dicts" `elem` progArgs
 
 -- ===============
+
+
+itIsDictType :: IType -> Bool
+itIsDictType t
+  | null $ fst $ itGetArrows t,
+    ITCon _ _ (TIstruct SClass _) <- leftmost t = True
+itIsDictType _ = False
+
+-- Map from the type of a coherent dictionary to the (unique) top-level
+-- def of that dictionary in the imported packages.  This map depends only
+-- on the imported packages, which are fixed for the entire compilation of
+-- a package; so it can be built once (in "compilePackage" in bsc.hs) and
+-- passed to every call of "fixupDefs" and "updDef" (which is called once
+-- per synthesized module), rather than rebuilt on each call.
+mkCoherentDictMap :: [(IPackage a, String)] -> M.Map IType Id
+mkCoherentDictMap ipkgs =
+    let
+        -- Get all the defs from the imported packages
+        ams = concatMap (ipkg_defs . fst) ipkgs
+
+        coherent_dicts = [ d | d@(IDef i t _ _) <- ams, itIsDictType t, isDictId i, not $ isIncoherentDict i ]
+    in
+        M.fromList [ (t,i) | IDef i t _ _ <- coherent_dicts ]
 
 -- This does two things:
 -- (1) Insert imported packages into the current package (including their
@@ -19,8 +46,11 @@ import ISyntaxUtil(iDefsMap)
 -- (2) Find references to top-level variables and insert the definitions
 --     (to avoid lookups when evaluating the code).  This creates a cyclic
 --     data structure when defs call each other recursively.
-fixupDefs :: IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
-fixupDefs (IPackage mi _ ps ds) ipkgs =
+--
+-- The first argument must be "mkCoherentDictMap" applied to the same
+-- imported packages that are passed as the third argument.
+fixupDefs :: M.Map IType Id -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs coherent_dict_map (IPackage mi _ ps ds own_atf_cache) ipkgs =
     let
         (ms, _) = unzip ipkgs
 
@@ -28,42 +58,33 @@ fixupDefs (IPackage mi _ ps ds) ipkgs =
         -- XXX The nub is needed (at least) because we call "fixupDefs"
         -- XXX multiple times on a package and so we may be adding the ipkg
         -- XXX pragmas multiple times.
-        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ <- ms ]
+        ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ _ <- ms ]
 
         -- Get all the defs from this package and the imported packages
-        ads = concat (ds : map (\ (IPackage _ _ _ ds) -> ds) ms)
+        ads = concat (ds : map (\ (IPackage _ _ _ ds _) -> ds) ms)
 
         -- Create a recursive data structure by populating the map "m"
         -- with defs created using the map itself
         m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
-        ads' = iDefsMap (fixUp m) ads
+        ads' = iDefsMap (fixUp coherent_dict_map m) ads
 
         -- The new package contents
-        ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _), s) <- ipkgs ]
-        ds' = iDefsMap (fixUp m) ds
+        ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
+        ds' = iDefsMap (fixUp coherent_dict_map m) ds
+        dropDict i t = tracep (trace_drop_dicts && result) ("dropDict: " ++ ppReadable (i,t)) result
+          where result = itIsDictType t && isDictId i && t `M.member` coherent_dict_map && not (isIncoherentDict i)
+        ds'' = [ d' | d'@(IDef i t _ _) <- ds', not (dropDict i t) ]
+        -- Note that the package keeps only its own ATF cache entries, so
+        -- that .bo files stay proportional to their own package.  The union
+        -- with the imported packages' caches (for use during elaboration)
+        -- is built in bsc.hs and is never stored in an IPackage.  Do not
+        -- merge caches here: "fixupDefs" is re-invoked once per synthesized
+        -- module (via "updDef"), so any merging added here is multiplied by
+        -- the number of modules.
     in
         --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
-        (IPackage mi ipkg_sigs ps' ds', ads')
+        (IPackage mi ipkg_sigs ps' ds'' own_atf_cache, ads')
 
-
--- ===============
-
--- Fix up a SINGLE definition that is not (and will not become) a
--- member of the package: inline the top-level def bodies into its
--- ICDef references, against this package and its imports.  Used for
--- the injected wrapper skeleton (increment 11), which is compiled by
--- the per-module pipeline and elaborated directly -- without this,
--- its cross-package references carry iConvVar's undet placeholder
--- bodies and the evaluator would silently consume them.
-fixupIDef :: IPackage a -> [(IPackage a, String)] -> IDef a -> IDef a
-fixupIDef (IPackage _ _ _ ds) ipkgs d =
-    let ms = map fst ipkgs
-        ads = concat (ds : map (\ (IPackage _ _ _ ds_i) -> ds_i) ms)
-        m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
-        ads' = iDefsMap (fixUp m) ads
-    in  case iDefsMap (fixUp m) [d] of
-          [d'] -> d'
-          _ -> internalError "FixupDefs.fixupIDef"
 
 -- ===============
 
@@ -72,8 +93,9 @@ fixupIDef (IPackage _ _ _ ds) ipkgs d =
 -- other node -- and every position -- untouched.  Used to re-knot a
 -- captured skeleton against the current package, whose generated
 -- members updDef replaces as generation proceeds (increment 11);
--- the full fixupIDef re-stamps positions (updateIExprPosition),
--- which degraded inner error positions on a second application.
+-- the whole-package fixUp re-stamps positions
+-- (updateIExprPosition), which degraded inner error positions on a
+-- second application.
 --
 -- EVERY package def on the skeleton's spine must be re-fixed, not
 -- just the generated members: a stale generated-member body can be
@@ -83,9 +105,13 @@ fixupIDef (IPackage _ _ _ ds) ipkgs d =
 -- forever on exactly that), and the current knot is the only
 -- globally consistent source.  Import refs stay untouched: imports
 -- cannot reference this package, so their embedded knots are
--- current by construction.
+-- current by construction.  (Coherent-dictionary refs on the spine
+-- were already canonicalized to import defs by fixUp when the
+-- skeleton's package was knotted at capture time; import ids are
+-- not in this map, so they pass through untouched, which is
+-- correct for the same reason imports are.)
 fixupIDefSel :: IPackage a -> IDef a -> IDef a
-fixupIDefSel (IPackage _ _ _ ds) (IDef di dt de dp) =
+fixupIDefSel (IPackage _ _ _ ds _) (IDef di dt de dp) =
     let m = M.fromList [ (i, e) | IDef i _ e _ <- ds ]
         fixSel (ILam i t e) = ILam i t (fixSel e)
         fixSel (ILAM i k e) = ILAM i k (fixSel e)
@@ -102,8 +128,10 @@ fixupIDefSel (IPackage _ _ _ ds) (IDef di dt de dp) =
 -- Replace the definition for a top-level variable with a new definition.
 -- (This is used to replace the pre-synthesis definition for a module with
 -- the post-synthesis definition.)
-updDef :: IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
-updDef d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
+-- The first argument must be "mkCoherentDictMap" applied to the same
+-- imported packages that are passed as the fourth argument.
+updDef :: M.Map IType Id -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef coherent_dict_map d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
         -- replace the def in the list
         ds' = [ if i == i' then d else d' | d'@(IDef i' _ _ _) <- ds ]
@@ -119,19 +147,22 @@ updDef d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
         -- We use "fixupDefs" to perform both changes.
         -- XXX However, "fixupDefs" is overkill, for just one def.
         -- XXX Note that we throw away alldefs, when we could return it.
-        (ipkg'', _) = fixupDefs ipkg' ips
+        (ipkg'', _) = fixupDefs coherent_dict_map ipkg' ips
     in
         ipkg''
 
 
 -- ===============
 
-fixUp :: M.Map Id (IExpr a) -> IExpr a -> IExpr a
-fixUp m (ILam i t e) = ILam i t (fixUp m e)
-fixUp m (ILAM i k e) = ILAM i k (fixUp m e)
-fixUp m (IAps f ts es) = IAps (fixUp m f) ts (map (fixUp m) es)
-fixUp m (ICon i (ICDef t _)) = ICon i (ICDef t (get m i))
-fixUp m e = e
+fixUp :: M.Map IType Id -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp cm m (ILam i t e) = ILam i t (fixUp cm m e)
+fixUp cm m (ILAM i k e) = ILAM i k (fixUp cm m e)
+fixUp cm m (IAps f ts es) = IAps (fixUp cm m f) ts (map (fixUp cm m) es)
+fixUp cm m (ICon i (ICDef t _))
+  | isDictId i && itIsDictType t && not (isIncoherentDict i),
+    Just i' <- M.lookup t cm = ICon i' (ICDef t (get m i'))
+fixUp cm m (ICon i (ICDef t _)) = ICon i (ICDef t (get m i))
+fixUp _ _ e = e
 
 get :: M.Map Id (IExpr a) -> Id -> IExpr a
 get m i = let value = get2 m i

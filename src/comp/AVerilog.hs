@@ -4,6 +4,7 @@
 module AVerilog (aVerilog) where
 
 import Data.List(nub,
+            mapAccumL,
             partition,
             intercalate,
             sort,
@@ -17,13 +18,17 @@ import Data.Maybe
 import System.IO.Unsafe
 import qualified Data.Set as S
 import qualified Data.Map as M
+import qualified Data.Generics as Generic
 
 import ListMap(lookupWithDefault)
 import Util
 import FileNameUtil(hasSuf)
 import PFPrint
-import Error(internalError, ErrorHandle)
-import Flags(Flags, removeReg, removeCross, removeInoutConnect, removeUnusedMods,
+import Error(internalError, ErrorHandle, bsWarning,
+             ErrMsg(WSVReservedIdent, WSVStdIdentRenamed, WSVStdIdentExternal))
+import Position(getPosition, Position)
+import Flags(Flags, systemVerilogOutput,
+             removeReg, removeCross, removeInoutConnect, removeUnusedMods,
              useDPI, verilogDeclareAllFirst)
 import Id
 import Pragma(PProp(..))
@@ -34,7 +39,7 @@ import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
 import BackendNamingConventions(isRegInst, isClockCrossingRegInst, isInoutConnect)
-import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getForeignFunctions)
+import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getDPIInstantiations)
 import qualified GraphWrapper as G
 
 --import Debug.Trace
@@ -58,9 +63,81 @@ import qualified GraphWrapper as G
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack ffmap =
-       return (VProgram mods dpi_decls comments)
+    do let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
+       -- Gate the identifier legalization below on a cheap scan of the
+       -- positions where a colliding name can originate.  The scan is
+       -- sound by the invariant documented at vModuleDeclVIds: every VId
+       -- that the printer emits as an identifier either occurs in a
+       -- declaration position of some module, is a '$'-prefixed system
+       -- task/function name, or is a foreign Verilog/DPI function or task
+       -- name.  A '$'-prefixed name can never be a reserved word or a std
+       -- package identifier, so scanning the declaration positions plus
+       -- the DPI names and the foreign Verilog function names is exactly
+       -- sufficient: if none of them is suspect, then no identifier
+       -- printed anywhere in the program (including expression- and
+       -- statement-position uses, which are references to declared or
+       -- external names) is a reserved word or std package identifier.
+       -- In that case no rename would happen and no G0131/G0132/G0133
+       -- warning would be emitted, so the program is returned untouched,
+       -- with no further traversal and no rebuild of the structure.
+       -- (VIds in metadata slots that the printer never emits as
+       -- identifiers -- e.g. the provenance ids carried by
+       -- VEOp/VEUnOp/VEWConst -- are deliberately not scanned; a reserved
+       -- word surviving only in such a slot previously drew a spurious
+       -- G0131 despite never being printed.)
+       let suspect_str s = isVReservedWord s || isSVStdPackageIdent s
+           suspect_vid (VId s _ _) = suspect_str s
+           dpi_name_vids = [ n | VDPI n _ _ _ _ <- dpi_decls ] ++
+                           [ a | VDPI _ _ _ _ args <- dpi_decls,
+                                 (a, _, _) <- args ]
+           has_suspects = any suspect_vid dpi_name_vids ||
+                          any (suspect_str . fst) foreign_func_names ||
+                          any (any suspect_vid . vModuleDeclVIds) mods
+       if (not has_suspects)
+        then return vprog0
+        else do
+         -- Identifiers that collide with the class names of SystemVerilog's
+         -- built-in std package (process, semaphore, mailbox) cannot be
+         -- protected by escaping: some tools (verilator) resolve the names
+         -- at parse time even in escaped form.  Rename the internal ones
+         -- (warning G0132); externally visible names -- the module itself,
+         -- its ports, DPI functions, foreign Verilog functions -- cannot be
+         -- renamed unilaterally, so for those only warn (G0133).
+         let (vprog, renamed, extern_clashes) =
+                 renameSVStdIdents foreign_func_names vprog0
+         if (null renamed)
+           then return ()
+           else bsWarning errh
+                    [ (pos, WSVStdIdentRenamed name new_name)
+                    | (name, new_name, pos) <- renamed ]
+         if (null extern_clashes)
+           then return ()
+           else bsWarning errh
+                    [ (pos, WSVStdIdentExternal name)
+                    | (name, pos) <- extern_clashes ]
+         -- warn about identifiers that collide with Verilog or SystemVerilog
+         -- reserved words; the printer emits them as escaped identifiers (see
+         -- the PPrint VId instance), which keeps the output legal, but the
+         -- user may prefer to rename them (promote G0131 to make this an
+         -- error)
+         let sv_clashes =
+                 M.toList $ M.fromListWith (\_ old -> old)
+                     [ (s, getPosition i)
+                     | VId s i _ <- Generic.listify isReservedVId vprog ]
+               where isReservedVId (VId s _ _) = isVReservedWord s
+         if (null sv_clashes)
+           then return ()
+           else bsWarning errh
+                    [ (pos, WSVReservedIdent name) | (name, pos) <- sv_clashes ]
+         return vprog
   where
-        vco = flagsToVco flags
+        -- vco carries the foreign-function map and def widths so that DPI call
+        -- sites can be monomorphized (name-mangled by concrete width)
+        vco = (flagsToVco flags)
+                { vco_ffmap = ffmap
+                , vco_def_widths =
+                    M.fromList [ (i, aSize t) | ADef i t _ _ <- aspkg_values aspack ]
+                }
         -- look for pass-through comments, taking care of \n
         -- XXX should these attach to the main module instead of the
         -- XXX entire file (attached to file in case of multiple modules)
@@ -196,16 +273,21 @@ aVerilog errh flags pps aspack ffmap =
 
         -- The main module
         -- XXX note, no special port grouping/commenting for bit blasted mod
+        -- DPI imports are emitted at module scope (as body items), so that
+        -- multiple modules using the same foreign function don't collide at
+        -- Verilator's shared $unit scope; they go in the module that contains
+        -- the foreign-function calls (the main module).
+        dpi_items = map VMDPI dpi_decls
         mainMod =
             if doBitBlast
             then VModule { vm_name = modnameBB,
                            vm_comments = [],
                            vm_ports = [(bargs,[])],
-                           vm_body = bbItems }
+                           vm_body = dpi_items ++ bbItems }
             else VModule { vm_name = modnameUB,
                            vm_comments = [],
                            vm_ports = (groupPorts signal_info args),
-                           vm_body = ubItems }
+                           vm_body = dpi_items ++ ubItems }
 
         -- The un-blasted wrapper, when bit-blasting
         -- It has the unblasted name, the unblasted ports,
@@ -241,8 +323,50 @@ aVerilog errh flags pps aspack ffmap =
     -- create import-DPI statements, if using DPI
 
         dpi_decls = if (useDPI flags)
-                    then mkDPIDeclarations $ getForeignFunctions ffmap aspack
+                    then mkDPIDeclarations $ getDPIInstantiations ffmap aspack
                     else []
+
+    -- ----------
+    -- names of foreign Verilog functions and tasks
+    --
+    -- Classic `foreign' imports of hand-written Verilog functions
+    -- (isC=False) are called by the user-chosen name, which refers to a
+    -- definition in the user's own Verilog code; a call site must match
+    -- that definition, so these names are externally determined (warn
+    -- only, like DPI names) and must never be renamed.
+    --
+    --  * value calls remain AFunCall expressions in the package and are
+    --    emitted verbatim as function calls (see vExpr in AVerilogUtil);
+    --  * action and ActionValue calls have been collected into
+    --    aspkg_foreign_calls, where afc_fun already holds the name as it
+    --    will be emitted (see cvtName in AState): system tasks and
+    --    non-DPI imported-C wrappers are '$'-prefixed, DPI functions
+    --    appear under their raw C name (already external via the DPI
+    --    declarations above), and foreign Verilog tasks keep their
+    --    user-chosen name -- so taking every name that is not
+    --    '$'-prefixed is a safe over-approximation.
+
+        foreign_func_names :: [(String, Position)]
+        foreign_func_names =
+            findAExprs exprVForeignCalls aspack ++
+            [ (afc_fun fc, getPosition (afc_name fc))
+            | (_, fcs) <- aspkg_foreign_calls aspack,
+              fc <- fcs,
+              not (isTaskName (afc_fun fc)) ]
+          where
+            exprVForeignCalls e@(AFunCall {}) =
+                [ (ae_funname e, getPosition (ae_objid e))
+                | not (ae_isC e), not (isTaskName (ae_funname e)) ]
+                ++ concatMap exprVForeignCalls (ae_args e)
+            exprVForeignCalls e@(APrim {}) =
+                concatMap exprVForeignCalls (ae_args e)
+            exprVForeignCalls e@(AMethCall {}) =
+                concatMap exprVForeignCalls (ae_args e)
+            exprVForeignCalls e@(ANoInlineFunCall {}) =
+                concatMap exprVForeignCalls (ae_args e)
+            exprVForeignCalls _ = []
+            isTaskName ('$':_) = True
+            isTaskName _       = False
 
     -- ----------
     -- define a function (vDef) for mapping an ADef to a Verilog item
@@ -321,15 +445,19 @@ aVerilog errh flags pps aspack ffmap =
         -- XXX might be good to allow the user to specify a default
 
         args :: [VArg]
-        args =        [ VAParameter (vId i) r v
+        args =        [ VAParameter (vId i) r v isStr
                      | (i, t) <- ps,
-                       let (r, v) = case t of
+                       let (r, v, isStr) = case t of
                                       ATBit sz -> (Just (VEConst (sz-1),
                                                          VEConst 0),
-                                             VEWConst (mkVId "0") sz 2 0)
-                                      ATString _ -> (Nothing, VEString "")
-                                      ATReal -> (Nothing, VEReal 0.0)
-                                      _ -> (Nothing, VEConst 0) ] ++
+                                             VEWConst (mkVId "0") sz 2 0, False)
+                                      -- under -system-verilog-output, emit a SV
+                                      -- `string` parameter so $display treats it
+                                      -- as a string, not a packed bit-vector
+                                      ATString _ -> (Nothing, VEString "",
+                                                     systemVerilogOutput flags)
+                                      ATReal -> (Nothing, VEReal 0.0, False)
+                                      _ -> (Nothing, VEConst 0, False) ] ++
                 [ VAInput (vId i) (vSize t)
                      | (i, t) <- is ] ++
                 filterSharedInout
@@ -352,7 +480,7 @@ aVerilog errh flags pps aspack ffmap =
 
         -- remember to not redeclare any signals that needed to be
         -- declared for submodule instantiations
-        isPreDeclared = isDeclFromList inst_declared_signals
+        isPreDeclared = isDeclFromList $ S.fromList inst_declared_signals
 
         -- make a map to hold the defs, for easy access
         defmap = M.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
@@ -417,7 +545,7 @@ aVerilog errh flags pps aspack ffmap =
         -- -----
         -- other
         -- (keep in the package order, for lack of a better order)
-        ds7 = filter (isADefFromList (M.keys defmap7)) ds
+        ds7 = filter (isADefFromMap defmap7) ds
         (other_decls, other_defs) = mkVDeclsAndDefs vDef ds7
         other_decls_filtered = filter (not . isPreDeclared) other_decls
 
@@ -474,8 +602,8 @@ groupPorts si as =
         -- (function to be folded over the method port info)
         findMethod :: ASPMethodInfo ->
                         ([(AId,String,[VArg])],[(Id,VArg)]) -> ([(AId,String,[VArg])],[(Id,VArg)])
-        findMethod (ASPMethodInfo i ty mr me mv args _) (ms, ports) =
-            let is = (catMaybes [mr, me, mv]) ++ args
+        findMethod (ASPMethodInfo i ty mr me vs args _) (ms, ports) =
+            let is = (catMaybes [mr, me]) ++ vs ++ args
                 (ps, remaining) = findIds is ports
             in  ((i,ty,ps):ms, remaining)
 
@@ -574,10 +702,10 @@ groupMethodDefs vDef si ds =
         mkForMethod :: ASPMethodInfo ->
                        ([VMItem], [VMItem], [VMItem], M.Map AId ADef) ->
                        ([VMItem], [VMItem], [VMItem], M.Map AId ADef)
-        mkForMethod (ASPMethodInfo i ty mr _ mv _ rs) (odecls, idecls, gs, defs) =
+        mkForMethod (ASPMethodInfo i ty mr _ vs _ rs) (odecls, idecls, gs, defs) =
             let
                 -- get the output defs
-                output_ids = catMaybes [mv, mr]
+                output_ids = vs ++ maybeToList mr
                 (output_defs, other_defs) = findADefs output_ids defs
                 -- get the rule defs
                 rule_sched_ids = concatMap getRuleSignals rs
@@ -738,6 +866,61 @@ mkVDeclsAndDefs vDef ds =
 -- ==============================
 -- Top-level inout handing
 
+-- Rename one-port-per-net inout ports to plain named ports.  bsc binds
+-- each inout port of a generated module to its internal net with a
+-- port expression in the module header -- ".iioo(x$INOUT)", or
+-- ".arg(arg)" for a module argument -- a header form some tools
+-- (notably Verilator) cannot parse.  When the port is the only one on
+-- its net the expression serves no purpose: rename the net to the port
+-- name throughout the module and emit a plain port.  Ports sharing a
+-- net (shorted inouts) keep the expression form; Verilog has no
+-- plain-port rendering for those.  (A port whose name is already in
+-- use elsewhere in the module is left in expression form; that should
+-- not happen, but this pass must not capture.)
+renameInoutPorts :: VModule -> VModule
+renameInoutPorts vm =
+    let args = concatMap fst (vm_ports vm)
+
+        -- how many inout ports sit on each net (VId equality is by
+        -- Verilog name, which is net identity)
+        net_count :: M.Map VId Int
+        net_count = M.fromListWith (+)
+                        [ (i', 1) | VAInout _ (Just i') _ <- args ]
+        -- how often each identifier occurs anywhere in the module
+        id_count :: M.Map VId Int
+        id_count = M.fromListWith (+)
+                       [ (v, 1) | v <- Generic.listify isVId vm ]
+          where isVId :: VId -> Bool
+                isVId _ = True
+
+        renames :: M.Map VId VId
+        renames = M.fromList
+                      [ (i', i)
+                      | VAInout i (Just i') _ <- args
+                      , M.lookup i' net_count == Just 1
+                      , i /= i'
+                        -- the port name occurs only in its own header
+                        -- expression, so adopting it cannot capture
+                      , M.lookup i id_count == Just 1 ]
+
+        subst :: VId -> VId
+        subst v = M.findWithDefault v v renames
+
+        vm' = Generic.everywhere (Generic.mkT subst) vm
+
+        -- drop the now-trivial expressions (".iioo(iioo)"), including
+        -- ports that were already 1:1 with a same-named net
+        net_count' :: M.Map VId Int
+        net_count' = M.fromListWith (+)
+                         [ (i', 1)
+                         | VAInout _ (Just i') _
+                               <- concatMap fst (vm_ports vm') ]
+        plain (VAInout i (Just i') r)
+            | i == i', M.lookup i' net_count' == Just 1
+            = VAInout i Nothing r
+        plain a = a
+    in  vm' { vm_ports = [ (map plain as, c) | (as, c) <- vm_ports vm' ] }
+
 computeInouts :: M.Map AId AId -> ASPackage -> [(Id, AType, Id)]
 computeInouts inout_rewire_map aspack =
     let
@@ -813,6 +996,8 @@ genInstances errh flags ff_blocks vDef aspack =
 
         -- converts the adefs to vitems
         defs = concatMap vDef (aspkg_values aspack)
+        -- make a size and type map from the vmitems
+        sztm = mkSizeAndTypeMap defs
 
         -- we'll need the inout defs, too, to know which inout ports
         -- of submodule are used (and which should be left unconnected)
@@ -907,7 +1092,7 @@ genInstances errh flags ff_blocks vDef aspack =
 
         -- generate the reg/wire declarations
         reg_decl_groups =
-            map (mkRegGroup sos defs inlined_reg_comments) reg_infos
+            map (mkRegGroup sos sztm inlined_reg_comments) reg_infos
 
         -- the input wire decls (to be later assigned to, but not re-declared)
         reg_inputs :: [(AId, [VId])]
@@ -1003,14 +1188,14 @@ genInstances errh flags ff_blocks vDef aspack =
             in  partition ((`elem` probe_ids) . fst) noninlinedreg_comments
 
         (probe_inputs, probe_decls_group) =
-            mkProbeGroup sos defs probe_comments probe_infos
+            mkProbeGroup sos sztm probe_comments probe_infos
 
     -- ----------
     -- generate a group for inlined rwires whose i/o are still around
 
         -- user comments on rwires are handled with "inlined_submod_comments"
         -- (note that InlineRWire could convert them to PPdoc on the topmod)
-        (rwire_inputs, rwire_decls_group) = mkRWireGroup filtered_defs rws
+        (rwire_inputs, rwire_decls_group) = mkRWireGroup (mkSizeAndTypeMap filtered_defs) rws
 
     -- ----------
     -- signals declared so far
@@ -1036,7 +1221,7 @@ genInstances errh flags ff_blocks vDef aspack =
 
         (submod_inputs, submod_decl_groups, submod_def_groups,
          extra_submod_decls) =
-            mkSubmodGroups flags sos defs submod_comments decls_so_far
+            mkSubmodGroups flags sos sztm submod_comments decls_so_far
                            submod_infos
 
     -- ----------
@@ -1123,15 +1308,15 @@ genInstances errh flags ff_blocks vDef aspack =
 -- (any signals which are pre-declared are returned as the fourth item
 -- of the tuple)
 mkSubmodGroups ::
-    Flags -> [AStateOut] -> [VMItem] -> [(Id,[String])] -> [VId] ->
+    Flags -> [AStateOut] -> SizeAndTypeMap -> [(Id,[String])] -> [VId] ->
     [(AId, VMItem, InstInfo)] ->
     ([(AId, [VId])], [VMItem], [VMItem], [VId])
-mkSubmodGroups flags sos defs submod_comments decls_so_far submod_infos =
+mkSubmodGroups flags sos sztm submod_comments decls_so_far submod_infos =
     let
         (submod_decl_groups, submod_def_groups) =
             apFst catMaybes $ apSnd catMaybes $
             unzip $
-            map (mkInstGroup flags sos defs submod_comments) submod_infos
+            map (mkInstGroup flags sos sztm submod_comments) submod_infos
 
         submod_inputs =
             let getInputs (i, _, (_,_,_,ins,_)) = (i, map snd ins)
@@ -1145,7 +1330,7 @@ mkSubmodGroups flags sos defs submod_comments decls_so_far submod_infos =
         else
             let
                (new_submod_groups, extra_submod_decls) =
-                   fixupSubmodGroups sos defs submod_infos decls_so_far
+                   fixupSubmodGroups sos sztm submod_infos decls_so_far
                        submod_decl_groups
             in
                -- check that the assumption is OK
@@ -1155,9 +1340,9 @@ mkSubmodGroups flags sos defs submod_comments decls_so_far submod_infos =
 
 
 fixupSubmodGroups ::
-    [AStateOut] -> [VMItem] -> [(AId, VMItem, InstInfo)] -> [VId] ->
+    [AStateOut] -> SizeAndTypeMap -> [(AId, VMItem, InstInfo)] -> [VId] ->
     [VMItem] -> ([VMItem], [VId])
-fixupSubmodGroups sos defs submod_infos decls_so_far submod_groups =
+fixupSubmodGroups sos sztm submod_infos decls_so_far submod_groups =
     let
 
     -- ----------
@@ -1209,21 +1394,21 @@ fixupSubmodGroups sos defs submod_infos decls_so_far submod_groups =
 
         (final_submod_groups, extra_submod_decls) =
             apFst reverse $
-            foldl (addInstPortDecls defs decls_so_far) ([],[])
+            foldl (addInstPortDecls sztm decls_so_far) ([],[])
                   sorted_inst_nodes
     in
         (final_submod_groups, extra_submod_decls)
 
 
 -- create a group of Verilog statements for a submodule instantiation
-mkInstGroup :: Flags -> [AStateOut] -> [VMItem] -> [(Id,[String])] ->
+mkInstGroup :: Flags -> [AStateOut] -> SizeAndTypeMap -> [(Id,[String])] ->
                (AId, VMItem, InstInfo) -> (Maybe VMItem, Maybe VMItem)
-mkInstGroup flags sos defs comments_map (instname, vmi, info) =
+mkInstGroup flags sos sztm comments_map (instname, vmi, info) =
     let (_, _, special, ins, outs) = info
         -- nub on the output values because there can be permissible overlap between
         -- "special" clock/reset outputs and method outputs
         wire_decls =
-            map (mkInstInputDecl defs instname . snd) ins ++
+            map (mkInstInputDecl sztm instname . snd) ins ++
             map (mkInstOutputDecl sos instname VDWire . snd) (nub (special ++ outs))
         user_comment = case (lookup instname comments_map) of
                            Nothing -> []
@@ -1251,13 +1436,13 @@ mkInstGroup flags sos defs comments_map (instname, vmi, info) =
 -- (each probe has one input, with obvious name, so no need to add a
 --  comment and empty line for each probe)
 -- (note that there is no instantiation for Probes, just the wire)
-mkProbeGroup :: [AStateOut] -> [VMItem] -> [(Id, [String])] ->
+mkProbeGroup :: [AStateOut] -> SizeAndTypeMap -> [(Id, [String])] ->
                 [(AId, VMItem, InstInfo)] ->
                 ([VId], [VMItem])
-mkProbeGroup sos defs comments_map probe_infos =
+mkProbeGroup sos sztm comments_map probe_infos =
     let
         getProbeInput (instname, vmi, (_, _, _, inps, _)) =
-            map (mkInstInputDecl defs instname . snd) inps
+            map (mkInstInputDecl sztm instname . snd) inps
         -- we drop the vmi and just declare the input port
         -- (there shouldn't be any outputs)
         probe_decls = concatMap getProbeInput probe_infos
@@ -1285,14 +1470,14 @@ mkProbeGroup sos defs comments_map probe_infos =
         else (decl_ids, [group])
 
 -- create a group of Verilog statements for an inlined register "instantiation"
-mkRegGroup :: [AStateOut] -> [VMItem] -> [(Id, [String])] ->
+mkRegGroup :: [AStateOut] -> SizeAndTypeMap -> [(Id, [String])] ->
               RegInstInfo -> VMItem
-mkRegGroup sos defs comments_map (inst_vid, def_name, _, inps, (out, out_size)) =
+mkRegGroup sos sztm comments_map (inst_vid, def_name, _, inps, (out, out_size)) =
     let
         reg_decl = VMDecl (VVDecl VDReg out_size [VVar out])
         -- if the EN is 0, then D_IN might not be defined!
         -- so have a backup in case the signal is not defined
-        inp_decls = map (mkInstInputDeclWithDefault defs) inps
+        inp_decls = map (mkInstInputDeclWithDefault sztm) inps
         all_decls = (reg_decl : mergeCommonDecl inp_decls)
         comments = lookupWithDefault comments_map [] (vidToId inst_vid)
     in  VMRegGroup inst_vid
@@ -1300,9 +1485,9 @@ mkRegGroup sos defs comments_map (inst_vid, def_name, _, inps, (out, out_size)) 
                    comments
                    (VMGroup False [all_decls])
 
-mkRWireGroup :: [VMItem] -> [AId] -> ([VId], [VMItem])
-mkRWireGroup defs rws =
-    let rw_decls = mapMaybe (mkInstInputDeclMaybe defs . vId) rws
+mkRWireGroup :: SizeAndTypeMap -> [AId] -> ([VId], [VMItem])
+mkRWireGroup sztm rws =
+    let rw_decls = mapMaybe (mkInstInputDeclMaybe sztm . vId) rws
         decl_ids = [ i | (VMDecl (VVDecl _ _ [VVar i])) <- rw_decls ]
         comment = ["inlined wires"]
         group = VMComment comment (VMGroup False [(mergeCommonDecl rw_decls)])
@@ -1315,17 +1500,17 @@ mkRWireGroup defs rws =
 -- when folded left along a tsort'ed list of instances, it inserts additional
 -- signal decls for signals used in non-method ports of the instantiations.
 -- the resulting list of VMItem groups is in reverse order (due to foldl).
-addInstPortDecls :: [VMItem] -> [VId] ->
+addInstPortDecls :: SizeAndTypeMap -> [VId] ->
                     ([VMItem], [VId]) ->
                     (AId, VMItem, [(VId,VExpr)]) ->
                     ([VMItem], [VId])
-addInstPortDecls defs decls (gs, new_decls) (i, inst_g, ps) =
+addInstPortDecls sztm decls (gs, new_decls) (i, inst_g, ps) =
     let
         -- variables used in the inst which have not already been declared
         -- (prior to submod instances or by an earlier submod inst)
         vs = [ i | (_, VEVar i) <- ps, i `notElem` (decls ++ new_decls) ]
         -- convert to decl
-        v_decls = map (mkInstInputDecl defs i) vs
+        v_decls = map (mkInstInputDecl sztm i) vs
         -- create a group for it
         decl_g = VMGroup False [mergeCommonDecl v_decls]
     in
@@ -1351,29 +1536,29 @@ mkInstOutputDecl sos inst_id decl_type out_port_id =
 
 -- for a submodule input, lookup the size and create a Verilog decl
 -- of the appropriate size and type (some decls are defined with case-stmt)
-mkInstInputDecl :: [VMItem] -> Id -> VId -> VMItem
-mkInstInputDecl defs inst_id in_port_id =
+mkInstInputDecl :: SizeAndTypeMap -> Id -> VId -> VMItem
+mkInstInputDecl sztm inst_id in_port_id =
     let mkDecl i sz t = VMDecl (VVDecl t sz [VVar i])
-    in  case (getSizeAndTypeM in_port_id defs) of
+    in  case (getSizeAndTypeM in_port_id sztm) of
             Just (sz, t) -> mkDecl in_port_id sz t
             Nothing -> internalError ("mkInstInputDecl: instance `" ++
                                       getIdString inst_id ++
                                       "' input port not found: " ++
                                       getVIdString in_port_id ++
-                                      "\n  defs = " ++
-                                      ppReadable defs)
+                                      "\n  size and type map = " ++
+                                      ppReadable sztm)
 
-mkInstInputDeclWithDefault :: [VMItem] -> (VId, Maybe VRange) -> VMItem
-mkInstInputDeclWithDefault defs (in_port_id, in_port_size) =
+mkInstInputDeclWithDefault :: SizeAndTypeMap -> (VId, Maybe VRange) -> VMItem
+mkInstInputDeclWithDefault sztm (in_port_id, in_port_size) =
     let mkDecl i sz t = VMDecl (VVDecl t sz [VVar i])
-    in  case (getSizeAndTypeM in_port_id defs) of
+    in  case (getSizeAndTypeM in_port_id sztm) of
             Just (sz, t) -> mkDecl in_port_id sz t
             Nothing -> mkDecl in_port_id in_port_size VDWire
 
-mkInstInputDeclMaybe :: [VMItem] -> VId -> Maybe VMItem
-mkInstInputDeclMaybe defs in_port_id =
+mkInstInputDeclMaybe :: SizeAndTypeMap -> VId -> Maybe VMItem
+mkInstInputDeclMaybe sztm in_port_id =
     let mkDecl i sz t = VMDecl (VVDecl t sz [VVar i])
-    in  case (getSizeAndTypeM in_port_id defs) of
+    in  case (getSizeAndTypeM in_port_id sztm) of
             Just (sz, t) -> Just (mkDecl in_port_id sz t)
             Nothing -> Nothing
 
@@ -1584,7 +1769,7 @@ ubInst :: [VId] -> VId -> VMItem
 ubInst ids mod = VMInst
                  { vi_module_name  = mod,
                    vi_inst_name    = pref verilogInstancePrefix mod,
-                   vi_inst_params  = Right [],
+                   vi_inst_params  = [],
                    vi_inst_ports   = [(i, Just (VEVar i)) | i <- ids]
                  }
 
@@ -1640,18 +1825,28 @@ mergeCommonDecl ins =
 
 -- ==============================
 
-getSizeAndTypeM :: VId -> [VMItem] -> Maybe (Maybe VRange, VDType)
-getSizeAndTypeM i [] = Nothing
-getSizeAndTypeM i (VMDecl (VVDWire sz (VVar i') _) : _)
-    | i == i' = Just (sz, VDWire)
-getSizeAndTypeM i (VMDecl (VVDecl t sz vs) : _)
-    | (t == VDWire || t == VDReg) && i `elem` [ i | VVar i <- vs ] = Just (sz, t)
-getSizeAndTypeM i (_ : ms) = getSizeAndTypeM i ms
+type SizeAndTypeMap = M.Map VId (Maybe VRange, VDType)
+
+mkSizeAndTypeMap :: [VMItem] -> SizeAndTypeMap
+mkSizeAndTypeMap defs = M.fromList $
+  [ (i, (sz, VDWire)) | VMDecl (VVDWire sz (VVar i) _) <- defs ] ++
+  [ (i, (sz, t)) | d@(VMDecl (VVDecl t sz vs)) <- defs,
+                   checkDeclType t d,
+                   VVar i <- vs ]
+  where
+    -- only wire and reg decls are expected in the defs
+    checkDeclType t d
+      | (t == VDWire) || (t == VDReg) = True
+      | otherwise = internalError ("mkSizeAndTypeMap: unexpected decl type: " ++
+                                   ppReadable d)
+
+getSizeAndTypeM :: VId -> SizeAndTypeMap -> Maybe (Maybe VRange, VDType)
+getSizeAndTypeM = M.lookup
 
 -- assumes that decls haven't been merged yet
-isDeclFromList :: [VId] -> VMItem -> Bool
-isDeclFromList is (VMDecl (VVDWire _ vv _))  = elem (vvName vv) is
-isDeclFromList is (VMDecl (VVDecl _ _ [vv])) = elem (vvName vv) is
+isDeclFromList :: S.Set VId -> VMItem -> Bool
+isDeclFromList is (VMDecl (VVDWire _ vv _))  = vvName vv `S.member` is
+isDeclFromList is (VMDecl (VVDecl _ _ [vv])) = vvName vv `S.member` is
 isDeclFromList _  _ = False
 
 -- lookup defs, maintaining their order, and returning the remaining defs
@@ -1663,8 +1858,8 @@ findADefs ds defmap =
               Just d -> (d:ds_accum, M.delete i defmap_accum)
     in  foldr fn ([], defmap) ds
 
-isADefFromList :: [AId] -> ADef -> Bool
-isADefFromList is (ADef i _ _ _) = i `elem` is
+isADefFromMap :: M.Map AId a -> ADef -> Bool
+isADefFromMap m (ADef i _ _ _) = M.member i m
 
 -- ==============================
 
@@ -1838,3 +2033,236 @@ instance VUse VExpr where
 
 
 -- ==============================
+
+-- ==============================
+-- Renaming of identifiers that collide with the class names of
+-- SystemVerilog's built-in std package (process, semaphore, mailbox).
+--
+-- These are not reserved words, so the escaped-identifier treatment that
+-- the printer applies to reserved words does not help: some tools
+-- (verilator) resolve the std class names at parse time, so even the
+-- escaped form fails to parse.  Internal identifiers are therefore
+-- renamed, by appending underscores until fresh.
+--
+-- Names that are visible outside the generated module cannot be renamed
+-- unilaterally and are only reported: the module's own name and its ports
+-- (external code connects to them by name), the port and parameter names
+-- of instantiated submodules (they belong to the submodule: for generated
+-- submodules that module's own compilation handles them consistently, and
+-- for imported Verilog they are the user's), DPI function and
+-- argument names (C linkage, and part of the import declaration), and
+-- foreign Verilog function and task names (the calls refer to
+-- definitions in the user's own Verilog code).
+
+renameSVStdIdents :: [(String, Position)] -> VProgram
+                  -> (VProgram, [(String, String, Position)], [(String, Position)])
+renameSVStdIdents foreign_funcs (VProgram vmods dpis comments) =
+    let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ _ _ <- dpis ] ++
+                                [ s | VDPI _ _ _ _ args <- dpis,
+                                      (VId s _ _, _, _) <- args ])
+        -- foreign Verilog function/task calls name a definition in the
+        -- user's own Verilog code, so, like DPI names, they must never
+        -- be renamed (the call would no longer match its definition)
+        extern_names = dpi_names `S.union` S.fromList (map fst foreign_funcs)
+        dpi_clashes = [ (s, getPosition i)
+                      | VDPI (VId s i _) _ _ _ _ <- dpis,
+                        isSVStdPackageIdent s ]
+        foreign_clashes = [ (s, pos) | (s, pos) <- foreign_funcs,
+                                       isSVStdPackageIdent s ]
+        results = map (renameSVStdIdentsInVModule extern_names) vmods
+        vmods'  = [ m | (m, _, _) <- results ]
+        renamed = concat [ r | (_, r, _) <- results ]
+        -- One report per name (the same name can clash in several places).
+        -- NB the ordering of this list is semantically significant: the
+        -- dedup keeps the FIRST entry for each name, so dpi_clashes and
+        -- foreign_clashes (which carry the source position of the
+        -- declaration or call) must stay ahead of the per-module body
+        -- occurrences, whose VIds may carry no useful position (e.g.
+        -- function-call VIds are fabricated at noPosition).  Reordering
+        -- it changes which position a G0133 warning reports.
+        externs = M.toList $ M.fromListWith (\_ old -> old)
+                      (dpi_clashes ++ foreign_clashes ++
+                       concat [ e | (_, _, e) <- results ])
+    in  (VProgram vmods' dpis comments, renamed, externs)
+
+-- The set argument is the names that are externally determined for the
+-- whole program (DPI function and argument names, foreign Verilog
+-- function and task names): occurrences of these are never renamed,
+-- only reported.
+renameSVStdIdentsInVModule :: S.Set String -> VModule
+                           -> (VModule,
+                               [(String, String, Position)],
+                               [(String, Position)])
+renameSVStdIdentsInVModule extern_names vmod =
+    let mod_name  = getVIdString (vm_name vmod)
+        port_vids = [ vid | (vargs, _) <- vm_ports vmod,
+                            varg <- vargs, vid <- vargVIds varg ]
+        port_names = S.fromList (map getVIdString port_vids)
+
+        -- every identifier string in the module, as the freshness pool
+        all_names = S.fromList
+            [ s | VId s _ _ <- Generic.listify vidAny vmod ]
+          where vidAny :: VId -> Bool
+                vidAny _ = True
+
+        -- std-colliding occurrences in renameable (non-formal) positions,
+        -- one representative position per name
+        std_uses =
+            M.toList $ M.fromListWith (\_ old -> old)
+                [ (s, getPosition i)
+                | VId s i _ <- collectRenameableVIds (vm_body vmod),
+                  isSVStdPackageIdent s ]
+
+        -- std-colliding names that occur in the module body only in
+        -- non-renameable positions (submodule port/parameter names)
+        formal_only =
+            M.toList $ M.fromListWith (\_ old -> old)
+                [ (s, getPosition i)
+                | VId s i _ <- Generic.listify stdVId (vm_body vmod),
+                  s `notElem` map fst std_uses ]
+          where stdVId (VId s _ _) = isSVStdPackageIdent s
+
+        isExternal n = n == mod_name || n `S.member` port_names
+                                     || n `S.member` extern_names
+        (extern_uses, internal_uses) = partition (isExternal . fst) std_uses
+
+        -- the module's own name and ports, reported even though they are
+        -- not "uses" in the body scan
+        own_clashes = [ (getVIdString vid, getPosition vid)
+                      | vid <- vm_name vmod : port_vids,
+                        isSVStdPackageIdent (getVIdString vid) ]
+
+        freshen used n =
+            head [ n' | k <- [(1::Int)..]
+                      , let n' = n ++ replicate k '_'
+                      , not (n' `S.member` used)
+                      , not (isVReservedWord n')
+                      , not (isSVStdPackageIdent n') ]
+        (_, ren_list) =
+            mapAccumL
+                (\used (n, pos) ->
+                     let n' = freshen used n
+                     in  (S.insert n' used, (n, n', pos)))
+                all_names internal_uses
+        ren_map = M.fromList [ (n, n') | (n, n', _) <- ren_list ]
+
+        renameVId vid@(VId s i inf) =
+            case M.lookup s ren_map of
+              Just s' -> VId s' i inf
+              Nothing -> vid
+
+        body' = mapRenameableVIds renameVId (vm_body vmod)
+
+        externs = own_clashes ++ extern_uses ++ formal_only
+    in  (vmod { vm_body = body' }, ren_list, externs)
+
+vargVIds :: VArg -> [VId]
+vargVIds (VAInput i _)       = [i]
+vargVIds (VAInout i mi _)    = i : maybe [] (:[]) mi
+vargVIds (VAOutput i _)      = [i]
+vargVIds (VAParameter i _ _ _) = [i]
+
+-- Every declaration-position identifier of a module: the module's own
+-- name, its port and parameter names, and, per body item, the names it
+-- declares (variables, functions and their local declarations, register
+-- groups) or takes from another module's interface (an instantiated
+-- module's name and its port/parameter connection keys) plus the
+-- instance name.  This is a spine walk only: it never descends into
+-- statements, expressions or lvalues.
+--
+-- Soundness invariant, relied upon by the legalization gate in aVerilog:
+-- every VId that the Verilog printer emits as an identifier in the .v
+-- output either
+--   (1) occurs in one of the declaration positions collected here
+--       (expression- and statement-position identifiers are references
+--       to declared nets/regs/ports/parameters/functions, so the same
+--       string also occurs in a declaration position),
+--   (2) is a '$'-prefixed system task/function name (VTask/VEFctCall,
+--       cf. isTaskVId), which can never be a reserved word or a std
+--       package identifier, or
+--   (3) is a foreign Verilog or DPI function/task name, which the gate
+--       scans separately from the package's foreign-call info and the
+--       VDPI declarations (see foreign_func_names in aVerilog).
+-- VIds also occur in metadata slots that the printer never emits as
+-- identifiers (the provenance ids inside VEOp/VEUnOp/VEWConst); those
+-- are deliberately not collected.  If a new printed identifier position
+-- is ever added that falls outside (1)-(3), it must be added here or
+-- the gate becomes unsound.
+--
+-- (Keep this in sync with mapRenameableVIds/collectRenameableVIds
+-- below.  The VMItem constructors are matched exhaustively, without a
+-- wildcard, so that adding a constructor triggers an
+-- incomplete-pattern warning here rather than silently escaping the
+-- scan.)
+vModuleDeclVIds :: VModule -> [VId]
+vModuleDeclVIds vmod =
+    vm_name vmod :
+    [ vid | (vargs, _) <- vm_ports vmod, va <- vargs, vid <- vargVIds va ] ++
+    concatMap go (vm_body vmod)
+  where
+    go :: VMItem -> [VId]
+    go (VMDecl d)            = declVIds d
+    go (VMInst { vi_module_name = mn, vi_inst_name = inm,
+                 vi_inst_params = iparams, vi_inst_ports = iports }) =
+        mn : inm : map fst iparams ++ map fst iports
+    go (VMAssign _ _)        = []
+    go (VMStmt {})           = []
+    go (VMComment _ it)      = go it
+    go (VMRegGroup i _ _ it) = i : go it
+    go (VMGroup _ itss)      = concatMap (concatMap go) itss
+    go (VMFunction (VFunction n _ decls _)) = n : concatMap declVIds decls
+    -- every branch of a preprocessor alternative declares
+    go (VMIfDef alts dflt)   = concatMap (go . snd) alts ++ go dflt
+    -- a DPI import declares the imported function's name at module
+    -- scope (and it is never renameable: the C symbol fixes it)
+    go (VMDPI (VDPI n _ _ _ _)) = [n]
+    declVIds :: VVDecl -> [VId]
+    declVIds (VVDecl _ _ vs) = map vvName vs
+    declVIds (VVDWire _ v _) = [vvName v]
+
+-- Apply a VId transformation to every renameable identifier position in a
+-- module body: everything except submodule instantiation port/parameter
+-- names and submodule module names, which belong to the instantiated
+-- module.  (Keep this in sync with collectRenameableVIds below and with
+-- vModuleDeclVIds above.)
+mapRenameableVIds :: (VId -> VId) -> [VMItem] -> [VMItem]
+mapRenameableVIds f items = map go items
+  where
+    go inst@(VMInst { vi_inst_name = inm, vi_inst_params = iparams,
+                      vi_inst_ports = iports }) =
+        inst { vi_inst_name = f inm,
+               vi_inst_params = [ (pn, fmap gen me) | (pn, me) <- iparams ],
+               vi_inst_ports = [ (pn, fmap gen me) | (pn, me) <- iports ] }
+    go (VMComment c it)      = VMComment c (go it)
+    go (VMRegGroup a b c it) = VMRegGroup (f a) b c (go it)
+    go (VMGroup t bss)       = VMGroup t (map (map go) bss)
+    -- recurse per-branch so instantiation port/parameter names keep
+    -- their exclusion inside preprocessor alternatives
+    go (VMIfDef alts dflt)   = VMIfDef [ (s, go it) | (s, it) <- alts ]
+                                       (go dflt)
+    -- a DPI import's function name belongs to the foreign symbol
+    go d@(VMDPI {})          = d
+    go item                  = gen item
+    gen :: Generic.Data a => a -> a
+    gen = Generic.everywhere (Generic.mkT f)
+
+-- The identifiers that mapRenameableVIds would transform.
+-- (Keep this in sync with mapRenameableVIds above and with
+-- vModuleDeclVIds above.)
+collectRenameableVIds :: [VMItem] -> [VId]
+collectRenameableVIds items = concatMap go items
+  where
+    go (VMInst { vi_inst_name = inm, vi_inst_params = iparams,
+                 vi_inst_ports = iports }) =
+        inm : concatMap (maybe [] vids . snd) iparams
+            ++ concatMap (maybe [] vids . snd) iports
+    go (VMComment _ it)      = go it
+    go (VMRegGroup a _ _ it) = a : go it
+    go (VMGroup _ bss)       = concatMap (concatMap go) bss
+    go (VMIfDef alts dflt)   = concatMap (go . snd) alts ++ go dflt
+    go (VMDPI {})            = []
+    go item                  = vids item
+    vids :: Generic.Data a => a -> [VId]
+    vids = Generic.listify vidAny
+      where vidAny :: VId -> Bool
+            vidAny _ = True

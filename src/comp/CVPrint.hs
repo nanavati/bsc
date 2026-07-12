@@ -438,9 +438,8 @@ pBlockNT _ n nl xs sep =
         (t (replicate n ' ') <>
         foldr1 ($+$) (map (\ x -> x <> if nl then sep $+$ empty else sep) xs))
 
-ppDer :: PDetail -> [CTypeclass] -> Doc
-ppDer d [] = empty
-ppDer d is = text "deriving (" <> sepList (map (pvPrint d 0) is) (text ",") <> text ")"
+ppDer :: PDetail -> [CDeriving] -> Doc
+ppDer d drvs = vcatList (map (pPrint d 0) drvs) empty
 
 --isTerminated (Caction _ _) = True
 --isTerminated (Cdo _ _) = True
@@ -850,7 +849,7 @@ ppVeriMethod d _  (Inout i (VName s) mclk mrst) =
   (case mrst of
      Nothing -> empty
      Just i -> t"reset_by (" <> pvpId d i <> t")")
-ppVeriMethod d mr (Method i mc mreset n pts mo me) =
+ppVeriMethod d mr (Method i mc mreset n pts os me) =
   let f _ _ Nothing = empty
       f before after (Just (VName vn, prs)) =
          (case prs of
@@ -859,10 +858,13 @@ ppVeriMethod d mr (Method i mc mreset n pts mo me) =
          (t (before ++ vn ++ after))
   in
    t"method " <>
-   (f "" " " mo) <>
+   (case os of
+      [] -> empty
+      [o] -> f "" " " (Just o)
+      _   -> t"(" <> sepList (map (f "" " " . Just) os) (t",") <> t")") <>
    (pvpId d i <>
    (if n == 1 then empty else (t"[" <> (pp d n) <> t"]")) <>
-   (t"(" <> sepList (map (f "" "" . Just) pts) (t",") <> t")") <>
+   (t"(" <> sepList (map (f "" "" . Just) (concat pts)) (t",") <> t")") <>
    (f " enable (" ")" me) <>
    (f " ready ("  ")" mr) <>
    (case mc of

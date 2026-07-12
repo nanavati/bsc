@@ -15,7 +15,7 @@ import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, toLower, ord, isAlphaNum)
 import Data.List(intersect, nub, partition, intersperse, sort,
-            isPrefixOf, isSuffixOf, unzip5, intercalate)
+            isPrefixOf, isSuffixOf, unzip5, intercalate, tails, foldl')
 import Data.Time.Clock.POSIX(getPOSIXTime)
 import Data.Maybe(isJust, isNothing, listToMaybe)
 import Numeric(showOct)
@@ -36,7 +36,7 @@ import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName,
-                    mkAName, mkVName, mkVPICName,
+                    mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
                     bscSrcSuffix, binSuffix,
@@ -81,18 +81,21 @@ import VModInfo(VPathInfo, VPort, vImpls, vName, getVNameString,
                 VeriPortProp(..), VFieldInfo(..))
 import Deriving(derive)
 import SymTab
-import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
-import TypeCheck(cCtxReduceIO, cTypeCheck)
+import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
+                  getPackagesUsedInTypes)
+import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
-import ISyntax(IPackage(..), IModule(..),
+import LiftDicts(liftDictsPkg)
+import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
                IEFace(..), IDef(..), IExpr(..), fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
-import FixupDefs(fixupDefs, updDef, fixupIDefSel)
+import FixupDefs(fixupDefs, updDef, fixupIDefSel, mkCoherentDictMap)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
+import ISimpDicts(iSimpDicts)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
@@ -135,18 +138,21 @@ import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
                 assertNoSchedErr)
 import GenABin(genABinFile)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
-                        mkImportDeclarations)
+                        mkImportDeclarations, isPoly)
 import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
 import DPIWrappers(genDPIWrappers)
 import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
+import SimExportIR(writeBirFile)
+import qualified Data.ByteString.Lazy as L
 import SimMakeCBlocks(simMakeCBlocks)
 import SimCOpt(simCOpt)
 import SimBlocksToC(simBlocksToC)
 import SystemCWrapper(checkSystemCIfc, wrapSystemC)
 import SimFileUtils(analyzeBluesimDependencies)
+import VFileUtils(partitionStaleVerilogMods)
 import Verilog(VProgram(..), vGetMainModName, getVeriInsts)
 import Depend
 import Version(bscVersionStr, copyright, buildnum)
@@ -234,6 +240,10 @@ hmain args = do
         DSimLink flags top abinFiles cSrcFiles ->
             do { setFlags flags; doWarnings; showPreamble flags;
                  simLink errh flags top abinFiles cSrcFiles;
+                 exitOK errh }
+        DCodeGen flags mods abinFiles ->
+            do { setFlags flags; doWarnings; showPreamble flags;
+                 codeGen errh flags mods abinFiles;
                  exitOK errh }
 
 
@@ -377,7 +387,7 @@ compilePackage
     -- symbols.
     --
     start flags DFsyminitial
-    symt00 <- mkSymTab errh mop
+    symt00 <- mkSymTabWithWarnings errh mop
     t <- dump errh flags t DFsyminitial dumpnames symt00
 
     -- whether we are doing code generation for modules
@@ -418,7 +428,7 @@ compilePackage
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh flags symt11 mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -434,7 +444,7 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
+    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
@@ -451,10 +461,12 @@ compilePackage
     start flags DFgenVPI
     blurb <- mkGenFileHeader flags
     let ffuncs = map snd foreign_func_info
+    -- Note: with DPI, wrapper generation happens later (in genModuleVerilog),
+    -- once the concrete widths of polymorphic imports are known; see there.
     vpi_wrappers <- if (backend flags /= Just Verilog)
                     then return []
                     else if (useDPI flags)
-                         then genDPIWrappers errh flags prefix blurb ffuncs
+                         then return []
                          else genVPIWrappers errh flags prefix blurb ffuncs
     t <- dump errh flags t DFgenVPI dumpnames vpi_wrappers
 
@@ -464,11 +476,17 @@ compilePackage
     t <- dump errh flags t DFsimplified dumpnames mod'
     stats flags DFsimplified mod'
 
+    start flags DFliftdicts
+    let mod_lifted = liftDictsPkg symt mod'
+    t <- dump errh flags t DFliftdicts dumpnames mod_lifted
+    stats flags DFliftdicts mod_lifted
+
     --------------------------------------------
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    imod0conv <- iConvPackage errh flags symt mod'
+    let combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
+    imod0conv <- iConvPackage errh flags symt combinedATFCache mod_lifted
     -- root the boundary-description defs (signature_/boundary_/
     -- contract_/convention_): consumers reference them by naming
     -- convention, so any future dead-def elimination of the .bo
@@ -501,9 +519,9 @@ compilePackage
             [(String, IExpr a)] ->
             (IPackage a) ->
             (IPackage a)
-        adjEnv env (IPackage i lps ps ds)
+        adjEnv env (IPackage i lps ps ds atfCache)
                             | getIdString i == "Prelude" =
-                    IPackage i lps ps (map adjDef ds)
+                    IPackage i lps ps (map adjDef ds) atfCache
             where
                 adjDef (IDef i t x p) =
                     case lookup (getIdString (unQualId i)) env of
@@ -515,6 +533,13 @@ compilePackage
         -- adjust the "raw" packages and then add back their signatures
         -- so they can be put into the current IPackage for linking info
         binmods = zip (map (adjEnv env) binmods0) pkgsigs
+
+        -- The coherent-dictionary map used by "fixupDefs" and "updDef"
+        -- depends only on the imported packages ("binmods"), which are
+        -- fixed for the entire compile; so build it once here and thread
+        -- it through, rather than rebuilding it on every call (once per
+        -- compile plus once per synthesized module, via "updDef").
+        coherentDictMap = mkCoherentDictMap binmods
 
     t <- dump errh flags t DFbinary dumpnames binmods
 
@@ -530,7 +555,7 @@ compilePackage
     t <- dump errh flags t DFsympostbinary dumpnames mint
 
     start flags DFfixup
-    let (imodf, alldefsList) = fixupDefs imod binmods
+    let (imodf, alldefsList) = fixupDefs coherentDictMap imod binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
 
     -- BVI member-side checks (increment G): an imported Verilog
@@ -548,12 +573,26 @@ compilePackage
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 
+    start flags DFisimpdicts
+    let imodsd = iSimpDicts imodf
+    iPCheck flags symt imodsd "isimpdicts"
+    t <- dump errh flags t DFisimpdicts dumpnames imodsd
+
     start flags DFisimplify
     let imods :: IPackage HeapData
-        imods = iSimplify imodf
+        imods = iSimplify imodsd
     iPCheck flags symt imods "isimplify"
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
+
+    -- The ATF cache used during elaboration: this package's entries unioned
+    -- with the entries of every (transitively) loaded import.  This union is
+    -- only ever held in memory; each .bo file stores just its own package's
+    -- entries.  The union covers the full transitive closure because
+    -- "binmods" does: each .bo's ipkg_depends records its writer's entire
+    -- loaded closure (see ipkg_sigs in fixupDefs).
+    let elabATFCache = foldl' mergeIATFCaches (ipkg_atf_cache imods)
+                              [ ipkg_atf_cache m | (m, _) <- binmods ]
 
     -- under -boundary-inject (increment 11): the wrapper skeletons
     -- rode the ENTIRE package pipeline -- typecheck (error rendering
@@ -569,16 +608,16 @@ compilePackage
             if null inj_skel_ids
             then ([], imods)
             else case imods of
-                   IPackage pi_ lps ps ds ->
+                   IPackage pi_ lps ps ds atfc ->
                        let isSkelD (IDef di _ _ _) =
                                unQualId di `elem` inj_skel_ids
                            (sds, ds') = partition isSkelD ds
-                       in  (sds, IPackage pi_ lps ps ds')
+                       in  (sds, IPackage pi_ lps ps ds' atfc)
         skelIMap = M.fromList [ (unQualId di, d)
                               | d@(IDef di _ _ _) <- skel_idefs ]
 
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
-        orderGens (IPackage pid _ _ ds) gs =
+        orderGens (IPackage pid _ _ ds _) gs =
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
           where gis = [ qualId pid (mod_nm w) | w <- gs ]
@@ -601,7 +640,7 @@ compilePackage
                     "\n")
 
     let getDef :: IPackage a -> Id -> IDef a
-        getDef (IPackage _ _ _ ds) i =
+        getDef (IPackage _ _ _ ds _) i =
            case [ d | d@(IDef i' _ _ _) <- ds, unQualId i == unQualId i' ] of
                 [ d ] -> d
                 _ -> internalError ("No definition for " ++ pfpString i)
@@ -667,7 +706,7 @@ compilePackage
                         return (getDef im i', True)
                   def <- genModule errh wi fwrapper flags dumpnames'
                              prefix (getIdBaseString pkgId)
-                             internalSymt alldefs elab_def
+                             internalSymt alldefs elabATFCache elab_def
                   return (def, okS)
                 ex_comp s = do
                   hFlush stdout >> hPutStr stderr s
@@ -737,7 +776,7 @@ compilePackage
             -- references
             -- XXX Note that alldefs is not updated here.  This works
             -- XXX because the defs we use from it will not have changed.
-            let im' = updDef idef im binmods
+            let im' = updDef coherentDictMap idef im binmods
             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
 
             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
@@ -793,6 +832,7 @@ genModule ::
     String -> -- source package name
     SymTab ->
     M.Map Id (IExpr HeapData) ->
+    IATFCache ->
     IDef HeapData ->
     IO (CDefn)
 
@@ -807,6 +847,7 @@ genModule
     srcName
     symt
     alldefs
+    atf_cache
     def  =
 
   do
@@ -838,7 +879,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs fwrapper pps def
+    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
@@ -1110,23 +1151,21 @@ genModule
     --           IO properties which can be included as attributes in the
     --           Cmoduleverilog (import-BVI)
     --           XXX it would be nice if the Bluesim backend had the same info
-    -- * vprog = the Verilog data structure, for recording in the .ba file,
-    --           so that it's available to bluetcl
-    (t, veriPortProps, vprog)
+    (t, veriPortProps)
         <- if (backend flags == Just Verilog)
-           then do (t', ips, v)
+           then do (t', ips, _v)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
                              blurb methodConflictBlurb methodConflictBVI
                              vPathInfo sched_info'' amod_final
-                   return (t', ips, Just v)
-           else return (t, [], Nothing)
+                   return (t', ips)
+           else return (t, [])
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
                   modstr srcName (orig_cqt wi)
                   sched_info'' methodConflict vPathInfo
-                  amod_final vprog
+                  amod_final
          else return t
 
     -- Wrapper generation
@@ -1278,9 +1317,9 @@ abinMsgVisible flags =
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
              AScheduleInfo -> MethodDumpInfo -> VPathInfo ->
-             APackage -> Maybe VProgram -> IO (TimeInfo)
+             APackage -> IO (TimeInfo)
 writeABin errh pps flags dumpnames t prefix modstr srcName oqt
-          sched_info methodConflict vPathInfo amod vprog =
+          sched_info methodConflict vPathInfo amod =
     do
        start flags DFwriteABin
 
@@ -1310,9 +1349,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_oqt         = oqt,
                           abmi_method_dump = methodConflict,
                           abmi_pathinfo = vPathInfo,
-                          abmi_flags       = flags,
-                          abmi_vprogram    = if (genABinVerilog flags)
-                                             then vprog else Nothing
+                          abmi_flags       = flags
                      }
            abin = ABinMod modinfo (bscVersionStr True)
        genABinFile errh afilename abin
@@ -1413,8 +1450,8 @@ genModuleVerilog :: ErrorHandle
                  -> AScheduleInfo
                  -> APackage
                  -> IO (TimeInfo,
-                        [VPort],   -- port properties for the import-BVI
-                        VProgram)  -- generated Verilog
+                        [VPort],     -- port properties for the import-BVI
+                        [VFileName]) -- the Verilog files written
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  atsPackage =
@@ -1530,6 +1567,16 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                    else vprog0
        t <- dump errh flags t DFverilogDollar dumpnames vprog
 
+       -- Generate DPI wrapper C files for any polymorphic imports.  This is
+       -- done here (not in the early foreign-function pass) because the set of
+       -- concrete widths, and hence the monomorphized wrappers, is only known
+       -- from the generated Verilog's DPI import declarations.
+       when (useDPI flags) $ do
+           let VProgram _ vdpis _ = vprog
+           ff_blurb <- mkGenFileHeader flags
+           _ <- genDPIWrappers errh flags prefix ff_blurb vdpis
+           return ()
+
        -- Write the Verilog files
        start flags DFwriteVerilog
        vfilenames <- writeVerilog errh flags prefix
@@ -1540,7 +1587,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Return
        -- * the port properties (to be included in the import-BVI)
        -- * the Verilog structure (for accessing in bluetcl)
-       return (t, ips, vprog)
+       return (t, ips, vfilenames)
 
 
 -- Write a Verilog program to file (along with its use file)
@@ -1630,8 +1677,11 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
+       -- (in -c or -sim-codegen-only mode, all files are always regenerated)
        start flags DFsimDepend
-       reused <- analyzeBluesimDependencies flags sim_system prefix
+       reused <- if (blockCodegen flags || simCodegenOnly flags)
+                 then return []
+                 else analyzeBluesimDependencies flags sim_system prefix
        time <- dump errh flags time DFsimDepend dumpnames reused
 
        -- optimize the SimPackages and SimSchedules
@@ -1639,6 +1689,45 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system_opt <- simPackageOpt errh flags sim_system
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
 
+       -- export the TRS IR when requested
+       when (genBir flags) $ do
+            -- the debug-tier symbol set: defs surviving as C++
+            -- members (post-SimCOpt public defs, isOkId-filtered) —
+            -- blocks are recomputed here (pure) so the export stays
+            -- decoupled from the C++ generation path below
+            let (sbs, sscheds, scgs, sgis, _sbtop) =
+                    simMakeCBlocks flags sim_system_opt
+                (sbs_opt, _, _, _) =
+                    simCOpt flags (ssys_instmap sim_system_opt)
+                            (sbs, sscheds, scgs, sgis)
+                symMap = M.fromListWith S.union
+                    [ (sb_name sb,
+                       S.fromList [ i | (_, i) <- sb_publicDefs sb
+                                      , isOkId i ])
+                    | sb <- sbs_opt ]
+            writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags)
+                         symMap sim_system_opt
+
+       -- the -trs backend stops here: the .bir plus the user's C files
+       -- (compiled separately for dlopen) are the whole simulation
+       if (genTrs flags)
+        then do let TimeInfo _ t_TOD = time
+                _ <- return t_TOD
+                return (time, [], [], time)
+        else genModuleC_cxx errh flags dumpnames time toplevel prefix reused
+                            sim_system_opt
+
+genModuleC_cxx :: ErrorHandle
+               -> Flags
+               -> DumpNames
+               -> TimeInfo
+               -> String
+               -> String
+               -> [String]
+               -> SimSystem
+               -> IO (TimeInfo, [String], [String], TimeInfo)
+genModuleC_cxx errh flags dumpnames time toplevel prefix reused sim_system_opt =
+    do
        -- convert SimPackages and SimSchedules to SimCCBlocks and SimCCScheds
        start flags DFsimMakeCBlocks
        let (simblocks, simCCscheds, clk_groups, gate_info, top_id) =
@@ -1729,12 +1818,113 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        return (time, names, reused_names, creation_time)
 
 -- ===============
+-- CodeGen
+
+-- The -c mode: generate code for a module from its elaborated (.ba)
+-- file, the middle stage of the three-stage flow (elaborate -> codegen ->
+-- link).  For Bluesim this reuses the front half of simLink, which under
+-- blockCodegen generates each module's C++ as a reusable block (no
+-- schedule or top-level wrapper) and skips compiling and linking.  For
+-- Verilog each named module's .v is generated from its own .ba alone.
+codeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
+codeGen errh flags mods abinFiles =
+    case (backend flags) of
+      Just Verilog -> vCodeGen errh flags mods abinFiles
+      _ -> let flags' = flags { blockCodegen = True }
+           in  mapM_ (\m -> simLink errh flags' m abinFiles []) mods
+
+-- Generate each named module's Verilog from its elaborated (.ba) file:
+-- from a .ba given on the command line when one defines the module, and
+-- otherwise found by module name on the search path.  Root-only, which
+-- is Verilog's native granularity: a module's .v needs only its own
+-- ABinModInfo (children are referenced by name).
+vCodeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
+vCodeGen errh flags mods afilenames = do
+    tStart <- getNow
+    user_abis <- mapM (readAndCheckABin errh (Just Verilog)) (nub afilenames)
+    let abinModName (ABinMod mi _) =
+            getIdString (unQualId (apkg_name (abmi_apkg mi)))
+        abinModName _ = ""
+        findMod name =
+            case [ (fn, abin) | (fn, abin) <- user_abis
+                              , abinModName abin == name ] of
+              ((fn, abin):_) -> return (fn, abin)
+              [] -> let err = (cmdPosition,
+                               EMissingABinModFile name Nothing)
+                    in  readAndCheckABinPathCatch errh
+                            (verbose flags) (ifcPath flags) (Just Verilog)
+                            name err
+        assertMod (fn, ABinMod mi _) = return (fn, mi)
+        assertMod (_, ABinModSchedErr {}) =
+            bsError errh [(cmdPosition, EABinModSchedErr (unwords mods) Nothing)]
+        assertMod (fn, ABinForeignFunc {}) =
+            bsError errh [(cmdPosition,
+                           EWrongABinTypeExpectedModule fn Nothing)]
+    named_abis <- mapM findMod mods
+    abmis <- mapM assertMod named_abis
+    _ <- vGenMods errh flags tStart abmis
+    return ()
+
+-- Generate Verilog for modules from their elaborated (.ba) files,
+-- reconstructing the inputs of genModuleVerilog from each ABinModInfo.
+-- Codegen flags come from this invocation's command line, matching the
+-- Bluesim path; elaboration-affecting flags are baked into the .ba.
+vGenMods :: ErrorHandle -> Flags -> TimeInfo -> [(String, ABinModInfo)] ->
+            IO (TimeInfo, [VFileName])
+vGenMods errh flags t0 abmis = do
+    pwd <- getCurrentDirectory
+    -- output goes to the current directory unless -vdir overrides it
+    -- (a .ba's own directory is typically -bdir, which is not where
+    -- generated Verilog belongs)
+    let prefix = dirName (createEncodedFullFilePath "placeholder" pwd) ++ "/"
+        genV (t, vfns_so_far) (_, abmi) = do
+            let modId = apkg_name (abmi_apkg abmi)
+                modstr = getIdString (unQualId modId)
+                dumpnames = (Nothing, Nothing, Just modstr)
+            when (verbose flags) $ putStrLnF ("*****")
+            when (showCodeGen flags || verbose flags) $
+                putStrLnF ("Verilog generation for " ++ modstr ++ " starts")
+            blurb <- mkGenFileHeader flags
+            let apkg = abmi_apkg abmi
+                pps = abmi_pps abmi
+                methodConflict = abmi_method_dump abmi
+                methodConflictBlurb
+                  | methodConf flags =
+                      ["Method conflict info:"]
+                      ++ lines (pretty 78 78
+                                  (vcat (dumpMethodInfo flags methodConflict)))
+                  | otherwise = []
+                methodConflictBVI
+                  | methodBVI flags =
+                      ["BVI format method schedule info:"]
+                      ++ lines (pretty 78 78
+                                  (vcat (dumpMethodBVIInfo methodConflict)))
+                  | otherwise = []
+                pathinfo = abmi_pathinfo abmi
+                aschedinfo = abmi_aschedinfo abmi
+            (t', _, vfns) <-
+                genModuleVerilog errh pps flags dumpnames t prefix modstr
+                    blurb methodConflictBlurb methodConflictBVI
+                    pathinfo aschedinfo apkg
+            return (t', vfns_so_far ++ vfns)
+    foldM genV (t0, []) abmis
+
+-- ===============
 -- SimLink
 
 simLink :: ErrorHandle -> Flags -> String -> [String] -> [String] -> IO ()
 simLink errh flags toplevel afilenames cfilenames = do
     tStart <- getNow
     let t = tStart
+
+    -- Bluesim can only dump waveforms in VCD and FST formats
+    let bad_fmts = filter (`notElem` ["vcd", "fst"]) (dumpFormats flags)
+    when (not (null bad_fmts)) $
+        bsError errh
+            [(cmdPosition,
+              EGeneric ("Bluesim does not support waveform dump format `" ++
+                        f ++ "' (supported: vcd, fst)"))
+            | f <- bad_fmts]
 
     -- XXX (file, package, module) names for %-substitution in dump filenames
     let dumpnames = (Nothing, Nothing, Nothing)
@@ -1781,7 +1971,10 @@ simLink errh flags toplevel afilenames cfilenames = do
     start flags DFbluesimcompile
     let jobs = parallelSimLink flags
     (gen_ofiles, compiled_user_ofiles) <-
-        if (jobs > 1)
+        if (blockCodegen flags || simCodegenOnly flags)
+        then -- the user's build system compiles the generated files
+          return ([], [])
+        else if (jobs > 1)
         then do
           compileParallelCFiles errh flags False
               toplevel gen_cfiles user_cfiles
@@ -1796,13 +1989,28 @@ simLink errh flags toplevel afilenames cfilenames = do
     let ofiles = gen_ofiles ++
                  user_ofiles ++ compiled_user_ofiles ++
                  ofiles_reused
+
+    -- under -bir, also package the user's BDPI objects for the trs
+    -- runtime (dlopen), named next to the .bir
+    when (genBir flags && not (genTrs flags)
+          && not (null (user_ofiles ++ compiled_user_ofiles))) $ do
+        pwd3 <- getCurrentDirectory
+        let name3 = createEncodedFullFilePath "placeholder" pwd3
+            prefix3 = (dirName name3) ++ "/"
+            so3 = prefix3 ++ toplevel ++ ".bdpi.so"
+        cxxCompile errh flags (["-shared", "-fPIC", "-o", so3])
+                   (map show (user_ofiles ++ compiled_user_ofiles))
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 
-    -- if not generating a SystemC model, link to a Bluesim executable
+    -- if generating a SystemC model or only generating code,
+    -- there is nothing to link; otherwise link a Bluesim executable
     start flags DFbluesimlink
-    when (not (genSysC flags)) $
-      cxxLink errh flags toplevel ofiles creation_time
+    if (genTrs flags)
+      then trsLink errh flags toplevel user_cfiles user_ofiles
+      else when (not (genSysC flags) && not (blockCodegen flags)
+                 && not (simCodegenOnly flags)) $
+             cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
     -- final verbose message
@@ -1812,6 +2020,11 @@ simLink errh flags toplevel afilenames cfilenames = do
 
 -- Reuse a Bluesim generated object file
 -- returns the name of the object file being reused
+-- report that a generated Verilog file was reused rather than regenerated
+reuseVerilogFile :: Flags -> String -> IO ()
+reuseVerilogFile flags vNameRel =
+    unless (quiet flags) $ putStrLnF ("Verilog file reused: " ++ vNameRel)
+
 reuseBluesimCFile :: Flags -> String -> IO String
 reuseBluesimCFile flags oName = do
     -- show is used for quoting
@@ -1863,7 +2076,13 @@ cmdCompileBluesimCFile flags cName = do
         -- show is used for quoting
         opts = map show (cxxFlags flags)
         files = [show (mangleFileName cName)]
-    cmd <- cmdCXXCompile flags (opts ++ switches) files
+        -- the generated model/schedule file (model_<top>.cxx) is dispatch code:
+        -- compiling it at -O3 is disproportionately slow and buys no measurable
+        -- run time, so allow its flags to be overridden with TOP_CXXFLAGS
+        cflags_var = if ("model_" `isPrefixOf` (baseName cName))
+                     then "TOP_CXXFLAGS"
+                     else "CXXFLAGS"
+    cmd <- cmdCXXCompileWithEnv cflags_var flags (opts ++ switches) files
     let cNameRel = getRelativeFilePath cName
     -- we lie here and mention both header and object (un-mangled name)
     let msg = engine ++ " object created: " ++ (dropSuf cNameRel) ++
@@ -2078,9 +2297,19 @@ cxxCompile errh flags sws fs = do
 --   sws = switches (like -c, -o)
 --   fs  = filenames
 cmdCXXCompile :: Flags -> [String] -> [String] -> IO String
-cmdCXXCompile flags sws fs = do
+cmdCXXCompile = cmdCXXCompileWithEnv "CXXFLAGS"
+
+-- Same, but taking the name of the environment variable that supplies the
+-- compiler flags (falling back to CXXFLAGS if that variable is not set).
+-- This lets specific generated files (e.g. the Bluesim model/schedule file,
+-- via TOP_CXXFLAGS) be compiled with different flags: the model file is
+-- dispatch code whose g++ -O3 compile time grows much faster than any
+-- run-time benefit, so users can set e.g. TOP_CXXFLAGS=-O1.
+cmdCXXCompileWithEnv :: String -> Flags -> [String] -> [String] -> IO String
+cmdCXXCompileWithEnv cflags_var flags sws fs = do
     comp <- getEnvDef "CXX" dfltCxxCompile
-    cflags <- getEnvDef "CXXFLAGS" dfltCXXFLAGS
+    base_cflags <- getEnvDef "CXXFLAGS" dfltCXXFLAGS
+    cflags <- getEnvDef cflags_var base_cflags
     let debug_flags = if (cDebug flags) then "-g" else ""
     bsc_cflags <- getEnvDef "BSC_CXXFLAGS" dfltBSC_CXXFLAGS
     let cmd = unwords $ [ comp, cflags, debug_flags, bsc_cflags ] ++ sws ++ fs
@@ -2137,7 +2366,10 @@ cxxLink errh flags toplevel names creation_time = do
                      ["-o", soFile]
         -- show is used for quoting
         opts = map show $ linkFlags flags
-        files = map show compile_names ++ ["-lm"] ++ userlibs
+        -- the FST waveform writer (pulled out of the kernel library when
+        -- the model is built with -dump-formats fst) requires zlib
+        fstlibs = if "fst" `elem` dumpFormats flags then ["-lz"] else []
+        files = map show compile_names ++ ["-lm"] ++ fstlibs ++ userlibs
     cxxCompile errh flags (opts ++ switches) files
     when (not (cDebug flags)) $ cleanseSharedLib errh flags soFile
     unless (quiet flags) $ putStrLnF ("Simulation shared library created: " ++ soFile)
@@ -2179,6 +2411,59 @@ cleanseSharedLib errh flags soFile = do
     case rc of
         ExitSuccess   -> return ()
         ExitFailure n -> exitFailWith errh n
+
+-- ===============
+-- trsLink: the TRS backend's link step.  The simulation is the
+-- exported .bir executed by the trs runtime; user BDPI C files are
+-- compiled into a companion shared object that the runtime dlopens.
+
+trsLink :: ErrorHandle -> Flags -> String -> [String] -> [String] -> IO ()
+trsLink errh flags toplevel user_cfiles user_ofiles = do
+    pwd <- getCurrentDirectory
+    let name = createEncodedFullFilePath "placeholder" pwd
+        prefix = (dirName name) ++ "/"
+        birFile = prefix ++ toplevel ++ ".bir"
+        outFile = oFile flags
+        soFile = outFile ++ ".bdpi.so"
+    -- place the .bir next to the executable, where the wrapper (and the
+    -- runtime's .bdpi.so search) expect it
+    when (outFile ++ ".bir" /= birFile) $ do
+        contents <- L.readFile birFile
+        L.writeFile (outFile ++ ".bir") contents
+    -- compile the user's BDPI C files (with the C compiler, so symbols
+    -- keep C linkage) and link the objects into one dlopen-able object
+    when (not (null user_cfiles) || not (null user_ofiles)) $ do
+        cofs <- mapM (compileUserCFile errh flags False) user_cfiles
+        cxxCompile errh flags
+                   (["-shared", "-fPIC", "-o", soFile])
+                   (map show (cofs ++ user_ofiles))
+        unless (quiet flags) $
+            putStrLnF ("BDPI shared library created: " ++ soFile)
+    -- AOT: let the trs driver compile the design and write the
+    -- artifact (wrapper script + model .so + pinned options) — the
+    -- same amortization as the C++ backend's g++ link, at a fraction
+    -- of the cost.  Any failure (trs not on PATH, built without the
+    -- jit feature, infra error) falls back to the interpreter wrapper.
+    let linkCmd = "\"${TRS:-trs}\" link \"" ++ outFile ++ ".bir\" -o \""
+                  ++ outFile ++ "\""
+    rc <- system linkCmd
+    case rc of
+      ExitSuccess ->
+        unless (quiet flags) $
+            putStrLnF ("TRS simulation created (compiled): " ++ outFile)
+      _ -> do
+        writeFileCatch errh outFile $
+            unlines [ "#!/bin/sh"
+                    , ""
+                    , "TRS=${TRS:-trs}"
+                    , "exec \"$TRS\" run \"$0.bir\" \"$@\""
+                    ]
+        stat <- getFileStatus outFile
+        let mode = fileMode stat
+            mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
+        setFileMode outFile mode'
+        unless (quiet flags) $
+            putStrLnF ("TRS simulation created: " ++ outFile)
 
 -- ===============
 -- vLink
@@ -2261,11 +2546,12 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
                           [(cmdPosition,
                             EMultipleABinFilesForName link_name file_names)]
 
-            -- XXX Until we allow re-generation of Verilog files,
-            -- XXX the module .ba files are unused
-            when (not (null (mod_abis))) $
-                bsWarning errh
-                    [(cmdPosition, WExtraABinFiles (map fst mod_abis))]
+            -- without the design's .ba hierarchy, the staleness of
+            -- generated Verilog cannot be checked; warn and use the .v
+            -- files as found (module .ba files given explicitly on the
+            -- command line are still regenerated from, below)
+            bsWarning errh
+                [(cmdPosition, WNoABinForVerilogRegen topmod_name)]
 
             let ffuncs = [ abffi_foreign_func abfi
                            | (_, (ABinForeignFunc abfi _)) <- ffunc_abis ]
@@ -2288,17 +2574,32 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     t <- dump errh flags t DFreadelab dumpnames
              (map (pfpString . ff_name) ffuncs ++ map fst mod_abmis)
 
-{-
-    -- generate Verilog for the module abis
-    -- XXX only if the verilog doesn't exist or is older
-    -- XXX print a message about reusing a file?
-    (t, gen_vfilenames) <-
-        if (updCheck flags)
-        then vGenMods t flags mod_abmis
-        else return (t, [])
-    let vfilenames = vfilenames0  ++ gen_vfilenames
--}
-    let vfilenames = vfilenames0
+    -- Regenerate any module .v that is missing or older than its .ba, and
+    -- reuse the rest, so a link is self-sufficient regardless of which
+    -- subset was pre-generated (with -c or an earlier compile).  A module
+    -- whose .v was given explicitly on the command line is the user's to
+    -- provide and is never regenerated.  File arguments can be glob
+    -- patterns (bsc forwards them to the simulator's shell unexpanded, so
+    -- "*.v" has always meant "the user provides every module"); match
+    -- module names against the patterns rather than comparing literally.
+    let vfile_pats = [ baseName (dropSuf (vfnString vfn))
+                     | vfn <- vfilenames0 ]
+        -- glob match with * and ? (the shell metacharacters that can
+        -- appear in a forwarded filename argument)
+        globMatch ('*':ps) s = any (globMatch ps) (tails s)
+        globMatch ('?':ps) (_:cs) = globMatch ps cs
+        globMatch (p:ps) (c:cs) = (p == c) && globMatch ps cs
+        globMatch [] [] = True
+        globMatch _ _ = False
+        abmiModName abmi = getIdString (unQualId (apkg_name (abmi_apkg abmi)))
+        checked_abmis = [ p | p@(_, abmi) <- mod_abmis
+                            , not (any (`globMatch` abmiModName abmi)
+                                       vfile_pats) ]
+    (stale_abmis, reused_vs) <-
+        partitionStaleVerilogMods flags prefix checked_abmis
+    mapM_ (reuseVerilogFile flags . snd) reused_vs
+    (t, gen_vfilenames) <- vGenMods errh flags t stale_abmis
+    let vfilenames = vfilenames0 ++ map fst reused_vs ++ gen_vfilenames
 
     -- generate files for the foreign functions
     start flags DFcompileVPI
@@ -2352,7 +2653,13 @@ vSimLink errh flags toplevel prefix vfiles ofiles = do
                 veriFiles bsdir ++
                 (map vfnString vfiles) ++
                 ofiles)
-        cmd = unwords (build_script : args)
+        -- pass the requested waveform dump formats to the build script, which
+        -- translates them to the simulator's mechanism (or errors if unsupported)
+        dumpFmts = case dumpFormats flags of
+                     [] -> "none"
+                     fs -> intercalate "," fs
+        cmd = "BSC_VSIM_TRACE_FORMATS=" ++ dumpFmts ++ " " ++
+              unwords (build_script : args)
     when (verbose flags) $ putStrLnF ("exec: " ++ cmd)
     rc <- system cmd
     case rc of
@@ -2444,7 +2751,30 @@ vGenFFuncs errh flags t prefix cfilenames_unique ffuncs = do
       t <- timestampStr flags "compile user-provided C files" t
 
       (t, ofiles3) <-
-        if (useDPI flags) then return (t, [])
+        if (useDPI flags)
+        then do
+          -- Polymorphic imports have a generated DPI wrapper file
+          -- ("dpi_wrapper_<name>.c") which must be linked.  We do NOT
+          -- pre-compile it here: it includes svdpi.h, which lives in the
+          -- simulator's (Verilator's) include path, so we hand the source
+          -- file to the link step and let Verilator compile it.
+          let isPolyFFunc ff = isPoly (ff_ret ff) || any isPoly (ff_args ff)
+              poly_ffuncs = filter isPolyFFunc ffuncs
+          if (null poly_ffuncs)
+            then return (t, [])
+            else do
+              let findDPIWrapperFile ffunc = do
+                    let ffunc_name = getIdString (ff_name ffunc)
+                        dpiwrapper_filename = mkDPICName Nothing "" ffunc_name
+                    mfile <- readFilePath errh noPosition False
+                                          dpiwrapper_filename (vPath flags)
+                    case mfile of
+                      Nothing -> bsError errh [(noPosition,
+                                    EMissingVPIWrapperFile dpiwrapper_filename False)]
+                      Just (_, filename) -> return filename
+              dpiwrapper_filenames <- mapM findDPIWrapperFile poly_ffuncs
+              t <- timestampStr flags "locate DPI wrapper files" t
+              return (t, dpiwrapper_filenames)
         else do
           -- compile all necessary vpi wrapper files
 
@@ -2533,11 +2863,11 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs) <- cTypeCheck errh flags symt cpkg_ctx
+    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh flags symt cpkg_ctx
     t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
 
     start flags DFwrapper_simplified

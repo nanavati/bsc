@@ -1,7 +1,8 @@
 module TypeCheck(cTypeCheck,
                  cCtxReduceDef, cCtxReduceIO,
                  topExpr,
-                 qualifyClassDefaults
+                 qualifyClassDefaults,
+                 CATFCache, mergeCATFCaches
                 ) where
 
 import Data.List
@@ -29,30 +30,35 @@ import SymTab
 import Assump
 import CSubst(cSubstN)
 import CFreeVars(getFVC, getFTCC)
-import Util(separate, apFst, quote, fst3)
+import Util(separate, apFst, quote)
+--import Debug.Trace(trace, traceM)
 
-cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage -> IO (CPackage, Bool, S.Set Id)
+cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage ->
+             IO (CPackage, Bool, S.Set Id, CATFCache)
 cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
-    (typecheckedDefns, typeWarns, usedPkgs, haveErrors) <- tiDefns errh symtab flags defns
+    (typecheckedDefns, typeWarns, usedPkgs, haveErrors, atfCache) <- tiDefns errh symtab flags defns
 
     -- Issue type warnings
     when (not (null typeWarns)) $ bsWarning errh typeWarns
 
     return (CPackage name exports imports impsigs fixs typecheckedDefns includes,
             haveErrors,
-            usedPkgs)
+            usedPkgs,
+            atfCache)
 
 
 -- type check top-level definitions in parallel (since they are independent)
-tiDefns :: ErrorHandle -> SymTab -> Flags -> [CDefn] -> IO ([CDefn], [WMsg], S.Set Id, Bool)
+tiDefns :: ErrorHandle -> SymTab -> Flags -> [CDefn] ->
+           IO ([CDefn], [WMsg], S.Set Id, Bool, CATFCache)
 tiDefns errh s flags ds = do
   let ai = allowIncoherentMatches flags
-  let checkDef d = (defErr, warns, usedPkgs)
-        where (result, warns, usedPkgs) = runTI flags ai s $ tiOneDef d
-              defErr = case result of
+  let checkDef d = (defErr, warns, usedPkgs, atfCache)
+        where ti_res = runTI flags ai s $ tiOneDef d
+              (warns, usedPkgs, atfCache) = (tiWarnings ti_res, tiUsedPackages ti_res, tiATFCache ti_res)
+              defErr = case tiResult ti_res of
                           (Left emsgs)  -> Left emsgs
                           (Right cdefn) -> rmFreeTypeVars cdefn
-  let (checks, wss, pkgss) = unzip3 (map checkDef ds)
+  let (checks, wss, pkgss, atfCaches) = unzip4 (map checkDef ds)
   let (_, ds') = apFst concat $ separate (checks :: [Either [EMsg] CDefn])
   -- a boundary description def (compiler-emitted boundary_<flatifc>)
   -- re-proves the wrapper's WrapField provisos, so when an interface
@@ -75,14 +81,15 @@ tiDefns errh s flags ds = do
       mkErrorDef (Right _) _ = Nothing
   let error_defs = catMaybes (zipWith mkErrorDef checks ds)
   let (double_error_msgs, error_defs') =
-          apFst concat $ separate $ map fst3 (map checkDef error_defs)
+          apFst concat $ separate $ map (\(x,_,_,_) -> x) (map checkDef error_defs)
   -- Accumulate all used packages (only from the first round, poison pills don't use new symbols)
   let allUsedPkgs = S.unions pkgss
+  let mergedATFCache = foldl mergeCATFCaches M.empty atfCaches
   -- XXX: we give up - some type signatures are bogus
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
       bsError errh (nub errors) -- the underyling error should be in errors
   when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
-  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors)
+  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors, mergedATFCache)
 
 nullAssump :: [Assump]
 nullAssump = []
@@ -148,11 +155,17 @@ checkTopPreds mid a ps = do
 -- returning any unsatisfied preds
 topExpr :: CType -> CExpr -> TI ([VPred], CExpr)
 topExpr td e = do
+  -- dictionaries pooled during checking (see propagateFunDeps) are
+  -- emitted with this expression's letseq
+  pool_frame <- pushSolvedPool
   (ps, e') <- tiExpr [] td e
-  (ps', sbs) <- satisfy [] ps
+  (ps', sbs0) <- satisfy [] ps
+  pool_sbs <- popSolvedPool pool_frame
+  sbs <- warnTransitiveIncoherent sbs0
   s <- getSubst
-  let rec_defls    = getRecursiveDefls sbs
-      nonrec_defls = getNonRecursiveDefls sbs
+  let sbs' = pool_sbs <++ sbs
+      rec_defls    = getRecursiveDefls sbs'
+      nonrec_defls = getNonRecursiveDefls sbs'
   -- Generate code: nonrec outside (letseq), rec inside (letrec)
   return (apSub s (ps', cLetSeq nonrec_defls $ cLetRec rec_defls e'))
 

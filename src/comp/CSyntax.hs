@@ -33,6 +33,7 @@ module CSyntax(
         CFields,
         CStmt(..),
         CStmts,
+        CDeriving(..),
         IdK(..),
         CLiteral(..),
         CMStmt(..),
@@ -196,12 +197,11 @@ data CDefn
                   cd_type_vars :: [Id],
                   cd_original_summands :: COSummands,
                   cd_internal_summands :: CSummands,
-                  cd_derivings :: [CTypeclass] }
+                  cd_derivings :: [CDeriving] }
         | Cstruct Bool StructSubType IdK [Id] CFields
-                  [CTypeclass]
+                  [CDeriving]
                   -- Bool indicates the constrs are visible
                   -- first [Id] are the names of this definition's argument type variables
-                  -- last [CTypeclass] are derived classes
         -- incoherent_matches superclasses name_with_kind variables fundeps assoc_dep_funs default_methods
         | Cclass (Maybe Bool) [CPred] IdK [Id] CFunDeps [CAssocDepFun] CFields
         | Cinstance CQType [CDefl]
@@ -254,6 +254,16 @@ instance NFData IdK where
     rnf (IdK i) = rnf i
     rnf (IdKind i k) = rnf2 i k
     rnf (IdPKind i pk) = rnf2 i pk
+
+data CDeriving
+        = CStock [CTypeclass]
+        -- TODO: expr?
+        | CVia CTypeclass Id
+        deriving (Eq, Ord, Show)
+
+instance NFData CDeriving where
+   rnf (CStock tcs) = rnf tcs
+   rnf (CVia tc target) = rnf2 tc target
 
 type CFunDeps = [([Id],[Id])]
 
@@ -1242,10 +1252,14 @@ pBlock _ n nl xs =
         foldr1 ($+$) (map (\ x -> x <> if nl then t";" $+$ t"" else t";") (init xs) ++ [last xs])) $+$
         t"}"
 
-ppDer :: PDetail -> [CTypeclass] -> Doc
-ppDer d [] = text ""
-ppDer d is = text " deriving (" <> sepList (map (pPrint d 0) is) (text ",") <> text ")"
+instance PPrint CDeriving where
+    pPrint d _ (CStock tcs) = case tcs of
+      [] -> t""
+      is -> t" deriving (" <> sepList (map (pPrint d 0) is) (t",") <> t")"
+    pPrint d _ (CVia tc tgt) = t" deriving " <> pPrint d 0 tc <> t" via " <> pPrint d 0 tgt
 
+ppDer :: PDetail -> [CDeriving] -> Doc
+ppDer d drvs = vcatList (map (pPrint d 0) drvs) empty
 
 instance PPrint CExpr where
     pPrint d p (CLam ei e) = ppQuant "\\ "  d p ei e
@@ -1311,9 +1325,11 @@ instance PPrint CExpr where
                 f (Inout i (VName p) mc mr) =
                     t "inout_field " <> ppVarId d i <+> t p <+>
                     mfi "clocked_by" mc <+> mfi "reset_by" mr
-                f (Method i mc mr n ps mo me) =
-                    ppVarId d i <> g n <+> t "=" <+> t (unwords (map h ps)) <+>
-                    mfi "clocked_by" mc <+> mfi "reset_by" mr <+> mfp "output" mo <+> mfp "enable" me
+                f (Method i mc mr n ps os me) =
+                    ppVarId d i <> g n <+> t "=" <+> t (unwords (map h (concat ps))) <+>
+                    mfi "clocked_by" mc <+> mfi "reset_by" mr <+>
+                    (if null os then empty else t"output" <+> t (unwords (map h os))) <+>
+                    mfp "enable" me
                 g 1 = t""
                 g n = t("[" ++ itos n ++ "]")
                 h (s,[]) = show s

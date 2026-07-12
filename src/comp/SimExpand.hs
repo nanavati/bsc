@@ -1,7 +1,8 @@
 {-# LANGUAGE CPP #-}
 module SimExpand ( simExpand, simExpandSched, simCheckPackage ) where
 
-import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList)
+import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList,
+                   fromMaybe, listToMaybe)
 import Data.List (partition, union, nub, sort, sortBy, delete)
 import Control.Monad (when, guard, msum {-, mapM_ -})
 import Debug.Trace
@@ -18,14 +19,15 @@ import FStringCompat(mkFString)
 import Backend
 
 import PreStrings (sSigned, sUnsigned)
-import PreIds (idDefaultClock, idDefaultReset)
+import PreIds (idDefaultClock, idDefaultReset, idInteger)
 import Id (mkId,
            setSignedId, getIdString, unQualId, isRdyId,
            getIdBaseString, getIdQualString, setIdQualString, emptyId,
            mkIdTempReturn)
 import VModInfo
 import Wires(WireProps(..), ClockDomain)
-import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..))
+import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..),
+              getDefaultClockArg, getDefaultResetArg)
 import ASyntax
 import ASyntaxUtil(aSubst, findAExprs, exprFold)
 import AScheduleInfo
@@ -84,17 +86,21 @@ simExpand errh flags topname fabis = do
                              assertNoSchedErr emodinfos_used_by_name
 
     -- reject top-level modules with always_enabled ifc, if generating
-    -- a Bluesim executable
+    -- a Bluesim executable; in -c or -sim-codegen-only mode the output is never
+    -- executed, so any module may serve as the codegen root
     let topModInfo =
            case (lookup (getIdString topmodId) modinfos_used_by_name) of
                Just (mi,_) -> mi
                Nothing     -> internalError ("simExpand: topmodId not found")
-    when ((not (genSysC flags)) && (hasEnabledMethod topModInfo)) $
+    when ((not (genSysC flags)) && (not (blockCodegen flags)) &&
+          (not (simCodegenOnly flags)) &&
+          (hasEnabledMethod topModInfo)) $
         bsError errh [(noPosition, EBSimEnablePragma)]
 
     -- reject top-level modules with arguments or params in Bluesim or SystemC
     let (top_args, top_params) = getArgsAndParams topModInfo
-    if (genSysC flags)
+    when ((not (blockCodegen flags)) && (not (simCodegenOnly flags))) $
+     if (genSysC flags)
      then when ((not (null top_args)) || (not (null top_params))) $
                bsError errh [(noPosition, EBSimTopLevelArgOrParam True (top_args ++ top_params))]
      else when ((not (null top_args)) || (not (null top_params))) $
@@ -104,17 +110,39 @@ simExpand errh flags topname fabis = do
     let pkg_map = M.fromList (map (\p -> (sp_name p,p)) simpkgs)
 
     -- record default clock and reset for top module
-    let def_clk = msum $ [ lookup idDefaultClock xs
-                         | (PPclock_osc xs) <- (abmi_pps topModInfo)
-                         ] ++
-                         [Just "CLK"]
+    -- (when an argument is designated as the default clock/reset, its
+    -- port serves as the top-level default clock/reset)
+    let top_pps = abmi_pps topModInfo
+        arg_port_name prefix rename_lookups arg =
+            let base = getIdBaseString arg
+                m_name = msum [ lookup arg xs | xs <- rename_lookups ]
+                dflt = if (null prefix) then base else (prefix ++ "_" ++ base)
+            in  fromMaybe dflt m_name
+        def_clk = case (getDefaultClockArg top_pps) of
+                    Just arg ->
+                        let prefix = fromMaybe "CLK" $
+                                       listToMaybe [ s | PPCLK s <- top_pps ]
+                            renames = [ xs | PPclock_osc xs <- top_pps ]
+                        in  Just (arg_port_name prefix renames arg)
+                    Nothing ->
+                        msum $ [ lookup idDefaultClock xs
+                               | (PPclock_osc xs) <- top_pps
+                               ] ++
+                               [Just "CLK"]
         top_clk = do x <- def_clk
                      guard (not (null x))
                      return x
-        def_rst = msum $ [ lookup idDefaultReset xs
-                         | (PPreset_port xs) <- (abmi_pps topModInfo)
-                         ] ++
-                         [Just "RSTN"]
+        def_rst = case (getDefaultResetArg top_pps) of
+                    Just arg ->
+                        let prefix = fromMaybe (resetName flags) $
+                                       listToMaybe [ s | PPRSTN s <- top_pps ]
+                            renames = [ xs | PPreset_port xs <- top_pps ]
+                        in  Just (arg_port_name prefix renames arg)
+                    Nothing ->
+                        msum $ [ lookup idDefaultReset xs
+                               | (PPreset_port xs) <- top_pps
+                               ] ++
+                               [Just "RSTN"]
         top_rst = do x <- def_rst
                      guard (not (null x))
                      return x
@@ -229,13 +257,24 @@ simExpandABin errh flags (abi,ver) = do
 
     let insts = apkg_state_instances apkg
 
+    let
+        -- Integer parameters are canonicalized to Bit 32 at instantiation
+        -- (see PrimParam in the Prelude) and referenced at Bit types, so
+        -- give the input the same representation; Bluesim has no value
+        -- type for an abstract Integer
+        cvtIntegerParam (AAI_Port (i, ATAbstract t []), vai)
+            | isParam vai && t == idInteger = AAI_Port (i, ATBit 32)
+        cvtIntegerParam (ai, _) = ai
+
+        inputs = map cvtIntegerParam (getAPackageInputs apkg)
+
     let simpkg = SimPackage {
                      sp_name = apkg_name apkg,
                      sp_is_wrapped = apkg_is_wrapped apkg,
                      sp_version = ver,
                      sp_pps = abmi_pps abi,
                      sp_size_params = apkg_size_params apkg,
-                     sp_inputs = apkg_inputs apkg,
+                     sp_inputs = inputs,
                      sp_clock_domains = apkg_clock_domains apkg,
                      sp_external_wires = apkg_external_wires apkg,
                      sp_reset_list = apkg_reset_list apkg,
@@ -1051,7 +1090,7 @@ combineCombSchedInfo use_map domain_id_map parent_abi parent_csi
         -- schedule graph and conflicts (even the methods not used by
         -- any parent rules), so we need to know which are the method Ids
         child_apkg = abmi_apkg child_abi
-        child_meth_set = S.fromList $ map aIfaceName (apkg_interface child_apkg)
+        child_meth_set = S.fromList $ map aif_name (apkg_interface child_apkg)
 
         -- combine each part of the CSI
         comb_sched_map = combineSchedMap inst parent_uses
@@ -1680,7 +1719,7 @@ mkRdyMap abi =
         mkPair (AIClock {}) = []
         mkPair (AIReset {}) = []
         mkPair ifc =
-            let name = aIfaceName ifc
+            let name = aif_name ifc
                 pred_e = aIfacePred ifc
             in  if (isRdyId name)
                 then [] -- Rdy methods don't have Rdy methods
@@ -1985,6 +2024,8 @@ eDomain m e@(AMethCall _ i mi es) =
     mergeUses ([(i, unQualId mi)] : map (eDomain m) es)
 -- don't count the return value uses of actionvalue, only the action part
 eDomain m (AMethValue _ _ _) = []
+eDomain m (ATupleSel _ e _) = eDomain m e
+eDomain m (ATuple _ es) = mergeUses $ map (eDomain m) es
 eDomain m (ANoInlineFunCall _ _ _ es) = mergeUses $ map (eDomain m) es
 eDomain m (AFunCall _ _ _ _ es) = mergeUses $ map (eDomain m) es
 eDomain _ e@(ASPort _ i) = []
@@ -2221,10 +2262,11 @@ makeMethodTemps apkg =
                                   (AIDef {})         -> (True,False)
                                   (AIActionValue {}) -> (False,True)
                                   otherwise          -> (False,False)
+              v = aif_value aif
           in if is_def || is_av
-             then case process is_av (aif_value aif) (aif_name aif) seqNo of
+             then case process is_av v (aif_name aif) seqNo of
                     (Just t@(ADef tid ty e props)) ->
-                       let aid = adef_objid (aif_value aif)
+                       let aid = adef_objid v
                            -- unclear if propagating the props is correct
                            new_def = (ADef aid ty (ASDef ty tid) props)
                            aif' = aif { aif_value = new_def }
@@ -2256,20 +2298,13 @@ makeMethodTemps apkg =
 getNoInlineInfo :: [ADef] -> ( [ADef], [(String, String)] )
 getNoInlineInfo defs =
     let
-        -- extract the output port name
-        getOutPortName (_,[(oname,_)]) = oname
-        getOutPortName _ = internalError "getNoInlineInfo: invalid ports"
-
         cvtDef (ADef di dt
                   (ANoInlineFunCall ft fi
-                    (ANoInlineFun mod_name _ ports (Just inst_name))
+                    (ANoInlineFun mod_name _ _ (Just inst_name))
                     es) props) =
             let
                 pos = getPosition fi
-                -- XXX because noinline "foreign" Id is escaped with an "_",
-                -- XXX we can't get the method name from "fi"
-                --methId = fi
-                methId = mkId pos (mkFString (getOutPortName ports))
+                methId = mkId pos (mkFString (getIdBaseString fi))
                 instId = mkId pos (mkFString inst_name)
                 new_def = ADef di dt (AMethCall ft instId methId es) props
             in
