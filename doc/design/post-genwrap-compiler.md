@@ -3961,7 +3961,15 @@ parents' independent solutions to `.ba`-by-default reconciled
 (genABinExplicit mechanism, their help text, both staleness checks
 kept conservatively).  Gates on the merged tree: fifteen boundary
 suites pass both modes (400), the golden corpus — 255 files after
-the merge's new tests — byte-identical flag-off vs all three flags.
+the merge's new tests — byte-identical flag-off vs all three flags,
+and the full suite (892 exp dirs, both lanes run clean-tree on the
+merged compiler) shows a failure set IDENTICAL between flag-off and
+the triple flags except the option-echo harness artifact, with
+single-pass censuses of 4681 injected generations / ZERO legacy,
+4018 folds / ZERO fallbacks, 3918 codec dictionary comparisons.
+One more suppression fell to the merge: increment 2's
+.ba-progress-message shim, superseded by the trs arc's global
+golden adaptation (the message now prints for every write).
 
 ## Appendix A. Codebase fact sheet (verified citations)
 
