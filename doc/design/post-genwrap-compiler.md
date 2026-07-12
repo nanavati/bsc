@@ -3897,6 +3897,72 @@ default flip.
 
 ---
 
+**The trs merge, and the boundary contract as the measured target.**
+The trs simulator arc (581 commits: BIR export, the Rust
+interpreter/JIT/AOT engines, FST waves, the `-c` per-module codegen
+flow, the ATF resolution cache, dictionary lifting with the
+coherent-dictionary map) merged into this lane, and its
+`src/trs/docs/BOUNDARY-CONTRACT.md` hands this refactor its first
+MEASURED requirement: a `(* synthesize *)` boundary should be a true
+compilation boundary — a parent package's compiled artifacts must
+depend on a child's interface CONTRACT only, so a child body edit
+leaves the parent's bytes untouched.  Two mechanisms measurably
+break it today (grid v3 N=8, one same-width leaf-constant edit):
+elaboration heap positions leak child shape into the parent's own
+def names (`__h<N>`/`__d<N>` shift, 12.6k dumpba lines), because the
+parent's evaluator walks the child's ISyntax even across the
+boundary; and `ipkg_depends` hashes an import's ENTIRE `.bo` rather
+than what the importer can consume.  The contract is the
+auto-derived BVI-equivalent of a synthesized module — interface
+types and method signatures, port shapes, the conflict matrix,
+clock/reset domain relationships, path info — exactly `VModInfo`,
+which BVI imports prove sufficient (they elaborate and schedule with
+no body at all).  This reshapes the roadmap's aim: the description
+substrate (increments 6–10) already carries naming, method types,
+and codecs; grown to VModInfo-equivalence it IS the contract
+artifact, the §5.3 lane's boundary-stub elaboration closes mechanism
+one (the parent consumes the contract, never the child's body, and
+heap-position independence falls out), and scoping the dep hash at
+the same boundary closes mechanism two (full-content hashing stays
+CORRECT for non-synthesized imports, whose bodies inline).
+Acceptance is executable: `src/trs/tools/ba-stability-audit.sh`
+check C — parent stability under a leaf body edit — fails today and
+flips green when the contract is load-bearing.  (Same-directory
+determinism and path insensitivity, checks A and B, are already
+solved; do not re-solve.  And where trs deliberately crosses the
+boundary — fused exec bodies inline child method bodies for speed —
+closure keys, not stubs, remain correct: the contract does not
+replace them.)
+
+The merge itself carried six semantic reconciliations worth
+recording; one is a design shift.  The coherent-dictionary substrate
+(their `mkCoherentDictMap`/`fixUp`, which replaces any coherent
+dictionary reference by the canonical def OF THE SAME TYPE, and
+`LiftDicts`, which names solver dictionaries as `_lifted_dictN`
+CAFs) means the compiler no longer preserves dictionary STRUCTURE —
+it actively rewrites dictionaries up to type.  Increment 10's codec
+shadow invariant ("recorded CodecRef structurally ≡ re-solved
+dictionary") was therefore re-based to what the substrate actually
+maintains: equality of the fully-applied dictionary TYPE under
+coherence, with lifted references looked through (found by the
+vector-parametric codec entries, where the package compile
+materializes a `Bits (Bit 8)` dictionary literal that the wrapper
+re-solve references by instance).  The remaining five: capture
+re-knot and coherent-dict map coexist in FixupDefs (fixupIDefSel on
+the five-field IPackage; the unused fixupIDef dropped); fresh
+`.bo`/`.ba` format tags with the Flags serialization at the merged
+arity and `VMIfDef` re-tagged after colliding with their `VMDPI`;
+`VModInfo`'s plural `vf_outputs`/nested `vf_inputs` and `IRefT`'s
+position set adapted in the checkers and walkers; their
+rename-legalization decl scan learned `VMIfDef` (per-branch
+recursion preserving the instantiation-port exclusion) and `VMDPI`
+(a DPI function name is declared but never renameable); and both
+parents' independent solutions to `.ba`-by-default reconciled
+(genABinExplicit mechanism, their help text, both staleness checks
+kept conservatively).  Gates on the merged tree: fifteen boundary
+suites pass both modes (400), the golden corpus — 255 files after
+the merge's new tests — byte-identical flag-off vs all three flags.
+
 ## Appendix A. Codebase fact sheet (verified citations)
 
 All verified against `main` @ `534241d`:
