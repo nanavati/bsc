@@ -1305,14 +1305,12 @@ genModule
     return (def)
 
 
--- The .ba progress message matches the pre-default-.ba surface: it is
--- printed when .ba generation is what the flags asked for (the Bluesim
--- backend, or an explicit -elab), not for the default-on write that
--- carries boundaries and manifests in Verilog flows.
+-- The .ba progress message prints whenever a .ba is written: the
+-- testsuite goldens were adapted to the default-on write across all
+-- backends (the trs arc's rc3 adaptation), which supersedes the
+-- earlier match-the-pre-default-surface suppression.
 abinMsgVisible :: Flags -> Bool
-abinMsgVisible flags =
-    not (quiet flags) &&
-    (backend flags == Just Bluesim || genABinExplicit flags)
+abinMsgVisible flags = not (quiet flags)
 
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
