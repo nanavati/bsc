@@ -1,0 +1,11 @@
+# engine artifacts and decoded-design sidecars produced by the
+# determinism sweep (three linked artifacts compared pairwise, plus
+# the reference run's output); *.bir is ignored tree-wide
+*.art1
+*.art2
+*.art3
+*.birsnap
+*.ir1
+*.ir2
+*.ir3
+*.ref
