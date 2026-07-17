@@ -28,7 +28,6 @@ import Control.Monad.Fix(mfix)
 --import Control.Monad.Fix
 import Control.Monad.State(State, evalState, liftIO, get, put)
 import Data.Graph
-import qualified Data.Generics as Generic
 import System.IO(Handle, BufferMode(..), IOMode(..), stdout, stderr,
                  hSetBuffering, hIsOpen, hIsClosed)
 import System.FilePath(isRelative)
@@ -532,14 +531,92 @@ unpack_method_call' _ e =
   -- trace ("unpack_method_call unable to match " ++ show e) $
   --[(mk_homeless_id "NOSTATE", mk_homeless_id "NOMETHOD")]
 
+-- The method-conditions bookkeeping (see unpack_method_call) records
+-- inlined positions as a property on the Ids at method/function call
+-- heads.  Once the module is assembled (and generateMethodPreds has
+-- harvested the info into the COND defs), the property is stale
+-- book-keeping, and is stripped from every ICon head in the module.
+-- Def names are not ICon heads and keep their info.
+--
+-- This was previously a SYB "everywhere" traversal, which paid a
+-- generic-dispatch tax on every node of the module; on a large module
+-- the pass alone took a third of the elaboration time.  This hand
+-- traversal touches only the fields where expressions live, and is
+-- deliberately as lazy as the SYB one was: the output must be
+-- byte-identical, and downstream orderings are sensitive to the order
+-- in which the generated names are first demanded (FString interning
+-- order feeds Ord Id, which feeds tsort tie-breaks and Set-sorted
+-- lists in the Verilog backend).  In particular, indexing the defs
+-- eagerly (e.g. a Map from def id to stripped body, to rebuild
+-- ICValue references with sharing) forces the names early and
+-- reorders declarations in the generated Verilog.
 removeInlinedPositions :: Flags -> IModule HeapData -> IModule HeapData
-removeInlinedPositions flags imod0 | (not (methodConditions flags)) = imod0
-removeInlinedPositions flags imod0 =
-    let removeFn :: HExpr -> HExpr
-        removeFn (ICon i ic) = (ICon (removeIdInlinedPositions i) ic)
-        -- XXX do we need a recursive branch for IAps?
-        removeFn e = e
-    in  Generic.everywhere (Generic.mkT removeFn) imod0
+removeInlinedPositions flags imod | (not (methodConditions flags)) = imod
+removeInlinedPositions flags imod =
+    imod { imod_clock_domains =
+               mapSnd (map fixClock) (imod_clock_domains imod),
+           imod_resets = map fixReset (imod_resets imod),
+           imod_state_insts = mapSnd fixStateVar (imod_state_insts imod),
+           imod_local_defs = fixed_defs,
+           imod_rules = fixRules (imod_rules imod),
+           imod_interface = map fixIEFace (imod_interface imod) }
+  where
+    fixed_defs = map fixDef (imod_local_defs imod)
+
+    fixDef (IDef i t e props) = IDef i t (fixExpr e) props
+
+    fixExpr :: HExpr -> HExpr
+    fixExpr (ILam i t e) = ILam i t (fixExpr e)
+    fixExpr (IAps f ts es) = IAps (fixExpr f) ts (map fixExpr es)
+    fixExpr e@(IVar _) = e
+    fixExpr (ILAM i k e) = ILAM i k (fixExpr e)
+    fixExpr (ICon i ic) = ICon (removeIdInlinedPositions i) (fixConInfo i ic)
+    -- heap references are gone by this point (and the heap was opaque
+    -- to the SYB traversal anyway)
+    fixExpr e@(IRefT {}) = e
+
+    fixConInfo :: Id -> IConInfo HeapData -> IConInfo HeapData
+    -- a reference to a local def: recurse into the payload copy
+    fixConInfo _ ic@(ICValue {}) =
+        ic { iValDef = fixExpr (iValDef ic) }
+    fixConInfo _ ic@(ICDef {}) = ic { iConDef = fixExpr (iConDef ic) }
+    fixConInfo _ ic@(ICUndet {}) = ic { imVal = fmap fixExpr (imVal ic) }
+    fixConInfo _ ic@(ICStateVar {}) = ic { iVar = fixStateVar (iVar ic) }
+    fixConInfo _ ic@(ICMethod {}) = ic { iMethod = fixExpr (iMethod ic) }
+    fixConInfo _ ic@(ICClock {}) = ic { iClock = fixClock (iClock ic) }
+    fixConInfo _ ic@(ICReset {}) = ic { iReset = fixReset (iReset ic) }
+    fixConInfo _ ic@(ICInout {}) = ic { iInout = fixInout (iInout ic) }
+    -- the array cells are heap references (opaque here);
+    -- only the uninit expressions contain expressions
+    fixConInfo _ ic@(ICLazyArray {}) =
+        ic { uninit = fmap (\ (e1, e2) -> (fixExpr e1, fixExpr e2))
+                          (uninit ic) }
+    fixConInfo _ ic@(ICPred {}) = ic { iPred = fixPred (iPred ic) }
+    fixConInfo _ ic = ic
+
+    fixPred (PConj ps) = PConj (S.map fixPTerm ps)
+    fixPTerm (PAtom e) = PAtom (fixExpr e)
+    fixPTerm (PIf c t e) = PIf (fixExpr c) (fixPred t) (fixPred e)
+    fixPTerm (PSel idx n ps) = PSel (fixExpr idx) n (map fixPred ps)
+
+    fixStateVar sv = sv { isv_iargs = map fixExpr (isv_iargs sv),
+                          isv_clocks = mapSnd fixClock (isv_clocks sv),
+                          isv_resets = mapSnd fixReset (isv_resets sv) }
+
+    fixClock c = c { ic_wires = fixExpr (ic_wires c) }
+    fixReset r = r { ir_clock = fixClock (ir_clock r),
+                     ir_wire = fixExpr (ir_wire r) }
+    fixInout io = io { io_clock = fixClock (io_clock io),
+                       io_reset = fixReset (io_reset io),
+                       io_wire = fixExpr (io_wire io) }
+
+    fixRules (IRules sps rs) = IRules sps (map fixRule rs)
+    fixRule r = r { irule_pred = fixExpr (irule_pred r),
+                    irule_body = fixExpr (irule_body r) }
+
+    fixIEFace f = f { ief_value = fmap (\ (e, t) -> (fixExpr e, t))
+                                       (ief_value f),
+                      ief_body = fmap fixRules (ief_body f) }
 
 -- -----
 
