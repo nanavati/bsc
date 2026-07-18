@@ -1,0 +1,11 @@
+package Ingress where
+
+import MsgDefs
+import WireEnc
+
+-- Damage site #1: this package resolves Bits (Msg Hdr) to the ORPHAN layout
+-- (WireEnc is in its import cone, and the orphan is strictly more specific
+-- than the derived instance, so it wins).  This compile gets NO diagnostic
+-- of any kind.
+encodeMsg :: Msg Hdr -> Bit 33
+encodeMsg = pack

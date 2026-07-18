@@ -1,0 +1,31 @@
+package BothSinks where
+
+import ReqDefs
+import SinkSplit
+import SinkPlain
+
+-- Pure-Bluespec witness for the SplitPorts catch-all loophole: ONE program
+-- containing two synthesized modules with the SAME interface type (ReqSink)
+-- and two different Verilog pinouts, with no diagnostic anywhere -- not
+-- even here, where both instance cones join, because a specific instance
+-- overlapping the catch-all default is legal and ordered.
+--
+-- Typed connections (as below) stay self-consistent, which is exactly what
+-- hides the divergence until the generated .v files meet a constraints
+-- file, a DFT flow, or a hand-written netlist that was frozen against one
+-- of the two pinouts.
+{-# verilog sysBothSinks #-}
+sysBothSinks :: Module Empty
+sysBothSinks =
+  module
+    a :: ReqSink <- mkReqSinkSplit
+    b :: ReqSink <- mkReqSinkPlain
+    step :: Reg (Bit 1) <- mkReg 0
+    rules
+        "drive": when (step == 0) ==>
+            action
+                let q = Req { addr = 0x12345678; dat = 0x1122334455667788; }
+                a.put q
+                b.put q
+                step := 1
+        "done": when (step == 1) ==> $finish 0

@@ -1,0 +1,16 @@
+package ReqSplit where
+
+import ReqDefs
+
+-- ORPHAN instance (SplitPorts from the Prelude, Req from ReqDefs): warned
+-- T0127 here at the definition site, and nowhere else.
+--
+-- Because SplitPorts has a legal catch-all default instance
+-- (SplitPorts a (Port a): "don't split"), the ABSENCE of this instance in
+-- some other compile is never an error of any kind -- that compile silently
+-- falls back to the unsplit pinout.  A module's Verilog interface is thus
+-- decided by which packages happen to be in its import cone.
+instance SplitPorts Req (Port (Bit 32), Port (Bit 64)) where
+    splitPorts r = (Port r.addr, Port r.dat)
+    unsplitPorts (Port a, Port d) = Req { addr = a; dat = d; }
+    portNames _ base = Cons (base +++ "_addr") (Cons (base +++ "_dat") Nil)

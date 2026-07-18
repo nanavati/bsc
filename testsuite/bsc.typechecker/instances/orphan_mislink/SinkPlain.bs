@@ -1,0 +1,21 @@
+package SinkPlain where
+
+import ReqDefs
+
+-- The IDENTICAL module body, synthesized without the orphan in its cone:
+-- resolution silently falls back to the catch-all default instance and the
+-- pinout is a single port
+--   put_1 [95:0]
+-- Compiles with NO diagnostic -- the fallback is a perfectly coherent
+-- resolution, so no possible warning can exist at this site.
+{-# verilog mkReqSinkPlain #-}
+mkReqSinkPlain :: Module ReqSink
+mkReqSinkPlain =
+  module
+    r :: Reg (Bit 32) <- mkReg 0
+    d :: Reg (Bit 64) <- mkReg 0
+    interface
+        put q =
+          action
+            r := q.addr
+            d := q.dat

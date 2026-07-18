@@ -1,0 +1,19 @@
+package LaneSource where
+
+import Vector
+import LaneDefs
+import SplitFwd
+
+interface LaneSource =
+    out :: QBus
+
+-- Synthesized in SplitFwd's cone: ports out_0..out_3, port i = lane i.
+-- Drives lanes 0x11, 0x22, 0x33, 0x44.  Code generation is warning-free;
+-- a plain compile even flags the SplitFwd import as UNUSED (T0157),
+-- inviting the user to delete the import that determines the pinout.
+{-# verilog mkLaneSource #-}
+mkLaneSource :: Module LaneSource
+mkLaneSource =
+  module
+    interface
+        out = genWith (\ i -> fromInteger (0x11 * (i + 1)))

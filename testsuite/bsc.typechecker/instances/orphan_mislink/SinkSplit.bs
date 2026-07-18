@@ -1,0 +1,21 @@
+package SinkSplit where
+
+import ReqDefs
+import ReqSplit
+
+-- Synthesized in the orphan's cone: pinout is
+--   put_1_addr [31:0], put_1_dat [63:0]
+-- Code generation is warning-free; a plain compile even flags the ReqSplit
+-- import as UNUSED (T0157), inviting the user to delete the import that
+-- determines the pinout.
+{-# verilog mkReqSinkSplit #-}
+mkReqSinkSplit :: Module ReqSink
+mkReqSinkSplit =
+  module
+    r :: Reg (Bit 32) <- mkReg 0
+    d :: Reg (Bit 64) <- mkReg 0
+    interface
+        put q =
+          action
+            r := q.addr
+            d := q.dat

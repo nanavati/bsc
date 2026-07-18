@@ -1,0 +1,187 @@
+# Orphan-instance mislinks for Bits and SplitPorts.
+#
+# Instances of Bits and SplitPorts are baked into generated hardware:
+# they decide the bit layout and the Verilog pinout of every synthesized
+# boundary that mentions the type.  An ORPHAN instance (class and all head
+# types defined elsewhere) makes that choice a property of the IMPORT
+# GRAPH instead of the type: two packages in one program, or two builds of
+# one design, can resolve the same predicate differently, each locally
+# coherently -- and the divergence surfaces only as silently mis-linked
+# hardware.
+#
+# This suite asserts the DESIRED behavior: orphan instances of these two
+# classes are rejected, so encodings and pinouts are a property of the
+# type, program-wide.  Today bsc accepts every orphan below with at most a
+# suppressible warning (T0127) at the definition site, so the assertions
+# of desired behavior FAIL, in two flavors:
+#
+#   - "shouldn't compile" failures: the five orphan-defining packages
+#     (WireEnc, WireEnc2, SplitFwd, SplitRev, ReqSplit) are accepted;
+#   - damage witnesses: expected outputs and generated-Verilog assertions
+#     below state the CORRECT results, and today's runs produce corrupted
+#     data / divergent pinouts instead.
+#
+# Everything else PASSES, and that is the point: the passing assertions
+# pin down that no diagnostic fires at any site where the divergent
+# hardware is produced (and that the T0127/T0099/T0157 diagnostics fire
+# only where they are useless or counterproductive).
+#
+# Expected failures against current bsc, in order:
+#    1. WireEnc.bs   shouldn't compile        (orphan Bits accepted)
+#    2. WireEnc2.bs  shouldn't compile        (orphan Bits accepted)
+#    3. sysOrphanBitsMislink Verilog output   (roundtrip corrupted)
+#    4. sysOrphanBitsMislink Bluesim output   (roundtrip corrupted)
+#    5. TbOrphanBitsVeri.out                  (sink reads d5, not aa)
+#    6. SplitFwd.bs  shouldn't compile        (orphan SplitPorts accepted)
+#    7. SplitRev.bs  shouldn't compile        (orphan SplitPorts accepted)
+#    8. TbOrphanSplitVeri.out                 (lanes crossed)
+#    9. ReqSplit.bs  shouldn't compile        (orphan SplitPorts accepted)
+#   10. mkReqSinkPlain.v pinout               (fell back to unsplit put_1)
+#   11. sysBothSinks.v unsplit connection     (two pinouts in one program)
+#
+# (The suite demonstrates the gap; it is not the regression suite for a
+# fix.  Under the proposed ban the five orphan-defining packages fail to
+# compile, so the downstream tests become uncompilable rather than green.)
+
+# ----------
+# Shared protocol types (derived Bits layouts).  No diagnostics, correctly.
+compile_pass_no_warning MsgDefs.bs
+
+# Today the orphan encoders are merely warned about -- T0127, once, at the
+# definition site, and nowhere else in this file.  (WireEnc moves valid to
+# the MSB; WireEnc2 does the same and also swaps src/dst.  Each is a
+# legal, strictly-more-specific overlap of the derived generic instance
+# Bits (Msg t) _, so the duplicate check can never fire between an orphan
+# and the derived instance.)
+compile_pass_warning WireEnc.bs T0127 1
+compile_pass_warning WireEnc2.bs T0127 1
+
+# Desired: an orphan Bits instance is rejected.  FAILS today.
+compile_fail WireEnc.bs
+compile_fail WireEnc2.bs
+
+# The damage sites.  NO diagnostics: each package's resolution of
+# Bits (Msg Hdr) is locally unambiguous and coherent.
+compile_pass_no_warning Ingress.bs
+compile_pass_no_warning IngressB.bs
+compile_pass_no_warning Egress.bs
+
+# ----------
+# CASE 1 (Bits, pure Bluespec): pack with the orphan layout in one package,
+# ship the value over a type-erased channel (Reg (Bit 33)), unpack with the
+# derived layout in another package.  The top-level compile sees BOTH
+# instances and still has nothing to report (asserted PASS below).  The
+# expected output states the correct roundtrip; today both backends compute
+# silently corrupted data, so both simulation comparisons FAIL.
+compile_pass_no_warning OrphanBitsMislink.bs
+test_c_veri OrphanBitsMislink sysOrphanBitsMislink.out.expected
+
+# The ONLY configuration the compiler can catch: both equal-head orphan
+# cones imported into one compile (T0099, duplicate instances).  None of
+# the failing flows in this file ever reach this configuration.
+compile_fail_error OrphanBitsBothCones.bs T0099
+
+# ----------
+# CASE 2 (Bits, Verilog top level): two synthesized modules exposing the
+# same logical type (Msg Hdr) on 33-bit ports, generated in different
+# import cones, connected by a hand-written Verilog top exactly as any
+# netlist-integration flow would.  Same names, same widths, different
+# meanings: links cleanly, and the output comparison (which states the
+# correct value) FAILS -- the sink reads d5 where the source drove aa.
+if { $vtest == 1 } {
+    compile_verilog_pass_no_warning MsgSource.bs mkMsgSource
+    compile_verilog_pass_no_warning MsgSink.bs mkMsgSink
+
+    # Same width on both sides of the boundary -- nothing for any tool to
+    # object to.
+    find_regexp mkMsgSource.v {output \[32 : 0\] out;}
+    find_regexp mkMsgSink.v {input  \[32 : 0\] srcOf_1;}
+
+    link_verilog_no_main_pass {TbOrphanBitsVeri.v mkMsgSource.v mkMsgSink.v} TbOrphanBitsVeri
+    sim_verilog TbOrphanBitsVeri
+    compare_file TbOrphanBitsVeri.out
+}
+
+# ----------
+# CASE 3 (SplitPorts, Verilog top level): two orphan SplitPorts instances
+# for the same vector type emit IDENTICAL port-name sets (_0.._3, same
+# widths) with opposite lane mappings.  A module from each cone, joined by
+# name in a Verilog top, silently crosses the lanes.
+compile_pass_no_warning LaneDefs.bs
+
+# Today: warned T0127 once, at the definition sites only.
+compile_pass_warning SplitFwd.bs T0127 1
+compile_pass_warning SplitRev.bs T0127 1
+
+# Desired: an orphan SplitPorts instance is rejected.  FAILS today.
+compile_fail SplitFwd.bs
+compile_fail SplitRev.bs
+
+# A plain (non-codegen) compile does not see the wrapper's use of the
+# orphan, so the compiler warns that the import is UNUSED -- actively
+# nudging the user to delete the import that determines the module's
+# pinout.  (The codegen compiles below are warning-free.)
+compile_pass_warning LaneSource.bs T0157 1
+compile_pass_warning LaneSink.bs T0157 1
+
+if { $vtest == 1 } {
+    compile_verilog_pass_no_warning LaneSource.bs mkLaneSource
+    compile_verilog_pass_no_warning LaneSink.bs mkLaneSink
+
+    # The two pinouts are indistinguishable: identical names and widths.
+    find_regexp mkLaneSource.v {output \[7 : 0\] out_0;}
+    find_regexp mkLaneSource.v {output \[7 : 0\] out_3;}
+    find_regexp mkLaneSink.v {input  \[7 : 0\] lane0_1_0;}
+    find_regexp mkLaneSink.v {input  \[7 : 0\] lane0_1_3;}
+
+    # The expected output states the correct (uncrossed) lane behavior;
+    # today the name-based hookup crosses the lanes, so this FAILS.
+    link_verilog_no_main_pass {TbOrphanSplitVeri.v mkLaneSource.v mkLaneSink.v} TbOrphanSplitVeri
+    sim_verilog TbOrphanSplitVeri
+    compare_file TbOrphanSplitVeri.out
+}
+
+# ----------
+# CASE 4 (SplitPorts, pure Bluespec): the catch-all default instance
+# (SplitPorts a (Port a)) means the ABSENCE of an orphan is never an error:
+# the identical module body gets two different Verilog pinouts for the SAME
+# interface type, depending only on the import cone, inside one program,
+# with no diagnostic anywhere -- including in BothSinks, where both cones
+# join.  Any constraints file, DFT flow, or netlist frozen against one
+# pinout silently mismatches the other.
+compile_pass_no_warning ReqDefs.bs
+
+# Today: warned T0127 once, at the definition site only.
+compile_pass_warning ReqSplit.bs T0127 1
+
+# Desired: an orphan SplitPorts instance is rejected.  FAILS today.
+compile_fail ReqSplit.bs
+
+# As in CASE 3: the plain compile flags the pinout-determining import as
+# unused; the module that silently falls back to the catch-all is silent.
+compile_pass_warning SinkSplit.bs T0157 1
+compile_pass_no_warning SinkPlain.bs
+compile_pass_no_warning BothSinks.bs
+
+if { $vtest == 1 } {
+    compile_verilog_pass_no_warning SinkSplit.bs mkReqSinkSplit
+    compile_verilog_pass_no_warning SinkPlain.bs mkReqSinkPlain
+
+    # The split cone's pinout:
+    find_regexp mkReqSinkSplit.v {input  \[31 : 0\] put_1_addr;}
+    find_regexp mkReqSinkSplit.v {input  \[63 : 0\] put_1_dat;}
+
+    # Desired: ONE pinout per interface type, program-wide -- the identical
+    # module body must produce the same (split) pinout here too.  FAILS
+    # today: mkReqSinkPlain.v has a single unsplit port put_1[95:0].
+    find_regexp mkReqSinkPlain.v {put_1_addr}
+
+    # One program instantiates both.  bsc's own (typed) connections stay
+    # self-consistent, which is exactly what hides the divergence (asserted
+    # PASS below); desired is that NO unsplit connection of a Req port
+    # exists anywhere in the program.  FAILS today: sysBothSinks.v
+    # instantiates mkReqSinkPlain with an unsplit .put_1(...) connection.
+    compile_verilog_pass_no_warning BothSinks.bs sysBothSinks
+    find_regexp sysBothSinks.v {\.put_1_addr\(}
+    find_regexp_fail sysBothSinks.v {\.put_1\(}
+}

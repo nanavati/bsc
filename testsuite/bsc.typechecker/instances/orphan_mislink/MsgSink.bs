@@ -1,0 +1,16 @@
+package MsgSink where
+
+import MsgDefs
+
+interface MsgSink =
+    srcOf :: Msg Hdr -> Bit 8
+
+-- Synthesized WITHOUT the orphan in its import cone: the 33-bit decoding on
+-- the `srcOf_1` port is baked into mkMsgSink.v with the derived layout
+-- (valid at bit 0, payload in bits [32:1]).  Compiles with NO diagnostic.
+{-# verilog mkMsgSink #-}
+mkMsgSink :: Module MsgSink
+mkMsgSink =
+  module
+    interface
+        srcOf m = m.payload.src

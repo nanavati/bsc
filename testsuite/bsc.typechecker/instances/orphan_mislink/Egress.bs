@@ -1,0 +1,10 @@
+package Egress where
+
+import MsgDefs
+
+-- Damage site #2: this package does NOT import WireEnc, so the only visible
+-- instance for Bits (Msg Hdr) is the derived one -- a locally unambiguous,
+-- perfectly coherent resolution.  No diagnostic here either: nothing tells
+-- this compile that a more specific instance exists elsewhere in the program.
+decodeMsg :: Bit 33 -> Msg Hdr
+decodeMsg = unpack
