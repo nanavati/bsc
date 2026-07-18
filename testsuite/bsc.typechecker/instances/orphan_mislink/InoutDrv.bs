@@ -1,0 +1,23 @@
+package InoutDrv where
+
+import MsgDefs
+import WireEnc
+import TriState
+
+-- Damage site: synthesized in the ORPHAN cone.  mkTriState's
+-- Bits (Msg Hdr) 33 proviso resolves to WireEnc's layout (valid at the
+-- MSB), so the driver puts 33'h1AABBCAFE on the bus wires.  The Inout in
+-- the interface reaches the module boundary through primInoutCast -- a
+-- pure bit-cast, no logic -- so the orphan layout is baked into the
+-- inout port of mkInoutDrv.v.  Compiles with NO diagnostic.
+
+interface InoutDrv =
+    bus :: Inout (Msg Hdr)
+
+{-# verilog mkInoutDrv #-}
+mkInoutDrv :: Module InoutDrv
+mkInoutDrv =
+  module
+    ts :: TriState (Msg Hdr) <- mkTriState True testMsg
+    interface
+        bus = ts.io

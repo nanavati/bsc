@@ -1,0 +1,23 @@
+package InoutObs where
+
+import MsgDefs
+import TriState
+
+-- Damage site: synthesized WITHOUT the orphan in its import cone.  The
+-- observer's mkTriState (output disabled -- it only listens) resolves
+-- Bits (Msg Hdr) to the derived layout (valid at the LSB), so srcSeen
+-- reads bits [32:25] of the bus as the src field.  Compiles with NO
+-- diagnostic.
+
+interface InoutObs =
+    bus     :: Inout (Msg Hdr)
+    srcSeen :: Bit 8
+
+{-# verilog mkInoutObs #-}
+mkInoutObs :: Module InoutObs
+mkInoutObs =
+  module
+    ts :: TriState (Msg Hdr) <- mkTriState False (unpack 0)
+    interface
+        bus = ts.io
+        srcSeen = (ts._read).payload.src

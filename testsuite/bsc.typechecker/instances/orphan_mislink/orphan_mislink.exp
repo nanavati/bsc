@@ -67,7 +67,36 @@ if { $vtest == 1 } {
 }
 
 # ----------
-# CASE 3 (SplitPorts, Verilog top level): two orphan SplitPorts instances
+# CASE 3 (Bits over Inout, pure Bluespec, typed connection): an Inout is
+# the one interface kind where bsc CANNOT paper over divergent encodings
+# even in a fully typed connection -- mkConnection on Inout is a raw net
+# join (vInoutConnect ties both sides to the same wire; the boundary cast
+# is primInoutCast, logic-free), so there is no direction in which
+# conversion logic could be materialized.  Driver (orphan cone) and
+# observer (derived cone) meet over `mkConnection drv.bus obs.bus`; no
+# user code mentions Bit 33; the observer reads d5 where aa was driven.
+# Note: unlike Cases 4/5 there is not even a T0157 here -- mkTriState's
+# Bits proviso consumes the orphan in every compile mode, so the damage
+# sites are pristine under every diagnostic we have.
+compile_pass_no_warning InoutDrv.bs
+compile_pass_no_warning InoutObs.bs
+compile_pass_no_warning OrphanBitsInout.bs
+
+# Bluesim rejects Inout designs (G0097), so this case is Verilog-only.
+if { $vtest == 1 } {
+    compile_verilog_pass_no_warning InoutDrv.bs mkInoutDrv
+    compile_verilog_pass_no_warning InoutObs.bs mkInoutObs
+
+    # Same inout port name and width on both sides -- nothing for any
+    # tool to object to; the layouts differ only in the internal slicing.
+    find_regexp mkInoutDrv.v {inout  \[32 : 0\] bus;}
+    find_regexp mkInoutObs.v {inout  \[32 : 0\] bus;}
+
+    test_veri_only_multi OrphanBitsInout sysOrphanBitsInout {mkInoutDrv mkInoutObs} sysOrphanBitsInout.out.expected
+}
+
+# ----------
+# CASE 4 (SplitPorts, Verilog top level): two orphan SplitPorts instances
 # for the same vector type emit IDENTICAL port-name sets (_0.._3, same
 # widths) with opposite lane mappings.  A module from each cone, joined by
 # name in a Verilog top, silently crosses the lanes.
@@ -98,7 +127,7 @@ if { $vtest == 1 } {
 }
 
 # ----------
-# CASE 4 (SplitPorts, pure Bluespec): the catch-all default instance
+# CASE 5 (SplitPorts, pure Bluespec): the catch-all default instance
 # (SplitPorts a (Port a)) means the ABSENCE of an orphan is never an error:
 # the identical module body gets two different Verilog pinouts for the SAME
 # interface type, depending only on the import cone, inside one program,

@@ -1,0 +1,42 @@
+package OrphanBitsInout where
+
+import MsgDefs
+import Connectable
+import InoutDrv
+import InoutObs
+
+-- Pure-Bluespec silent mislink for Bits, over an Inout connection.
+--
+-- Unlike the value-method case (where each synthesized wrapper pairs its
+-- own pack/unpack and elaboration inserts permutation logic that hides the
+-- divergence), an Inout is BIDIRECTIONAL: mkConnection resolves to
+-- vInoutConnect, a BVI wrapper around InoutConnect.v that ties both sides
+-- to the SAME net.  There is no direction in which conversion logic could
+-- even be inserted, so the two cones' layouts meet as raw wires.
+--
+-- Everything here is typed Bluespec: both buses are Inout (Msg Hdr), the
+-- connection type-checks, and no user code ever mentions Bit 33.  The
+-- driver puts src=aa on the bus; the observer reads src=d5 through the
+-- derived layout.
+--
+-- This test SHOULD fail to compile (under an orphan-instance ban for
+-- Bits); today it compiles with no diagnostic and reads wrong data
+-- through a fully typed connection.
+{-# verilog sysOrphanBitsInout #-}
+sysOrphanBitsInout :: Module Empty
+sysOrphanBitsInout =
+  module
+    drv <- mkInoutDrv
+    obs <- mkInoutObs
+    mkConnection drv.bus obs.bus
+    step :: Reg (Bit 1) <- mkReg 0
+    rules
+        "report": when (step == 0) ==>
+            action
+                $display "driver drives  src=%h" testMsg.payload.src
+                $display "observer sees  src=%h" obs.srcSeen
+                if obs.srcSeen == testMsg.payload.src
+                  then $display "INOUT ROUNDTRIP OK"
+                  else $display "SILENT INOUT BITS MISLINK"
+                step := 1
+        "done": when (step == 1) ==> $finish 0
