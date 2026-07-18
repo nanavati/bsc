@@ -18,8 +18,9 @@ property definitions, the soundness/stability contracts, the validation
 evidence, and the migration plan (this PR is steps 1–3; steps 4–5 retire
 `getIOProps` after a release of coexistence).
 
-Based on the `getIOProps` inout fix PR, whose commit this branch
-contains; it can be rebased once that merges.
+Stacked on the `getIOProps` inout-feedthrough fix PR — this PR's base
+branch; with that fix in place the two analyses agree on every inout
+pin in the sweep.
 
 ## Why
 
@@ -57,8 +58,8 @@ instability propagates up the hierarchy.
 
 - Sweep of all 2124 code-generating testsuite designs (~18,300 port
   lines) comparing both analyses: identical port enumeration everywhere;
-  1,686 lines differ, of which 1,638 are the richer structural labels,
-  15 are strictly more accurate (dead-logic `unused`, CReg port-0 `reg`,
+  1,646 lines differ, of which 1,601 are the richer structural labels,
+  12 are strictly more accurate (dead-logic `unused`, CReg port-0 `reg`,
   a register repacked through an identity case), and 33 are the
   documented boolean-minimization non-goal. No line asserts a property
   `getIOProps` contradicts.
@@ -67,8 +68,9 @@ instability propagates up the hierarchy.
 - `testsuite/bsc.verilog/portprops`: golden tests dumping both analyses
   side by side cover each deduction mechanism, including new tests for
   value-method argument muxes (`APkgProps_VMux`) and enable/selector
-  folding (`APkgProps_EnFold`); 73/73 pass.
-- Full dejagnu testsuite: golden Verilog "Ports:" comments regenerated;
+  folding (`APkgProps_EnFold`); 85/85 pass.
+- Full dejagnu testsuite (SYSTEMCTEST=0, ~20,000 passes): golden
+  Verilog "Ports:" comments regenerated;
   a further ~15 goldens whose `compare_verilog` checks require a Verilog
   simulator (dormant otherwise) were regenerated — their name-counter
   drift predates this branch, verified with the pre-change compiler.
