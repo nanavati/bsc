@@ -1,0 +1,12 @@
+package IngressB where
+
+import MsgDefs
+import WireEnc2
+
+-- Same as Ingress, but in WireEnc2's import cone: resolves Bits (Msg Hdr)
+-- to WireEnc2's src/dst-swapped layout.  Also compiles with NO diagnostic.
+-- WireEnc.bo and WireEnc2.bo (two conflicting instances for the same head)
+-- coexist happily in this build tree; only a compile that imports BOTH
+-- cones can ever notice (see OrphanBitsBothCones).
+encodeMsgB :: Msg Hdr -> Bit 33
+encodeMsgB = pack

@@ -1,0 +1,17 @@
+package MsgSource where
+
+import MsgDefs
+import WireEnc
+
+interface MsgSource =
+    out :: Msg Hdr
+
+-- Synthesized in the orphan's import cone: the 33-bit encoding on the `out`
+-- port is baked into mkMsgSource.v with WireEnc's layout (valid at bit 32).
+-- Compiles with NO diagnostic.
+{-# verilog mkMsgSource #-}
+mkMsgSource :: Module MsgSource
+mkMsgSource =
+  module
+    interface
+        out = testMsg

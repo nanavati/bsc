@@ -1,0 +1,17 @@
+package OrphanBitsBothCones where
+
+import MsgDefs
+import Ingress
+import IngressB
+
+-- The two equal-head orphan instances (WireEnc and WireEnc2, both for
+-- Bits (Msg Hdr) 33) meet in a single compile for the first time here, and
+-- this is the ONLY configuration in which the compiler can see the conflict:
+-- it fails with T0099 (duplicate instance).
+--
+-- Every other test in this directory demonstrates configurations where the
+-- conflicting resolutions never share a symbol table -- disjoint import
+-- cones inside one program, or separately generated Verilog artifacts --
+-- and therefore go completely undiagnosed.
+bothEncodings :: Msg Hdr -> (Bit 33, Bit 33)
+bothEncodings m = (encodeMsg m, encodeMsgB m)

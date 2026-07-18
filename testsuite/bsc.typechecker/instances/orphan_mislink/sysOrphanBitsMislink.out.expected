@@ -1,0 +1,3 @@
+sent     src=aa dst=bb len=cafe valid=1
+received src=d5 dst=5d len=e57f valid=0
+ROUNDTRIP CORRUPTED

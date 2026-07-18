@@ -1,0 +1,20 @@
+package LaneSink where
+
+import Vector
+import LaneDefs
+import SplitRev
+
+interface LaneSink =
+    lane0 :: QBus -> Bit 8
+
+-- Synthesized in SplitRev's cone: ports lane0_1_0..lane0_1_3 -- the SAME
+-- names and widths as SplitFwd would produce -- but here port _0 carries
+-- lane 3, so the lane0 method returns the value on port _3.  Code
+-- generation is warning-free; a plain compile even flags the SplitRev
+-- import as UNUSED (T0157).
+{-# verilog mkLaneSink #-}
+mkLaneSink :: Module LaneSink
+mkLaneSink =
+  module
+    interface
+        lane0 v = select v (0 :: Integer)

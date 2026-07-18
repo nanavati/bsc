@@ -1,0 +1,48 @@
+package OrphanBitsMislink where
+
+import MsgDefs
+import Ingress
+import Egress
+
+-- Pure-Bluespec silent mislink for Bits.
+--
+-- Ingress packs testMsg with the orphan layout (valid at the MSB); the value
+-- crosses a type-erased channel (here a Reg (Bit 33), standing in for any
+-- FIFO/BRAM/bus of raw bits); Egress unpacks it with the derived layout
+-- (valid at the LSB).  Both packages import MsgDefs; both resolutions are
+-- locally coherent; this top-level compile sees BOTH instances and still has
+-- nothing to report, because a specific instance overlapping a generic one
+-- is legal and ordered.
+--
+-- The roundtrip is silently corrupted:
+--   sent:     src=aa dst=bb len=cafe valid=1   (payload = 0xAABBCAFE)
+--   encoded:  33'h1AABBCAFE                    (orphan: valid in bit 32)
+--   received: src=d5 dst=5d len=e57f valid=0   (derived: payload = bits [32:1])
+--
+-- This test SHOULD fail to compile (under an orphan-instance ban for Bits);
+-- today it compiles with no diagnostic and computes wrong data.
+{-# verilog sysOrphanBitsMislink #-}
+sysOrphanBitsMislink :: Module Empty
+sysOrphanBitsMislink =
+  module
+    chan :: Reg (Bit 33) <- mkReg 0
+    step :: Reg (Bit 2) <- mkReg 0
+    rules
+        "send": when (step == 0) ==>
+            action
+                chan := encodeMsg testMsg
+                step := 1
+        "recv": when (step == 1) ==>
+            action
+                let m2 = decodeMsg chan
+                $display "sent     src=%h dst=%h len=%h valid=%b"
+                    testMsg.payload.src testMsg.payload.dst
+                    testMsg.payload.len (pack testMsg.valid)
+                $display "received src=%h dst=%h len=%h valid=%b"
+                    m2.payload.src m2.payload.dst
+                    m2.payload.len (pack m2.valid)
+                if m2 == testMsg
+                  then $display "ROUNDTRIP OK"
+                  else $display "ROUNDTRIP CORRUPTED"
+                step := 2
+        "done": when (step == 2) ==> $finish 0

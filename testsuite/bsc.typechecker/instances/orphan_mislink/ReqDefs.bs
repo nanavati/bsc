@@ -1,0 +1,11 @@
+package ReqDefs where
+
+-- A shared request type and a shared interface: the ONE interface type
+-- used by both sink modules below.
+struct Req =
+    addr :: Bit 32
+    dat  :: Bit 64
+  deriving (Bits, Eq)
+
+interface ReqSink =
+    put :: Req -> Action

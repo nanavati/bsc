@@ -1,0 +1,15 @@
+package WireEnc2 where
+
+import MsgDefs
+
+-- A second, conflicting ORPHAN instance for the same head as WireEnc's
+-- (also warned T0127 here at its definition site, and nowhere else).
+--
+-- Internally a perfectly consistent pack/unpack pair, but it swaps src and
+-- dst relative to both WireEnc's layout and the derived layout.  Note that
+-- a design whose traffic happens to have src == dst (e.g. a loopback smoke
+-- test) roundtrips correctly across a WireEnc2/derived mismatch.
+instance Bits (Msg Hdr) 33 where
+    pack m   = pack m.valid ++ m.payload.dst ++ m.payload.src ++ m.payload.len
+    unpack b = Msg { payload = Hdr { src = b[23:16]; dst = b[31:24]; len = b[15:0]; };
+                     valid = unpack b[32:32]; }
