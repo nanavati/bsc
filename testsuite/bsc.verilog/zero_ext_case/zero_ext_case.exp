@@ -1,0 +1,19 @@
+#
+# A case over a zero-extended selector emits arms only for the values the
+# selector can take.
+#
+# The unreachable arms are not merely redundant: each is a label a reader
+# must consider, and the reachable-arm count is what decides whether a
+# default is needed at all.
+#
+
+compile_verilog_pass ZeroExtCase.bsv mkZeroExtCase
+
+# selects on the meaningful low bits, so the arms carry narrow labels
+find_regexp mkZeroExtCase.v {2'd3:}
+
+# and no arm exists for a value the two-bit index cannot reach
+find_regexp_fail mkZeroExtCase.v {3'd4:}
+
+# the narrowed range is covered, so no dead default is emitted either
+find_regexp_fail mkZeroExtCase.v {default:}
