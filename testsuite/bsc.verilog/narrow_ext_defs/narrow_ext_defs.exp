@@ -1,0 +1,19 @@
+#
+# An extension or replication def whose every reader takes a constant-bounded
+# extract is rebuilt at the widest bit actually read.
+#
+# Left alone, the top bits are driven and never loaded -- every one of them a
+# net with a driver and no load.
+#
+
+compile_verilog_pass NarrowExtDefs.bsv mkNarrowExtDefs
+
+# the def is declared at the width its reader takes, not the width it was
+# written at
+find_regexp mkNarrowExtDefs.v {wire \[7 : 0\] SEXT}
+
+# the replication is rebuilt to match, rather than being extracted from
+find_regexp mkNarrowExtDefs.v {\{8\{c\}\}}
+
+# nothing is left at the original width
+find_regexp_fail mkNarrowExtDefs.v {63 : 0}
