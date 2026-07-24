@@ -19,8 +19,8 @@ import qualified Data.ByteString as BS
 import Data.Char
   ( GeneralCategory (..),
     generalCategory,
-    isLowerCase,
-    isUpperCase,
+    isLower,
+    isUpper,
   )
 import Data.String (IsString (..))
 import Error (initErrorHandle)
@@ -172,7 +172,16 @@ checkRepresentable name
   | otherwise = Nothing
   where
     isSmallOrLarge :: Char -> Bool
-    isSmallOrLarge ch = isLowerCase ch || isUpperCase ch || ch == '_'
+    -- isLower/isUpper, not isLowerCase/isUpperCase. The latter pair needs
+    -- base-4.18 (GHC 9.6) and this tool builds under every GHC the compiler
+    -- supports -- but they are also the wrong predicates. Report 2.4 has
+    -- uniSmall = any lowercase letter and uniLarge = any uppercase OR
+    -- TITLECASE letter, which is exactly isLower and isUpper. The *Case
+    -- pair tests the derived Uppercase/Lowercase properties instead: it
+    -- drops titlecase (U+01C5 and the other Lj/Dz ligatures, which the
+    -- Report admits as large) and adds Other_Lowercase (U+00AA, U+00BA,
+    -- the Lm modifiers), which it does not.
+    isSmallOrLarge ch = isLower ch || isUpper ch || ch == '_'
     isDigit :: Char -> Bool
     isDigit ch = generalCategory ch == DecimalNumber
     -- Despite what the Haskell 2010 Report says, the 'otherwise' case is _not_
