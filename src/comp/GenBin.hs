@@ -10,7 +10,7 @@ import Position
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
-import ISyntaxUtil(icUndet)
+import ISyntaxUtil(icUndet, pkgHasPoisonPill)
 import CSyntax
 import Undefined(UndefKind(UNoMatch))
 import BinData
@@ -29,26 +29,37 @@ doTrace = elem "-trace-genbin" progArgs
 header :: [Byte]
 -- when a BinData-layer change bumps .bo and .ba together, give both
 -- formats the same version tag (see GenABin.hs)
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260720-2"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260725-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
+
+-- One flag byte follows the tag, ahead of the payload: does this package
+-- contain a poisoned definition?  Importers used to answer that by walking
+-- every IExpr of every def (BinUtil.doImport), on every import of every
+-- package in the transitive closure, to compute something the writer already
+-- knew.  Keeping it outside the payload means an importer can answer without
+-- decoding anything -- which is also what lets ipkg_defs be read lazily.
+pillByte :: Bool -> B.ByteString
+pillByte p = B.singleton (if p then 1 else 0)
 
 genBinFile :: ErrorHandle -> (Position -> Position) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh remapP fn bi_sig bo_sig ipkg =
     writeBinaryFileLazyCatch errh fn
         (BL.fromStrict headerBS `BL.append`
+         BL.fromStrict (pillByte (pkgHasPoisonPill ipkg)) `BL.append`
              encodeLazyWith remapP (bi_sig, bo_sig, ipkg))
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
-               IO (CSignature, CSignature, IPackage a, String)
+               IO (CSignature, CSignature, IPackage a, String, Bool)
 readBinFile errh nm s =
     let hlen = B.length headerBS
-    in if B.take hlen s == headerBS
-       then let ((bi_sig, bo_sig, ipkg), hash) =
-                    decodeWithHash $ B.drop hlen s
-            in return (bi_sig, bo_sig, ipkg, hash)
+    in if B.take hlen s == headerBS && B.length s > hlen
+       then let pill = B.index s hlen /= 0
+                ((bi_sig, bo_sig, ipkg), hash) =
+                    decodeWithHash $ B.drop (hlen + 1) s
+            in return (bi_sig, bo_sig, ipkg, hash, pill)
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 -- ----------
