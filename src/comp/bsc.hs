@@ -476,11 +476,20 @@ compilePackage
         (bi_sig, _) <- genUserSign errh symt mctx
         let bc_filename = putInDir (bdir flags) name bcSuffix
             remapP = remapPositionFile (remapPathPrefix flags)
-        genBcFile errh remapP bc_filename bi_sig
+            -- The same list "fixupDefs" would put in ipkg_depends, built the
+            -- same way the .bo path builds "binmods": every package in the
+            -- sorted transitive closure, with the hash of the file it came
+            -- from.  Recomputed here because -check-only exits before fixup.
+            findFn s = fromJustOrErr "bsc: binmap (check-only)" $
+                           M.lookup s binmap
+            bc_depends = [ (i, h)
+                         | CImpSign _ _ (CSignature i _ _ _) <- impsigs
+                         , let (_, _, _, _, h) = findFn (getIdString i) ]
+        genBcFile errh remapP bc_filename bc_depends bi_sig
         when (verbose flags) $
              putStrLnF ("Check file created: " ++
                         getRelativeFilePath bc_filename)
-        return (not tcErrors, binmap0, hashmap0)
+        return (not tcErrors, binmap, hashmap)
      else do
      --when (early flags) $ return ()
      let prefix = dirName name ++ "/"

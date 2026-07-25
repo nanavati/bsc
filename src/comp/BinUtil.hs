@@ -189,15 +189,17 @@ doImport errh flags hashmap i = do
     mbc <- if checkOnly flags then find bcname else return Nothing
     case mbc of
       Just (file, name) -> do
-        (bi_sig, hash) <- readBcFile errh name file
-        let CSignature pi imps _ _ = bi_sig
+        ((depends, bi_sig), hash) <- readBcFile errh name file
+        let CSignature pi _ _ _ = bi_sig
         when (pi /= i) $
             bsError errh [(noPosition, EBinFilePkgNameMismatch name
                                            (pfpString i) (pfpString pi))]
-        -- A .bc carries no defs and no per-import hashes; the import list in
-        -- the signature is what drives the transitive walk.
-        let ipkg = IPackage pi [] [] []
-        return (name, bi_sig, bi_sig, ipkg, hash, hashmap, imps)
+        -- "depends" plays the part "impHashes" plays for a .bo: the transitive
+        -- closure that drives both the load worklist and readImports' qualmap.
+        -- The signature's own import list cannot serve -- GenSign prunes it.
+        hashmap' <- mergeHashes errh hashmap pi hash depends
+        let ipkg = IPackage pi depends [] []
+        return (name, bi_sig, bi_sig, ipkg, hash, hashmap', map fst depends)
       Nothing -> do
         (file, name) <- fromMaybeM (bsError errh [missingErr]) $ find boname
         (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _), hash, pill)
