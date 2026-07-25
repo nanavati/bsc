@@ -170,7 +170,8 @@ data Flags = Flags {
         warnUndetPred :: Bool,
         -- appended last: the Bin Flags instance in GenABin.hs is
         -- positional, so new fields go at the end (position a_138)
-        baDebugInfo :: Bool
+        baDebugInfo :: Bool,
+        checkOnly :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

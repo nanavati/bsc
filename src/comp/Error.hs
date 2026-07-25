@@ -1133,6 +1133,7 @@ data ErrMsg =
         | EDollarLink
         | EElabOnlyNotSrcCompile
         | EElabOnlyNoElab
+        | ECheckOnlyConflict String
         | EWrongBackend String String
         | ENoOptUndetNoXZ String
 
@@ -4406,6 +4407,13 @@ getErrorText EElabOnlyNotSrcCompile =
     (System 100, empty,
      s2par ("The flag -elab-only is only supported when compiling source, " ++
             "not when linking or generating code with -c."))
+
+getErrorText (ECheckOnlyConflict fl) =
+    (System 102, empty,
+     s2par ("The flag -check-only cannot be combined with " ++ fl ++ ": " ++
+            "a check compile stops after typechecking and emits only a " ++
+            "signature (.bc), so no module can be elaborated, generated " ++
+            "or linked."))
 
 getErrorText EElabOnlyNoElab =
     (System 101, empty,

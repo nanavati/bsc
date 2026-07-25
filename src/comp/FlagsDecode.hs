@@ -272,7 +272,11 @@ checkBSrcFlags flags filename =
         -- backend) stopping there is already the behavior, so the flag
         -- is accepted with any backend.  Suppressing the .ba as well
         -- would leave nothing generated.
-        if (elabOnly flags && (backend flags /= Nothing)
+        if (checkOnly flags && (backend flags /= Nothing))
+        then DError [(cmdPosition, ECheckOnlyConflict "-sim/-verilog")]
+        else if (checkOnly flags && elabOnly flags)
+        then DError [(cmdPosition, ECheckOnlyConflict "-elab-only")]
+        else if (elabOnly flags && (backend flags /= Nothing)
                            && not (genABin flags))
         then DError [(cmdPosition, EElabOnlyNoElab)]
         else
@@ -314,6 +318,13 @@ checkLinkFlags flags names =
         -- -elab-only applies to compiling source, not linking
         if (elabOnly flags)
         then DError [(cmdPosition, EElabOnlyNotSrcCompile)]
+        else
+        -- -check-only stops after typechecking a source file, so there is
+        -- nothing for it to do here.  Guarded on a backend being set: with
+        -- none, ENoBackendLinking below is the more useful diagnostic and
+        -- this combination was already invalid without -check-only.
+        if (checkOnly flags && backend flags /= Nothing)
+        then DError [(cmdPosition, ECheckOnlyConflict "linking")]
         else
         -- Verilog backend
         if (backend flags == Just Verilog)
@@ -376,6 +387,9 @@ checkCodeGenFlags flags names =
             -- -elab-only suppresses exactly what -c generates
             if (elabOnly flags)
             then DError [(cmdPosition, EElabOnlyNotSrcCompile)]
+            else
+            if (checkOnly flags && backend flags /= Nothing)
+            then DError [(cmdPosition, ECheckOnlyConflict "-c")]
             else
             case (backend flags) of
               Nothing -> DError [(cmdPosition, ENoBackendCodeGen mods)]
@@ -645,6 +659,7 @@ defaultFlags bluespecdir = Flags {
         dumpFormats = ["vcd"],
         dumps = [],
         elabOnly = False,
+        checkOnly = False,
         enablePoisonPills = False,
         entry = Nothing,
         baDebugInfo = False,
@@ -1271,6 +1286,11 @@ externalFlags = [
         ("elab",
          (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
           "generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
+
+        ("check-only",
+         (Toggle (\f x -> f {checkOnly=x}) (showIfTrue checkOnly),
+          "stop after typechecking and write a signature-only .bc file; " ++
+          "imports prefer .bc and fall back to .bo", Visible)),
 
         ("elab-only",
          (Toggle (\f x -> f {elabOnly=x}) (showIfTrue elabOnly),

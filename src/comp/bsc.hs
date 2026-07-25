@@ -36,6 +36,7 @@ import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
+                    bcSuffix,
                     mkAName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
@@ -103,7 +104,7 @@ import FixupDefs(fixupDefs, updDef, mkDictBuckets)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
-import GenBin(genBinFile)
+import GenBin(genBinFile, genBcFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
@@ -455,278 +456,304 @@ compilePackage
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
-    --when (early flags) $ return ()
-    let prefix = dirName name ++ "/"
-
-    -- Generate wrapper info for foreign function imports
-    -- (this always happens, even when not generating for modules)
-    start flags DFgenforeign
-    foreign_func_info <- genForeign errh flags prefix mod
-    t <- dump errh flags t DFgenforeign dumpnames foreign_func_info
-
-    -- Generate VPI wrappers for foreign function imports
-    start flags DFgenVPI
-    blurb <- mkGenFileHeader flags
-    let ffuncs = map snd foreign_func_info
-    -- Note: with DPI, wrapper generation happens later (in genModuleVerilog),
-    -- once the concrete widths of polymorphic imports are known; see there.
-    vpi_wrappers <- if (backend flags /= Just Verilog)
-                    then return []
-                    else if (useDPI flags)
-                         then return []
-                         else genVPIWrappers errh flags prefix blurb ffuncs
-    t <- dump errh flags t DFgenVPI dumpnames vpi_wrappers
-
-    -- Simplify a little
-    start flags DFsimplified
-    let mod' = simplify flags mod
-    t <- dump errh flags t DFsimplified dumpnames mod'
-    stats flags DFsimplified mod'
-
-    -- Lift dictionaries to top level (constructed directly as IDefs
-    -- over interned types; iConvPackage splices them into the package)
-    start flags DFliftdicts
-    let (mod_lifted, lifted_defs) =
-            if liftDicts flags then liftDictsPkg errh flags symt mod'
-            else (mod', [])
-    t <- dump errh flags t DFliftdicts dumpnames mod_lifted
-    stats flags DFliftdicts mod_lifted
-
     --------------------------------------------
-    -- Convert to internal abstract syntax
+    -- -check-only: the package typechecked, which was the whole question.
+    -- Emit the signature-only .bc and stop.
+    --
+    -- Everything below feeds iConvPackage and the IR pipeline, and the only
+    -- consumer of a check artifact is another check compile, which typechecks
+    -- against signatures.  Of the passes skipped, Simplify, LiftDicts and
+    -- VPIWrappers have no bsError/bsWarning sites at all, and genVPI is a
+    -- no-op without a backend; the single diagnostic given up is
+    -- genForeign's EForeignFuncDuplicates, which BscElab/BscBa still raise on
+    -- the same source.  Skipping genForeign also stops a check emitting
+    -- foreign .ba files as a side effect.
+    --
+    -- genUserSign needs only symt (sympostctxreduce) and mctx (ctxreduce).
     --------------------------------------------
-    start flags DFinternal
-    imod <- iConvPackage errh flags symt lifted_defs mod_lifted
-    t <- dump errh flags t DFinternal dumpnames imod
-    when (showISyntax flags) (putStrLnF (show imod))
-    iPCheck flags symt imod "internal"
-    stats flags DFinternal imod
+    if checkOnly flags
+     then do
+        (bi_sig, _) <- genUserSign errh symt mctx
+        let bc_filename = putInDir (bdir flags) name bcSuffix
+            remapP = remapPositionFile (remapPathPrefix flags)
+        genBcFile errh remapP bc_filename bi_sig
+        when (verbose flags) $
+             putStrLnF ("Check file created: " ++
+                        getRelativeFilePath bc_filename)
+        return (not tcErrors, binmap0, hashmap0)
+     else do
+     --when (early flags) $ return ()
+     let prefix = dirName name ++ "/"
 
-    -- Read binary interface files
-    start flags DFbinary
-    let (_, _, impsigs', binmods0, pkgsigs) =
-            let findFn i = fromJustOrErr "bsc: binmap" $ M.lookup i binmap
-                sorted_ps = [ getIdString i
-                               | CImpSign _ _ (CSignature i _ _ _) <- impsigs ]
-            in  unzip5 $ map findFn sorted_ps
+     -- Generate wrapper info for foreign function imports
+     -- (this always happens, even when not generating for modules)
+     start flags DFgenforeign
+     foreign_func_info <- genForeign errh flags prefix mod
+     t <- dump errh flags t DFgenforeign dumpnames foreign_func_info
 
-    -- injects the "magic" variables genC and genVerilog
-    -- should probably be done via primitives
-    -- XXX does this interact with signature matching
-    -- or will it be caught by flag-matching?
-    let adjEnv ::
-            [(String, IExpr a)] ->
-            (IPackage a) ->
-            (IPackage a)
-        adjEnv env (IPackage i lps ps ds)
-                            | getIdString i == "Prelude" =
-                    IPackage i lps ps (map adjDef ds)
-            where
-                adjDef (IDef i t x p) =
-                    case lookup (getIdString (unQualId i)) env of
-                        Just e ->  IDef i t e p
-                        Nothing -> IDef i t x p
-        adjEnv _ p = p
+     -- Generate VPI wrappers for foreign function imports
+     start flags DFgenVPI
+     blurb <- mkGenFileHeader flags
+     let ffuncs = map snd foreign_func_info
+     -- Note: with DPI, wrapper generation happens later (in genModuleVerilog),
+     -- once the concrete widths of polymorphic imports are known; see there.
+     vpi_wrappers <- if (backend flags /= Just Verilog)
+                     then return []
+                     else if (useDPI flags)
+                          then return []
+                          else genVPIWrappers errh flags prefix blurb ffuncs
+     t <- dump errh flags t DFgenVPI dumpnames vpi_wrappers
 
-    let
-        -- adjust the "raw" packages and then add back their signatures
-        -- so they can be put into the current IPackage for linking info
-        binmods = zip (map (adjEnv env) binmods0) pkgsigs
+     -- Simplify a little
+     start flags DFsimplified
+     let mod' = simplify flags mod
+     t <- dump errh flags t DFsimplified dumpnames mod'
+     stats flags DFsimplified mod'
 
-        -- The lifted-dictionary buckets used by "fixupDefs" and
-        -- "updDef" depend only on the imported packages ("binmods"),
-        -- which are fixed for the entire compile; so build them once
-        -- here and thread them through, rather than rebuilding them on
-        -- every call (once per compile plus once per synthesized
-        -- module, via "updDef").
-        dictBuckets = mkDictBuckets binmods
+     -- Lift dictionaries to top level (constructed directly as IDefs
+     -- over interned types; iConvPackage splices them into the package)
+     start flags DFliftdicts
+     let (mod_lifted, lifted_defs) =
+             if liftDicts flags then liftDictsPkg errh flags symt mod'
+             else (mod', [])
+     t <- dump errh flags t DFliftdicts dumpnames mod_lifted
+     stats flags DFliftdicts mod_lifted
 
-    t <- dump errh flags t DFbinary dumpnames binmods
+     --------------------------------------------
+     -- Convert to internal abstract syntax
+     --------------------------------------------
+     start flags DFinternal
+     imod <- iConvPackage errh flags symt lifted_defs mod_lifted
+     t <- dump errh flags t DFinternal dumpnames imod
+     when (showISyntax flags) (putStrLnF (show imod))
+     iPCheck flags symt imod "internal"
+     stats flags DFinternal imod
 
-    -- For "genModule" we construct a symbol table that includes all defs,
-    -- not just those that are user visible.
-    -- XXX This is needed for inserting RWire primitives in AAddSchedAssumps
-    -- XXX but is it needed anywhere else?
-    start flags DFsympostbinary
-    -- XXX The way we construct the symtab is to replace the user-visible
-    -- XXX imports with the full imports.
-    let mint = replaceImportedSignatures mctx impsigs'
-    internalSymt <- mkSymTab errh mint
-    t <- dump errh flags t DFsympostbinary dumpnames mint
+     -- Read binary interface files
+     start flags DFbinary
+     let (_, _, impsigs', binmods0, pkgsigs) =
+             let findFn i = fromJustOrErr "bsc: binmap" $ M.lookup i binmap
+                 sorted_ps = [ getIdString i
+                                | CImpSign _ _ (CSignature i _ _ _) <- impsigs ]
+             in  unzip5 $ map findFn sorted_ps
 
-    start flags DFfixup
-    let (imodf, alldefsList) = fixupDefs dictBuckets imod binmods
-    let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
-    iPCheck flags symt imodf "fixup"
-    t <- dump errh flags t DFfixup dumpnames imodf
+     -- injects the "magic" variables genC and genVerilog
+     -- should probably be done via primitives
+     -- XXX does this interact with signature matching
+     -- or will it be caught by flag-matching?
+     let adjEnv ::
+             [(String, IExpr a)] ->
+             (IPackage a) ->
+             (IPackage a)
+         adjEnv env (IPackage i lps ps ds)
+                             | getIdString i == "Prelude" =
+                     IPackage i lps ps (map adjDef ds)
+             where
+                 adjDef (IDef i t x p) =
+                     case lookup (getIdString (unQualId i)) env of
+                         Just e ->  IDef i t e p
+                         Nothing -> IDef i t x p
+         adjEnv _ p = p
 
-    start flags DFisimpdicts
-    let imodsd = iSimpDicts imodf
-    iPCheck flags symt imodsd "isimpdicts"
-    t <- dump errh flags t DFisimpdicts dumpnames imodsd
+     let
+         -- adjust the "raw" packages and then add back their signatures
+         -- so they can be put into the current IPackage for linking info
+         binmods = zip (map (adjEnv env) binmods0) pkgsigs
 
-    start flags DFisimplify
-    let imods :: IPackage HeapData
-        imods = iSimplify imodsd
-    iPCheck flags symt imods "isimplify"
-    t <- dump errh flags t DFisimplify dumpnames imods
-    stats flags DFisimplify imods
+         -- The lifted-dictionary buckets used by "fixupDefs" and
+         -- "updDef" depend only on the imported packages ("binmods"),
+         -- which are fixed for the entire compile; so build them once
+         -- here and thread them through, rather than rebuilding them on
+         -- every call (once per compile plus once per synthesized
+         -- module, via "updDef").
+         dictBuckets = mkDictBuckets binmods
 
-    let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
-        orderGens (IPackage pid _ _ ds) gs =
-                --trace (ppReadable (gis, g, os)) $
-                                              map get os
-          where gis = [ qualId pid i
-                                | (WrapInfo i _ _ _ _ _) <- gs ]
-                tr = [ (qualId pid i_, qualId pid i)
-                                | (WrapInfo i _ _ i_ _ _) <- gs ]
-                -- Set-backed membership for the three scans below.  As
-                -- lists these cost O(|ds| * |gis|) and, for the SCC edge
-                -- lists, O(|ds| * |fdVars| * |ds'|) Id comparisons -- and
-                -- one Id comparison is two FString compares, so this
-                -- single block dominated the compile on definition-heavy
-                -- packages (profiled at ~69% of runtime, split across
-                -- orderGens.g / idEq / id_fs, before this change).
-                -- Semantics are preserved: filter keeps the first list's
-                -- order and duplicates, which is what intersect does.
-                gisSet = S.fromList gis
-                ds' = [ IDef (lookupWithDefault tr i i) t e p
-                                | IDef i t e p <- ds, i `S.notMember` gisSet ]
-                isSet = S.fromList [ i | IDef i _ _ _ <- ds' ]
-                g  = [ (i, filter (`S.member` isSet) (fdVars e))
-                                | IDef i _ e _ <- ds' ]
-                iis = scc g
-                os = filter (`S.member` gisSet) (concat iis)
-                get i = headOrErr "bsc.orderGens: no WrapInfo"
-                                  [ x | x@(WrapInfo i' _ _ _ _ _) <- gs,
-                                                unQualId i == i' ]
-        ordgens :: [WrapInfo]
-        ordgens = orderGens imods gens
+     t <- dump errh flags t DFbinary dumpnames binmods
 
-    when (verbose flags) $
-        putStr ("modules: " ++
-                    ppReadable [ i | (WrapInfo { mod_nm = i }) <- ordgens ] ++
-                    "\n")
+     -- For "genModule" we construct a symbol table that includes all defs,
+     -- not just those that are user visible.
+     -- XXX This is needed for inserting RWire primitives in AAddSchedAssumps
+     -- XXX but is it needed anywhere else?
+     start flags DFsympostbinary
+     -- XXX The way we construct the symtab is to replace the user-visible
+     -- XXX imports with the full imports.
+     let mint = replaceImportedSignatures mctx impsigs'
+     internalSymt <- mkSymTab errh mint
+     t <- dump errh flags t DFsympostbinary dumpnames mint
 
-    let getDef :: IPackage a -> Id -> IDef a
-        getDef (IPackage _ _ _ ds) i =
-           case [ d | d@(IDef i' _ _ _) <- ds, unQualId i == unQualId i' ] of
-                [ d ] -> d
-                _ -> internalError ("No definition for " ++ pfpString i)
+     start flags DFfixup
+     let (imodf, alldefsList) = fixupDefs dictBuckets imod binmods
+     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
+     iPCheck flags symt imodf "fixup"
+     t <- dump errh flags t DFfixup dumpnames imodf
 
-    -- Generate code for all requested modules
-    -- TODO this function gen should be defined outside the compilePackage body
-    -- Note: This accumulates the new IPackage on each iteration, but it
-    --   doesn't update "alldefs"; this is likely OK because it is only used
-    --   to build undefined values (in IExpand) and to insert RWires
-    --   (in AAddSchedAssumps)
-    let gen :: (IPackage HeapData, Bool) -> [WrapInfo] -> IO (IPackage HeapData, Bool)
-        gen (im, !success) []  = return (im, success)
-        gen (im, !success) (wi@(WrapInfo { mod_nm = i, wrapped_mod = i' }) : xs) = do
-            let (mfile, mpkg, _) = dumpnames
-                dumpnames' = (mfile, mpkg, Just (getIdString (unQualId i)))
-                fwrapper = i `elem` map (\ (i, _, _, _, _) -> i) funcs
+     start flags DFisimpdicts
+     let imodsd = iSimpDicts imodf
+     iPCheck flags symt imodsd "isimpdicts"
+     t <- dump errh flags t DFisimpdicts dumpnames imodsd
 
-            let
-                -- in the Maybe monad
-                ex_filt ex = do (CE.ErrorCall s) <- (CE.fromException ex)::(Maybe CE.ErrorCall)
-                                return s
-                def_comp = do
-                  def <- genModule errh wi fwrapper flags dumpnames'
-                             prefix (getIdBaseString pkgId)
-                             internalSymt alldefs (getDef im i')
-                  return (def, True)
-                ex_comp s = do
-                  hFlush stdout >> hPutStr stderr s
-                  -- XXX exitFail will do the pre-exit actions again
-                  when (not (enablePoisonPills flags)) $ exitFail errh
-                  return (mkPoisonedCDefn i (orig_cqt wi), False)
+     start flags DFisimplify
+     let imods :: IPackage HeapData
+         imods = iSimplify imodsd
+     iPCheck flags symt imods "isimplify"
+     t <- dump errh flags t DFisimplify dumpnames imods
+     stats flags DFisimplify imods
 
-            (def, ok) <- CE.catchJust ex_filt def_comp ex_comp
+     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
+         orderGens (IPackage pid _ _ ds) gs =
+                 --trace (ppReadable (gis, g, os)) $
+                                               map get os
+           where gis = [ qualId pid i
+                                 | (WrapInfo i _ _ _ _ _) <- gs ]
+                 tr = [ (qualId pid i_, qualId pid i)
+                                 | (WrapInfo i _ _ i_ _ _) <- gs ]
+                 -- Set-backed membership for the three scans below.  As
+                 -- lists these cost O(|ds| * |gis|) and, for the SCC edge
+                 -- lists, O(|ds| * |fdVars| * |ds'|) Id comparisons -- and
+                 -- one Id comparison is two FString compares, so this
+                 -- single block dominated the compile on definition-heavy
+                 -- packages (profiled at ~69% of runtime, split across
+                 -- orderGens.g / idEq / id_fs, before this change).
+                 -- Semantics are preserved: filter keeps the first list's
+                 -- order and duplicates, which is what intersect does.
+                 gisSet = S.fromList gis
+                 ds' = [ IDef (lookupWithDefault tr i i) t e p
+                                 | IDef i t e p <- ds, i `S.notMember` gisSet ]
+                 isSet = S.fromList [ i | IDef i _ _ _ <- ds' ]
+                 g  = [ (i, filter (`S.member` isSet) (fdVars e))
+                                 | IDef i _ e _ <- ds' ]
+                 iis = scc g
+                 os = filter (`S.member` gisSet) (concat iis)
+                 get i = headOrErr "bsc.orderGens: no WrapInfo"
+                                   [ x | x@(WrapInfo i' _ _ _ _ _) <- gs,
+                                                 unQualId i == i' ]
+         ordgens :: [WrapInfo]
+         ordgens = orderGens imods gens
 
-            -- wrappercomp has substages, so record the overall start time
-            tStartWrapper <- getNow
+     when (verbose flags) $
+         putStr ("modules: " ++
+                     ppReadable [ i | (WrapInfo { mod_nm = i }) <- ordgens ] ++
+                     "\n")
 
-            start flags DFwrappercomp
-            when (extraVerbose flags) $
-                putStr ("definition of " ++
-                        getIdString i ++
-                        ":\n" ++
-                        ppReadable def ++
-                        "\n\n")
+     let getDef :: IPackage a -> Id -> IDef a
+         getDef (IPackage _ _ _ ds) i =
+            case [ d | d@(IDef i' _ _ _) <- ds, unQualId i == unQualId i' ] of
+                 [ d ] -> d
+                 _ -> internalError ("No definition for " ++ pfpString i)
 
-            -- "ok2" indicates whether there was a type-checking error
-            -- but multiple-error-reporting chose to keep going;
-            -- since it will already appear as a user error, no need for
-            -- an internal error
-            -- "im" (not "imods"): the accumulated package, so lifted
-            -- dictionaries minted for earlier wrappers are visible --
-            -- their names are not reused and references to them resolve.
-            -- "mod_lifted" supplies the package's typechecked defs, from
-            -- which the wrapper's dictionary lifting reads the
-            -- instance-def info (they are not in the symbol table).
-            let (CPackage _ _ _ _ _ host_ds _) = mod_lifted
-            (idef, wrap_lifted_defs, ok2)
-                <- compileCDefToIDef errh flags dumpnames' symt host_ds im def
+     -- Generate code for all requested modules
+     -- TODO this function gen should be defined outside the compilePackage body
+     -- Note: This accumulates the new IPackage on each iteration, but it
+     --   doesn't update "alldefs"; this is likely OK because it is only used
+     --   to build undefined values (in IExpand) and to insert RWires
+     --   (in AAddSchedAssumps)
+     let gen :: (IPackage HeapData, Bool) -> [WrapInfo] -> IO (IPackage HeapData, Bool)
+         gen (im, !success) []  = return (im, success)
+         gen (im, !success) (wi@(WrapInfo { mod_nm = i, wrapped_mod = i' }) : xs) = do
+             let (mfile, mpkg, _) = dumpnames
+                 dumpnames' = (mfile, mpkg, Just (getIdString (unQualId i)))
+                 fwrapper = i `elem` map (\ (i, _, _, _, _) -> i) funcs
 
-            t <- getNow
-            start flags DFwrapper_fixup
-            -- The wrapper's lifted dictionaries join the package's defs
-            -- (reaching the .bo like any other definition), before the
-            -- def update below re-ties the package's cyclic references
-            let im_lifted =
-                    if null wrap_lifted_defs then im
-                    else im { ipkg_defs = ipkg_defs im ++ wrap_lifted_defs }
-            -- Replace the pre-synthesis definition for a module with its
-            -- post-synthesis definition, and update the package's cyclic
-            -- references
-            -- XXX Note that alldefs is not updated here.  This works
-            -- XXX because the defs we use from it will not have changed.
-            let im' = updDef dictBuckets idef im_lifted binmods
-            t <- dump errh flags t DFwrapper_fixup dumpnames' im'
+             let
+                 -- in the Maybe monad
+                 ex_filt ex = do (CE.ErrorCall s) <- (CE.fromException ex)::(Maybe CE.ErrorCall)
+                                 return s
+                 def_comp = do
+                   def <- genModule errh wi fwrapper flags dumpnames'
+                              prefix (getIdBaseString pkgId)
+                              internalSymt alldefs (getDef im i')
+                   return (def, True)
+                 ex_comp s = do
+                   hFlush stdout >> hPutStr stderr s
+                   -- XXX exitFail will do the pre-exit actions again
+                   when (not (enablePoisonPills flags)) $ exitFail errh
+                   return (mkPoisonedCDefn i (orig_cqt wi), False)
 
-            t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
-            -- recurse for each module in [WrapInfo]
-            gen (im', success && ok && ok2) xs
+             (def, ok) <- CE.catchJust ex_filt def_comp ex_comp
+
+             -- wrappercomp has substages, so record the overall start time
+             tStartWrapper <- getNow
+
+             start flags DFwrappercomp
+             when (extraVerbose flags) $
+                 putStr ("definition of " ++
+                         getIdString i ++
+                         ":\n" ++
+                         ppReadable def ++
+                         "\n\n")
+
+             -- "ok2" indicates whether there was a type-checking error
+             -- but multiple-error-reporting chose to keep going;
+             -- since it will already appear as a user error, no need for
+             -- an internal error
+             -- "im" (not "imods"): the accumulated package, so lifted
+             -- dictionaries minted for earlier wrappers are visible --
+             -- their names are not reused and references to them resolve.
+             -- "mod_lifted" supplies the package's typechecked defs, from
+             -- which the wrapper's dictionary lifting reads the
+             -- instance-def info (they are not in the symbol table).
+             let (CPackage _ _ _ _ _ host_ds _) = mod_lifted
+             (idef, wrap_lifted_defs, ok2)
+                 <- compileCDefToIDef errh flags dumpnames' symt host_ds im def
+
+             t <- getNow
+             start flags DFwrapper_fixup
+             -- The wrapper's lifted dictionaries join the package's defs
+             -- (reaching the .bo like any other definition), before the
+             -- def update below re-ties the package's cyclic references
+             let im_lifted =
+                     if null wrap_lifted_defs then im
+                     else im { ipkg_defs = ipkg_defs im ++ wrap_lifted_defs }
+             -- Replace the pre-synthesis definition for a module with its
+             -- post-synthesis definition, and update the package's cyclic
+             -- references
+             -- XXX Note that alldefs is not updated here.  This works
+             -- XXX because the defs we use from it will not have changed.
+             let im' = updDef dictBuckets idef im_lifted binmods
+             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
+
+             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
+             -- recurse for each module in [WrapInfo]
+             gen (im', success && ok && ok2) xs
 
 
-    (imodr, success) <- gen (imods, True) ordgens
+     (imodr, success) <- gen (imods, True) ordgens
 
-    t <- getNow
-    -- Finally, generate interface files
-    start flags DFwriteBin
+     t <- getNow
+     -- Finally, generate interface files
+     start flags DFwriteBin
 
-    -- Generate the user-visible type signature
-    (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
-    -- Generate a type signature where everything is visible
-    bo_sig <- genEverythingSign errh symt mctx
+     -- Generate the user-visible type signature
+     (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
+     -- Generate a type signature where everything is visible
+     bo_sig <- genEverythingSign errh symt mctx
 
-    -- Check for unused imports by combining packages from all three sources
-    let (CPackage _ _ imports _ _ _ _) = mctx
-        allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
-        importedPkgs = [i | (CImpId _ i) <- imports]
-        unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
-        unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
-    when (not (null unusedWarns)) $ bsWarning errh unusedWarns
+     -- Check for unused imports by combining packages from all three sources
+     let (CPackage _ _ imports _ _ _ _) = mctx
+         allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
+         importedPkgs = [i | (CImpId _ i) <- imports]
+         unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
+         unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
+     when (not (null unusedWarns)) $ bsWarning errh unusedWarns
 
-    -- Generate binary version of the internal tree .bo file
-    let bin_filename = putInDir (bdir flags) name binSuffix
-    let remapP = remapPositionFile (remapPathPrefix flags)
-    genBinFile errh remapP bin_filename bi_sig bo_sig imodr
+     -- Generate binary version of the internal tree .bo file
+     let bin_filename = putInDir (bdir flags) name binSuffix
+     let remapP = remapPositionFile (remapPathPrefix flags)
+     genBinFile errh remapP bin_filename bi_sig bo_sig imodr
 
-    -- Print one message for the two files
-    let rel_binname = getRelativeFilePath bin_filename
-    when (verbose flags) $
-         putStrLnF ("Compiled package file created: " ++ rel_binname)
-    t <- dumpStr errh flags t DFwriteBin dumpnames bin_filename
+     -- Print one message for the two files
+     let rel_binname = getRelativeFilePath bin_filename
+     when (verbose flags) $
+          putStrLnF ("Compiled package file created: " ++ rel_binname)
+     t <- dumpStr errh flags t DFwriteBin dumpnames bin_filename
 
-    -- XXX We could add the generated .bo directly to the maps,
-    -- XXX but we lack the hash (which is generated when reading in a file)
-    -- let binfile = (rel_binname, bi_sig, bo_sig, modr, ...)
-    --     binmap' = ...
-    --     hashmap' = ...
+     -- XXX We could add the generated .bo directly to the maps,
+     -- XXX but we lack the hash (which is generated when reading in a file)
+     -- let binfile = (rel_binname, bi_sig, bo_sig, modr, ...)
+     --     binmap' = ...
+     --     hashmap' = ...
 
-    return (success && not tcErrors, binmap, hashmap)
+     return (success && not tcErrors, binmap, hashmap)
 
 
 genModule ::
