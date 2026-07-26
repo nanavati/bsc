@@ -272,6 +272,14 @@ checkBSrcFlags flags filename =
         -- backend) stopping there is already the behavior, so the flag
         -- is accepted with any backend.  Suppressing the .ba as well
         -- would leave nothing generated.
+        -- XXX -g is refused under -check-only only as collateral: it reads
+        -- XXX as a codegen request, so S0014 demands a backend.  Its other
+        -- XXX half declares a synthesis boundary, which a check compile
+        -- XXX could honour -- to check wrapping legality (the ENoInline*
+        -- XXX family) and to record the intended closure for downstream
+        -- XXX cutoff.  Blocked because bsc only wraps when generating
+        -- XXX (bsc.hs: generating = backend flags /= Nothing).  Revisit if
+        -- XXX wrapping moves after typechecking onto an asserted package.
         if (checkOnly flags && (backend flags /= Nothing))
         then DError [(cmdPosition, ECheckOnlyConflict "-sim/-verilog")]
         else if (checkOnly flags && elabOnly flags)
@@ -545,6 +553,7 @@ traceflags = [
           "trace-atf-rules",
           "trace-ctxreduce",
           "trace-debug",
+          "dump-usage",
           "trace-drop-dicts",
           "trace-eval-steps",
           "trace-eval-types",
