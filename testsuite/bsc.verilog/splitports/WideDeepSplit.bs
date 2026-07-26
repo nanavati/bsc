@@ -1,0 +1,52 @@
+package WideDeepSplit where
+
+import Vector
+import SplitPorts
+
+-- A deep split of a wide struct whose fields are themselves split.
+--
+-- The ports keep the structure of the type -- one tuple element per field,
+-- nested all the way down -- rather than being flattened into a single tuple.
+-- Flattening appended each level's ports onto the enclosing tuple, which is
+-- quadratic in the number of ports; keeping the structure makes it linear.
+-- This test just has to elaborate: every method here splits into 40 ports.
+
+struct Pair =
+  a :: UInt 8
+  b :: Int 8
+ deriving (Bits)
+
+struct Quad =
+  p :: Pair
+  q :: Pair
+ deriving (Bits)
+
+struct Wide =
+  f0 :: Quad
+  f1 :: Quad
+  f2 :: Quad
+  f3 :: Quad
+  f4 :: Quad
+  f5 :: Quad
+  f6 :: Quad
+  f7 :: Quad
+  fv :: Vector 4 Pair
+ deriving (Bits)
+
+interface WideSplitTest =
+  -- one argument split into 40 input ports
+  put :: DeepSplit Wide -> Action
+  -- a result split into 40 output ports
+  get :: DeepSplit Wide
+  -- both at once
+  xform :: DeepSplit Wide -> DeepSplit Wide
+
+{-# synthesize mkWideDeepSplit #-}
+mkWideDeepSplit :: Module WideSplitTest
+mkWideDeepSplit =
+  module
+    r :: Reg Wide <- mkRegU
+    interface
+      put (DeepSplit w) = r := w
+      get = DeepSplit r
+      xform (DeepSplit w) = DeepSplit (w { f0 = w.f1; })

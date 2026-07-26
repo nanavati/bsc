@@ -20,7 +20,8 @@ package Vector(
         countElem, countIf, countOnes, countOnesAlt,
         rotateBy, rotateBitsBy,
         readVReg, writeVReg, toChunks, fromChunks, drop, Ascii,
-        ConcatTuple(..), ConcatTuple'(..)
+        ConcatTuple(..), ConcatTuple'(..),
+        VectorTuple(..), toTupleVector, fromTupleVector
         ) where
 
 import List
@@ -1330,6 +1331,44 @@ instance (Add n1 1 n, ConcatTuple' n1 a b) => ConcatTuple' n a (TAppendTuple b b
         v1 :: Vector (TExp n1) a = unconcatTuple' res.fst
         v2 :: Vector (TExp n1) a = unconcatTuple' res.snd
     in append v1 v2
+
+
+-- Convert between a vector of n values and a tuple with one element per
+-- vector element.  Unlike ConcatTuple, the element type is not flattened into
+-- the enclosing tuple, so the tuple always has exactly n elements and both
+-- directions are O(n) rather than O(n lg n).
+--
+-- The conversions are written over List rather than Vector, because taking
+-- the tail of a Vector copies the whole vector, which would make the
+-- recursion quadratic; toTupleVector/fromTupleVector wrap them back up.
+class VectorTuple n a b | n a -> b where
+  type TVectorTuple n a = b
+  -- Convert the first n elements of a list into an n-element tuple.
+  listToTuple :: List a -> b
+  -- Convert an n-element tuple into a list of n elements.
+  tupleToList :: b -> List a
+
+instance VectorTuple 0 a () where
+  listToTuple _ = ()
+  tupleToList _ = Nil
+
+instance VectorTuple 1 a a where
+  listToTuple (Cons x _) = x
+  listToTuple Nil = error "Vector.listToTuple: list too short"
+  tupleToList x = Cons x Nil
+
+instance (Add 1 n1 n, VectorTuple n1 a b) => VectorTuple n a (a, b) where
+  listToTuple (Cons x xs) = (x, listToTuple xs)
+  listToTuple Nil = error "Vector.listToTuple: list too short"
+  tupleToList (x, y) = Cons x (tupleToList y)
+
+-- Convert a Vector into a tuple with one element per vector element.
+toTupleVector :: (VectorTuple n a b) => Vector n a -> b
+toTupleVector v = listToTuple (toList v)
+
+-- Convert a tuple with one element per vector element back into a Vector.
+fromTupleVector :: (VectorTuple n a b) => b -> Vector n a
+fromTupleVector x = toVector (tupleToList x)
 
 
 --@ \item{\bf Examples Using the Vector Type}

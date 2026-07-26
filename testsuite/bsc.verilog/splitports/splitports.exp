@@ -274,6 +274,13 @@ test_c_veri SplitVectorOps
 
 # ----------
 
+# A wide struct of split structs: the ports keep the structure of the type,
+# one tuple element per field nested all the way down, so elaborating the
+# 40 ports of each method is linear rather than quadratic in the port count.
+compile_verilog_pass WideDeepSplit.bs
+
+# ----------
+
 compile_verilog_fail_error TooManyArgNames.bs S0015
 compare_file TooManyArgNames.bs.bsc-vcomp-out
 

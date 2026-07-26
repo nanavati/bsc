@@ -715,8 +715,9 @@ aPathsPreSched errh flags apkg = do
   let mkDefEdges (ADef i (ATTuple ts) e _) =
           concat [ mkElemEdges i e k et | (k, et) <- zip [1..] ts ]
       mkDefEdges (ADef i _ e _) = mkEdges (PNDef i) e env
-      -- APaths assumes tuples are flat (SplitPorts flattens even deep splits to
-      -- a tuple of leaves), so a tuple element should never itself be a tuple.
+      -- APaths assumes tuples are flat.  A SplitPorts value keeps the
+      -- structure of its type, but AConv flattens that tree of pairs to its
+      -- leaves, so a tuple element should never itself be a tuple.
       mkElemEdges i _ _ (ATTuple _) =
           internalError ("APaths.mkDefEdges: nested tuple in def " ++
                          ppReadable i ++ " -- tuples are expected to be " ++

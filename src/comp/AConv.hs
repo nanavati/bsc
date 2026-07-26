@@ -614,18 +614,46 @@ aExpr e = internalError
                (show p) ++ ":" ++ (showTypeless e))
     where p = getIExprPosition e
 
+-- One AExpr per hardware port of a (possibly nested) PrimPair tuple value,
+-- in the same left-to-right order as aTupleTypesConv gives their types.
 aTupleExpr :: IExpr a -> M [AExpr]
 aTupleExpr (IAps (ICon i _) [t1, t2] [e1, e2]) | i == idPrimPair = do
-        ae1 <- aSExpr e1
-        ae2 <- aTupleExpr e2
-        return (ae1:ae2)
+        aes1 <- aTupleExpr e1
+        aes2 <- aTupleExpr e2
+        return (aes1 ++ aes2)
 aTupleExpr (ICon i _) | i == idPrimUnit = return []
-aTupleExpr e = fmap (:[]) (aSExpr e)
+-- A sub-tuple that is not a literal pair (a reference to a tuple-valued def,
+-- say) still stands for several ports, so select them out of it.
+aTupleExpr e = fmap argInputPorts (aSExpr e)
 
 -- the PrimFst/PrimSnd selectors that project an element out of a
 -- tuple-returning method's result
 isTupleSelector :: Id -> Bool
 isTupleSelector s = s == idPrimFst || s == idPrimSnd
+
+-- The number of hardware ports covered by a (converted) tuple type.
+aTuplePortCount :: AType -> Integer
+aTuplePortCount (ATTuple ts) = genericLength ts
+aTuplePortCount _ = 1
+
+-- The 1-based index of the port picked out of a tuple of the given type by a
+-- chain of PrimFst/PrimSnd selectors.  A port structure keeps the structure of
+-- the value it was split from, so the chain walks a tree of pairs rather than
+-- a right-nested list: taking "snd" skips every port of the left subtree (not
+-- just one), and taking "fst" skips none.
+--
+-- The selectors come from unfoldICSel, which lists them outermost-first, so
+-- they are applied to the tuple in reverse order.  Each is paired with the
+-- type of the value it selects, which is what gives the subtree port counts.
+aTupleSelIndex :: AType -> [(Id, AType)] -> Integer
+aTupleSelIndex t sels = 1 + walk t (reverse sels)
+  where walk _ [] = 0
+        walk cur ((s, t') : rest)
+            | s == idPrimSnd = (aTuplePortCount cur - aTuplePortCount t') +
+                               walk t' rest
+            | s == idPrimFst = walk t' rest
+            | otherwise = internalError ("AConv.aTupleSelIndex: not a tuple " ++
+                                         "selector: " ++ ppReadable s)
 
 aSelExpr :: [(Id, AType)] -> [IExpr a] -> M AExpr
 
@@ -658,20 +686,17 @@ aSelExpr [(m, t)] [(IAps (ICon i (ICForeign {fName = name,
         return (ATaskValue t i name isC n)
 
 -- A port selected (via PrimFst/PrimSnd) from a value method that returns a
--- tuple.  The value method still carries its arguments.  The number of PrimSnd
--- selectors skipped to reach the method is the 0-based output port index.
+-- tuple.  The value method still carries its arguments.
 aSelExpr sels (ICon i (ICStateVar { }) : es)
     | (pfx@((_, atype) : _), [(m, atypeTup)]) <- span (isTupleSelector . fst) sels = do
   i' <- transId i
   es' <- mapM aSExpr (dropPrimUnitArgs es)
-  let idx = toInteger $ length (filter ((== idPrimSnd) . fst) pfx)
-  return $ ATupleSel atype (AMethCall atypeTup i' m es') (idx + 1)
+  let idx = aTupleSelIndex atypeTup pfx
+  return $ ATupleSel atype (AMethCall atypeTup i' m es') idx
 
 -- The value part of an ActionValue method, either bare or with a port selected
 -- (via PrimFst/PrimSnd) from a tuple-returning method.  The arguments were
--- dropped in IExpand, so none should remain.  When there are leading
--- PrimFst/PrimSnd selectors, the number of PrimSnd selectors is the 0-based
--- output port index.
+-- dropped in IExpand, so none should remain.
 aSelExpr sels base@(ICon i (ICStateVar { }) : es)
     | (pfx, [(iav, atypeTup), (m, _)]) <- span (isTupleSelector . fst) sels
     , iav == idAVValue_ = do
@@ -688,9 +713,8 @@ aSelExpr sels base@(ICon i (ICStateVar { }) : es)
                    then ASInt i (ATBit 0) (ilDec 0)
                    else meth
     -- a port selected from a tuple-returning ActionValue method
-    ((_, atype) : _) -> do
-      let idx = toInteger $ length (filter ((== idPrimSnd) . fst) pfx)
-      return $ ATupleSel atype meth (idx + 1)
+    ((_, atype) : _) ->
+      return $ ATupleSel atype meth (aTupleSelIndex atypeTup pfx)
 
 -- value method
 aSelExpr [(m, atype)] (ICon i (ICStateVar { }) : es) = do
@@ -710,16 +734,14 @@ aSelExpr [(m, _)] [ICon i (ICClock { iClock = c })] | m == idClockOsc = do
 
 -- tuple (fst/snd) selection from the result of a noinline (foreign) function.
 -- The foreign call produces the combined result value; ATupleSel picks out
--- the element.  The element index is the number of "snd" selectors in the
--- chain (a flat tuple (a,b,c) is the right-nested pairs (a,(b,c)), so the
--- k-th element is reached by k snds followed by an fst).
+-- the element that the selector chain reaches.
 aSelExpr sels@(_:_) [fcall]
-    | all ((\ s -> s == idPrimFst || s == idPrimSnd) . fst) sels
+    | all (isTupleSelector . fst) sels
     , isForeignFunCall fcall = do
   fcall' <- aExpr fcall
   let atype = snd (headOrErr "AConv.aSelExpr: foreign sel" sels)
-      idx = genericLength (filter ((== idPrimSnd) . fst) sels)
-  return $ ATupleSel atype fcall' (idx + 1)
+      idx = aTupleSelIndex (aType fcall') sels
+  return $ ATupleSel atype fcall' idx
   where isForeignFunCall (ICon _ (ICForeign { foports = Just _ })) = True
         isForeignFunCall (IAps (ICon _ (ICForeign { foports = Just _ })) _ _) = True
         isForeignFunCall _ = False
@@ -786,10 +808,16 @@ aTypeConvE a t = abs t []
         abs _ _ = -- ATAbstract idBit []        -- XXX what's this
                   internalError ("aTypeConvE|" ++ show t)
 
+-- The hardware ports of a (possibly nested) PrimPair tuple type, in
+-- left-to-right port order.  A port structure keeps the structure of the value
+-- it was split from, so both sides of a pair may themselves be tuples; ATTuple
+-- is always flat, so the whole tree is flattened to its leaves here.
+-- This matches ISyntaxUtil.itTupleElems, which the evaluator uses to assign
+-- ports to the same type.
 aTupleTypesConv :: Id -> IType -> [AType]
 aTupleTypesConv _ t | t == itPrimUnit = []
 aTupleTypesConv a (ITAp (ITAp (ITCon p _ _) t1) t2) | p == idPrimPair =
-  aTypeConv a t1 : aTupleTypesConv a t2
+  aTupleTypesConv a t1 ++ aTupleTypesConv a t2
 aTupleTypesConv a t = [aTypeConv a t]
 
 realPrim :: PrimOp -> Bool

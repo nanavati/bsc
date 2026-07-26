@@ -187,9 +187,11 @@ isBitType :: IType -> Bool
 isBitType (ITAp c n) = c == itBit
 isBitType _ = False
 
+-- A tuple of Bit, of any shape: a port structure keeps the structure of the
+-- value it was split from, so a tuple element can itself be a tuple.
 isBitTupleType :: IType -> Bool
 isBitTupleType (ITAp (ITAp (ITCon i _ _) t1) t2) | i == idPrimPair =
-  isBitType t1 && isBitTupleType t2
+  isBitTupleType t1 && isBitTupleType t2
 isBitTupleType t = isBitType t
 
 -- extension point for ActionValue methods

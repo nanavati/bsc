@@ -52,9 +52,9 @@ instance PrimUpdateable (SplitVector n a) a where
 instance (FShow (Vector n a)) => FShow (SplitVector n a) where
   fshow (SplitVector v) = fshow v
 
-instance (SplitPorts a p, ConcatTuple n p q) => SplitPorts (SplitVector n a) q where
-  splitPorts (SplitVector v) = concatTuple $ map splitPorts v
-  unsplitPorts = SplitVector ∘ map unsplitPorts ∘ unconcatTuple
+instance (SplitPorts a p, VectorTuple n p q) => SplitPorts (SplitVector n a) q where
+  splitPorts (SplitVector v) = toTupleVector $ map splitPorts v
+  unsplitPorts = SplitVector ∘ map unsplitPorts ∘ fromTupleVector
   portNames _ base =
     let genElem i = portNames (_ :: a) (base +++ "_" +++ integerToString i)
     in List.concat $ List.map genElem $ List.upto 0 (valueOf n - 1)

@@ -636,7 +636,7 @@ vDefMpd vco adef@(ADef _ _ _ _) _ = internalError( "unexpected pattern in AVeril
 -- Connecting a tuple-typed value to a flat list of split ports.
 
 -- Connect each port to the matching part of a tuple value by walking its
--- (right-nested) tuple type with ATupleSel, which vExpr lowers by selecting a
+-- (flat) tuple type with ATupleSel, which vExpr lowers by selecting a
 -- literal element directly or slicing a variable (composing via vSelectBits) --
 -- so a Verilog concatenation is never bit-sliced by hand.  Reusable by any pass
 -- that wires a tuple-typed value to a flat list of sized ports.
