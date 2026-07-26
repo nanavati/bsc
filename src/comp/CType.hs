@@ -337,6 +337,57 @@ cnRefuseKeyErr = unsafePerformIO $ newIORef 0
 cnRefuseRedex :: IORef Int
 cnRefuseRedex = unsafePerformIO $ newIORef 0
 
+-- Why the refusing child was not canonical.  These partition
+-- refuse_child_not_canon: exactly one fires per refusal, blaming f
+-- before a.  The split that matters is blame_ap (the child is itself a
+-- refused application, so this refusal is only cascade, downstream of
+-- some other root) against the rest, which ARE roots.  Cascade is the
+-- multiplier: one bad leaf refuses every ancestor above it.
+{-# NOINLINE cnBlameVar #-}
+cnBlameVar :: IORef Int
+cnBlameVar = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnBlameGen #-}
+cnBlameGen :: IORef Int
+cnBlameGen = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnBlameLeaf #-}
+cnBlameLeaf :: IORef Int
+cnBlameLeaf = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnBlameAp #-}
+cnBlameAp :: IORef Int
+cnBlameAp = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnBlameOther #-}
+cnBlameOther :: IORef Int
+cnBlameOther = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnBlameOverflow #-}
+cnBlameOverflow :: IORef Int
+cnBlameOverflow = unsafePerformIO $ newIORef 0
+
+-- blame the first child that is actually at fault, f before a
+blameChild :: Type -> Type -> IO ()
+blameChild f a = when ctypeStatsEnabled $
+    case blame f of
+      Just r  -> bump r
+      Nothing -> case blame a of
+                   Just r  -> bump r
+                   Nothing -> bump cnBlameOther
+  where
+    blame t
+      -- canonical but with an id too large to fuse: not a structural
+      -- refusal at all, just the key running out of room
+      | typeCanonId t >= 0 =
+          if ccFusable (typeCanonId t) then Nothing else Just cnBlameOverflow
+      | otherwise = Just $ case t of
+          TVar _      -> cnBlameVar
+          TGen _ _    -> cnBlameGen
+          TDefMonad _ -> cnBlameOther
+          TCon_ _ _   -> cnBlameLeaf
+          TAp_ _ _ _  -> cnBlameAp
+
 bump :: IORef Int -> IO ()
 bump r = when ctypeStatsEnabled (modifyIORef' r (+1))
 
@@ -451,7 +502,7 @@ mkTAp f a
       let fi = typeCanonId f
           ai = typeCanonId a
       if fi < 0 || ai < 0 || not (ccFusable fi) || not (ccFusable ai)
-        then do bump cnRefuseChild; return (TAp_ (-1) f a)
+        then do bump cnRefuseChild; blameChild f a; return (TAp_ (-1) f a)
       else if ccIsRedex f a
         then do bump cnRefuseRedex; return (TAp_ (-1) f a)
         else do
@@ -571,6 +622,12 @@ cTypeConsStats = do
     rleaf <- readIORef cnRefuseLeaf
     rkey <- readIORef cnRefuseKeyErr
     rredex <- readIORef cnRefuseRedex
+    bvar <- readIORef cnBlameVar
+    bgen <- readIORef cnBlameGen
+    bleaf <- readIORef cnBlameLeaf
+    bap <- readIORef cnBlameAp
+    both <- readIORef cnBlameOther
+    bovf <- readIORef cnBlameOverflow
     CCState _ _ n <- readIORef ccState
     return [ ("ctype.tap_built", tap)
            , ("ctype.tcon_built", tcon)
@@ -582,6 +639,14 @@ cTypeConsStats = do
            , ("ctype.refuse_leaf", rleaf)
            , ("ctype.refuse_key_err", rkey)
            , ("ctype.refuse_redex", rredex)
+           -- partition of refuse_child_not_canon; blame_ap is cascade,
+           -- the rest are roots
+           , ("ctype.blame_ap_cascade", bap)
+           , ("ctype.blame_var", bvar)
+           , ("ctype.blame_gen", bgen)
+           , ("ctype.blame_leaf", bleaf)
+           , ("ctype.blame_overflow", bovf)
+           , ("ctype.blame_other", both)
            , ("ctype.cons_table_nodes", n)
            ]
 
