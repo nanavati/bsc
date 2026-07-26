@@ -2,13 +2,20 @@
 -- drift apart (previously the same flag string was read by multiple
 -- independent CAFs).
 --
--- One master opt-in, default off: @-share-types@ is the full
--- exponential-killing world -- construction-time interning of ground
--- normal forms on the CType side (the certificate), the boundary
--- interner + conversion memo, the solve-time ground-dictionary pool,
--- and every guard and memo keyed on the certificate.  The legacy
--- measurement flags (@-hack-ctype-cons@, @-hack-ground-ctype@) remain
--- as aliases during the A/B era and will be deleted at graduation.
+-- One master, now default ON: the full exponential-killing world --
+-- construction-time interning of ground normal forms on the CType side
+-- (the certificate), the boundary interner + conversion memo, the
+-- solve-time ground-dictionary pool, and every guard and memo keyed on
+-- the certificate.  @-no-share-types@ backs the whole thing out, which
+-- is the coarsest bisection step and the A/B control.
+--
+-- It is on by default because every fleet consumer was already passing
+-- @-share-types@ explicitly, so "off" described no real configuration
+-- while still being what an unadorned @bsc@ did.  @-share-types@ and
+-- the legacy measurement aliases (@-hack-ctype-cons@,
+-- @-hack-ground-ctype@) stay accepted as no-ops so existing command
+-- lines keep working.  The IType side graduated to unconditional
+-- interning with no master flag at all; this is the step before that.
 --
 -- Beneath the master, subtractive BACKOFFS, one per soundness
 -- argument, for bug bisection only: each disables one class of
@@ -52,7 +59,7 @@ has f = f `elem` progArgs
 -- platforms it is off rather than silently degraded
 {-# NOINLINE shareTypes #-}
 shareTypes :: Bool
-shareTypes = (has "-share-types" || has "-hack-ctype-cons")
+shareTypes = not (has "-no-share-types")
              && finiteBitSize (0 :: Int) >= 64
 
 -- lever 2 (boundary interner, conversion memo, pool activation) is

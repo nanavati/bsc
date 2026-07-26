@@ -575,6 +575,9 @@ traceflags = [
           "hack-ground-ctype",
           "hack-ctype-cons",
           "share-types",
+          -- backs the master out entirely; "share-types" itself is now a
+          -- no-op alias kept so existing command lines keep working
+          "no-share-types",
           "share-types-no-identity",
           "share-types-no-ground",
           "share-types-no-normal",
