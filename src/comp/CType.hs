@@ -367,6 +367,56 @@ cnBlameOther = unsafePerformIO $ newIORef 0
 cnBlameOverflow :: IORef Int
 cnBlameOverflow = unsafePerformIO $ newIORef 0
 
+-- Which leaf is ACTUALLY blocking the intern.  A raw interior node is
+-- itself blocked by something below it, so follow the first raw child
+-- down; that attributes a refusal to its ultimate cause, where
+-- blameChild names only the immediate child.  Cascade therefore
+-- collapses back onto the roots that produced it.
+--
+-- TVars split by tv_num, and that split is the whole question: a
+-- GENERATED one is a unification variable minted per runTI, so it is
+-- transient and unbounded and can never live in the global table --
+-- interning it would be a space leak, because nothing is ever removed
+-- from that table.  A SOURCE-written one is rigid and bounded, and is
+-- the only kind a global interner could ever capture.
+{-# NOINLINE cnRootFlexVar #-}
+cnRootFlexVar :: IORef Int
+cnRootFlexVar = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRootSrcVar #-}
+cnRootSrcVar :: IORef Int
+cnRootSrcVar = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRootGen #-}
+cnRootGen :: IORef Int
+cnRootGen = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRootLeaf #-}
+cnRootLeaf :: IORef Int
+cnRootLeaf = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRootOther #-}
+cnRootOther :: IORef Int
+cnRootOther = unsafePerformIO $ newIORef 0
+
+{-# NOINLINE cnRootDeep #-}
+cnRootDeep :: IORef Int
+cnRootDeep = unsafePerformIO $ newIORef 0
+
+rootBlame :: Type -> Type -> IO ()
+rootBlame f a =
+    when ctypeStatsEnabled (go (0 :: Int) (if typeCanonId f < 0 then f else a))
+  where
+    -- a diagnostic guard against a pathological spine, not a semantic bound
+    go d _ | d > 60 = bump cnRootDeep
+    go d (TAp_ i l r)
+      | i < 0     = go (d + 1) (if typeCanonId l < 0 then l else r)
+    go _ (TVar v) = bump (if isGeneratedTVar v then cnRootFlexVar
+                                               else cnRootSrcVar)
+    go _ (TGen _ _)          = bump cnRootGen
+    go _ (TCon_ i _) | i < 0 = bump cnRootLeaf
+    go _ _                   = bump cnRootOther
+
 -- blame the first child that is actually at fault, f before a
 blameChild :: Type -> Type -> IO ()
 blameChild f a = when ctypeStatsEnabled $
@@ -502,7 +552,8 @@ mkTAp f a
       let fi = typeCanonId f
           ai = typeCanonId a
       if fi < 0 || ai < 0 || not (ccFusable fi) || not (ccFusable ai)
-        then do bump cnRefuseChild; blameChild f a; return (TAp_ (-1) f a)
+        then do bump cnRefuseChild; blameChild f a; rootBlame f a
+                return (TAp_ (-1) f a)
       else if ccIsRedex f a
         then do bump cnRefuseRedex; return (TAp_ (-1) f a)
         else do
@@ -628,6 +679,12 @@ cTypeConsStats = do
     bap <- readIORef cnBlameAp
     both <- readIORef cnBlameOther
     bovf <- readIORef cnBlameOverflow
+    rflex <- readIORef cnRootFlexVar
+    rsrc <- readIORef cnRootSrcVar
+    rgen <- readIORef cnRootGen
+    rleafr <- readIORef cnRootLeaf
+    roth <- readIORef cnRootOther
+    rdeep <- readIORef cnRootDeep
     CCState _ _ n <- readIORef ccState
     return [ ("ctype.tap_built", tap)
            , ("ctype.tcon_built", tcon)
@@ -647,6 +704,14 @@ cTypeConsStats = do
            , ("ctype.blame_leaf", bleaf)
            , ("ctype.blame_overflow", bovf)
            , ("ctype.blame_other", both)
+           -- the same refusals attributed to the leaf ultimately
+           -- responsible, so cascade is charged to its root
+           , ("ctype.root_flexvar", rflex)
+           , ("ctype.root_srcvar", rsrc)
+           , ("ctype.root_gen", rgen)
+           , ("ctype.root_leaf", rleafr)
+           , ("ctype.root_other", roth)
+           , ("ctype.root_deep", rdeep)
            , ("ctype.cons_table_nodes", n)
            ]
 
