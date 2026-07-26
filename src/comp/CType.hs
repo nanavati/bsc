@@ -8,7 +8,7 @@ module CType(
   -- real constructors (the IType idiom); see the consing note below.
   Type(TVar, TCon, TAp, TGen, TDefMonad),
   CType, TyVar(..), TyCon(..), TISort(..), StructSubType(..),
-  isCanonType, typeCanonId, consCTypeEnabled, cTypeConsStats,
+  isCanonType, isGroundType, typeCanonId, consCTypeEnabled, cTypeConsStats,
 
   -- ** Examining Types
   getTyVarId, getTypeKind,
@@ -99,11 +99,16 @@ import FStringCompat
 -- TCon_ and TAp_ carry a canonical-node id slot (the IType idiom):
 -- -1 means a raw node with no canonicality claim; >= 0 means THIS
 -- OBJECT is the unique intern-table representative of its structure,
--- with every child transitively canonical -- and therefore ground
--- (no TVar/TGen/TDefMonad anywhere inside).  Ids are assigned only by
--- the intern machinery below; every other construction site must use
--- -1.  The slot makes the child-membership groundness test a field
--- read, and equal ids mean the same heap object.
+-- with every child transitively canonical.  Ids are assigned only by
+-- the intern machinery below (ccMkId); every other construction site
+-- must use -1.  The slot makes child membership a field read, and
+-- equal ids mean the same heap object.
+--
+-- The id also carries GROUNDNESS in its low bit -- see ccMkId,
+-- isCanonType and isGroundType.  Canonical and ground are two
+-- different claims and only isGroundType certifies the second; every
+-- node interned today happens to be ground, so they coincide, but the
+-- guards must ask for the one they actually need.
 data Type = TVar TyVar          -- ^ type variable
           | TCon_ {-# UNPACK #-} !Int TyCon
                                 -- ^ type constructor (build via 'TCon')
@@ -127,16 +132,39 @@ pattern TAp f a <- TAp_ _ f a
 {-# COMPLETE TVar, TCon, TAp, TGen, TDefMonad #-}
 
 -- | The canonical-node id of a type: -1 unless this object is the
--- unique canonical (hence ground) intern-table node for its structure.
+-- unique intern-table node for its structure.
 typeCanonId :: Type -> Int
 typeCanonId (TAp_ i _ _) = i
 typeCanonId (TCon_ i _)  = i
 typeCanonId _            = -1
 
--- | Canonical implies ground: no TVar/TGen/TDefMonad anywhere inside,
--- so substitution and zonking are identities and tv is empty.
+-- Ids pack (arrival order, groundness) so the two properties a
+-- canonical node can certify stay separable.  They were fused while
+-- only ground nodes were ever interned; keeping them fused is what
+-- makes interning anything variable-bearing unsafe, because a single
+-- test then answers two different questions.
+ccMkId :: Int -> Bool -> Int
+ccMkId n grnd = 2 * n + (if grnd then 0 else 1)
+
+-- | This object IS the unique canonical node for its structure, so
+-- equal ids mean the same heap object.  Says nothing about whether
+-- variables occur inside.  This is what the identity shortcuts (cmp,
+-- mgu, match, per-id memos) and the normal-form guards need -- the
+-- latter because ccConKey refuses synonyms and ATFs at the leaf, which
+-- is orthogonal to variables.
 isCanonType :: Type -> Bool
 isCanonType t = typeCanonId t >= 0
+
+-- | Canonical AND ground: no TVar/TGen/TDefMonad anywhere inside, so
+-- substitution, instantiation, zonking and free-variable collection are
+-- all the identity.  This is the certificate the ground guards rely on,
+-- and the ONLY test that may stand in for "has no variables inside".
+--
+-- Today every interned node is ground, so this agrees with isCanonType
+-- everywhere; the distinction exists so that interning a variable-
+-- bearing node cannot silently widen what the ground guards skip.
+isGroundType :: Type -> Bool
+isGroundType t = let i = typeCanonId t in i >= 0 && even i
 
 -- Derived Show would print the slots and the underscored names; this
 -- reproduces the original derived format over the public constructors.
@@ -510,6 +538,10 @@ ccTidyTyCon tc                = tc
 ccFuse :: Int -> Int -> Int
 ccFuse fi ai = fi * 0x80000000 + ai
 
+-- ccMkId doubles the arrival counter to carry the groundness bit, so
+-- the usable node count is 2^30, not 2^31.  Over budget a node refuses
+-- to cons rather than mis-fusing -- a performance cliff, not a
+-- soundness one -- and blame_overflow is the tripwire.
 ccFusable :: Int -> Bool
 ccFusable i = i < 0x80000000
 
@@ -571,7 +603,9 @@ mkTAp f a
     insAp key st@(CCState apm lm n) =
         case IM.lookup key apm of
           Just c  -> (st, (c, False))
-          Nothing -> let c = TAp_ n f a
+          -- ground only if both children are: one variable-bearing
+          -- child makes the whole spine non-ground
+          Nothing -> let c = TAp_ (ccMkId n (isGroundType f && isGroundType a)) f a
                      in  (CCState (IM.insert key c apm) lm (n+1), (c, True))
 
 -- deep-force a leaf key via its own Ord (kind and sort tag included)
@@ -616,7 +650,9 @@ mkTCon tc
           -- two spellings of one payload (source-form from a .bo,
           -- re-qualified from the symtab) become the same value and
           -- there is nothing left for the payload-free key to conflate
-          Nothing -> let c = TCon_ n (ccTidyTyCon tc)
+          -- ccConKey refuses every variable-bearing leaf, so a leaf
+          -- that interns at all is ground
+          Nothing -> let c = TCon_ (ccMkId n True) (ccTidyTyCon tc)
                      in  (CCState apm (M.insert key c lm) (n+1), (c, True))
 
 -- Share by id, but hand back the CALLER's position.  A canonical leaf is

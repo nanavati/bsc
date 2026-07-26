@@ -327,7 +327,14 @@ expandNullaryMemo i walk = unsafePerformIO $ do
       Nothing -> do
         let r = walk
         _ <- return $! r
-        when (isCanonType r) $
+        -- isGroundType, not isCanonType: this memo is keyed by
+        -- qualified NAME and never reset, so caching a variable-bearing
+        -- body would hand a variable minted for one definition to
+        -- another -- and the tyvar counter restarts per runTI, so the
+        -- numbers collide.  A nullary synonym's body should be closed
+        -- and this should be unreachable; it is a caching gate, so
+        -- tightening it costs at most a miss.
+        when (isGroundType r) $
           atomicModifyIORef' expandSynNameMemo (\ m -> (M.insert key r m, ()))
         return r
 
@@ -444,7 +451,7 @@ class Instantiate t where
 instance Instantiate Type where
     -- canonical nodes are ground (no TGen), so instantiation is the
     -- identity: don't re-walk (and re-cons) the shared structure
-    inst ts t | useGroundGuards, isCanonType t = t
+    inst ts t | useGroundGuards, isGroundType t = t
     inst ts (TAp l r) = TAp (inst ts l) (inst ts r)
     inst ts (TGen _ n)  = ts !! n
     inst ts t         = t

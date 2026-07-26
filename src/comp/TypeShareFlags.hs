@@ -25,7 +25,9 @@
 --   -share-types-no-identity  equal-id shortcuts (cmp, mgu, match)
 --                             [claim: one canonical object per key]
 --   -share-types-no-ground    ground guards (apSub, tv, inst, getFreeT)
---                             [claim: canonical => ground]
+--                             [claim: an EVEN id => ground; these are
+--                             the four sites that may not settle for
+--                             isCanonType, and quantify is why]
 --   -share-types-no-normal    normal-form guards (expandSyn, expandSynN,
 --                             expTFun, chkTAp, badCon)
 --                             [claim: canonical => nothing to reduce]

@@ -18,7 +18,7 @@ import ContextErrors
 import Flags(Flags, enablePoisonPills, allowIncoherentMatches, liftDicts)
 import TypeShareFlags(shareTypesPool, useGroundGuards)
 import CSyntax
-import CType(isCanonType)
+import CType(isGroundType)
 import PoisonUtils
 import Type
 import Subst
@@ -327,7 +327,7 @@ getFreeD vs _ = internalError "TypeCheck.getFreeD: not CLValueSign"
 getFreeT :: [TyVar] -> CType -> [TyVar]
 -- canonical nodes are ground (no TVar anywhere) and may be
 -- exponentially shared: answer without descending
-getFreeT vs t | useGroundGuards, isCanonType t = []
+getFreeT vs t | useGroundGuards, isGroundType t = []
 getFreeT vs (TVar v) | v `notElem` vs = [v]
 getFreeT vs (TAp t1 t2) = getFreeT vs t1 ++ getFreeT vs t2
 getFreeT vs t = []
