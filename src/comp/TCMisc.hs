@@ -995,7 +995,7 @@ poolGroundBinds sbs = do
               -- type (the put-back); the fresh id keeps the original
               -- type's position
               mint key tc =
-                let (li, gd1) = newLiftedGroundDictId (getPosition t) gd
+                let (li, gd1) = newLiftedGroundDictId (getPosition t) tc gd
                     gd2 = gd1 { gdPool = IM.insert key li (gdPool gd1),
                                 gdLifted = (li, tc, e') : gdLifted gd1 }
                 in  satTrace ("ground pool lift: " ++ ppReadable (li, tc)) $

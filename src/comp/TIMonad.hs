@@ -40,7 +40,7 @@ import IdPrint
 import Position
 import CSyntax(CExpr(..))
 import CType
-import FStringCompat(FString)
+import FStringCompat(FString, mkFString)
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
 import Subst
@@ -145,19 +145,34 @@ initGroundDictState pkgName taken = GroundDictState {
   gdPkgName = pkgName
 }
 
--- Mint a fresh lifted-dictionary id, mirroring LiftDicts.newDictId:
--- the same _lifted_dict<n> naming scheme, skipping taken base names,
--- qualified with the package and marked IdPDict+IdPCAF -- so the
--- LiftDicts pass and everything downstream treat these ids exactly
--- like the dictionaries the pass itself lifts.
-newLiftedGroundDictId :: Position -> GroundDictState -> (Id, GroundDictState)
-newLiftedGroundDictId pos gd = (i, gd { gdNext = n' + 1 })
-  where fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` gdTaken gd
+-- Mint a lifted-dictionary id, mirroring LiftDicts.newDictId: the same
+-- content-derived naming, skipping taken base names, qualified with the
+-- package and marked IdPDict+IdPCAF -- so the LiftDicts pass and everything
+-- downstream treat these ids exactly like the dictionaries that pass lifts.
+--
+-- The type alone is the discriminator here, which it is not in LiftDicts.
+-- The pool this serves is keyed on the interned ground type, which
+-- "determines the qualified class name plus normalized ground type
+-- arguments" (see gdPool) -- so within a package a ground type identifies
+-- exactly one dictionary.  Hashing the rendered type rather than the intern
+-- key on purpose: the key is a process-global node id and so depends on
+-- intern order.
+newLiftedGroundDictId :: Position -> Type -> GroundDictState ->
+                         (Id, GroundDictState)
+newLiftedGroundDictId pos t gd
+    | not (mkFString base `S.member` gdTaken gd)
+        = (mk (mkFString base), gd)
+    | otherwise = (mk (getIdBase (enumId "lifted_dict" pos n')),
+                   gd { gdNext = n' + 1 })
+  where base = dictBaseName t (ppString t)
+        fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` gdTaken gd
                     = fresh (k + 1)
                 | otherwise = k
         n' = fresh (gdNext gd)
-        i = qualId (gdPkgName gd) $
-              addIdProps (enumId "lifted_dict" pos n') [IdPDict, IdPCAF]
+        -- setBadId as enumId does: isBadId keeps these out of Bluesim
+        -- symbols and the bluetcl instance hierarchy.
+        mk fs = qualId (gdPkgName gd) $
+                    addIdProps (setBadId (mkId pos fs)) [IdPDict, IdPCAF]
 
 getGroundDictState :: TI (Maybe GroundDictState)
 getGroundDictState = lift $ gets tsGroundDicts
