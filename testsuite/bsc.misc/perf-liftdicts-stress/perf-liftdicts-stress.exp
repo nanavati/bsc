@@ -54,58 +54,137 @@
 #
 # Count goldens verified against a live run of the structural-lifting
 # compiler; they are exact, not lower bounds.
+#
+# The counts above hold with the ground-dictionary pool OFF.  With it on
+# -- what every fleet consumer runs -- the pool hoists
+# these dictionaries to top-level definitions during typechecking, so
+# LiftDicts finds nothing left to lift and every count is 0.
+#
+# Run BOTH ways.  The first pass pins LiftDicts' own sharing, which is
+# what this test was built for.  The second pins that the pool really is
+# absorbing all of it: if the pool stopped pooling, the work would fall
+# back to LiftDicts and those zeroes would go non-zero.  Checking only
+# one configuration is how a payload conflation shipped unnoticed
+# earlier -- see the tconcheck rule in src/Libraries/Makefile.  Both
+# passes name their configuration explicitly rather than leaning on
+# whichever happens to be the default, so neither silently stops
+# testing what it claims to when that default changes.
+#
+# Each pass recompiles every package, so the .bo state within a pass is
+# self-consistent.  Interleaving the two would leave StressTop doing its
+# cross-package fixup over .bo files built under mixed configurations,
+# which tests nothing.
 
-compile_pass TBase.bsv {-sim -trace-lift-dicts}
+# ---- pass 1: pool OFF -- LiftDicts does the lifting ----
+
+compile_pass TBase.bsv {-sim -trace-lift-dicts -share-types-no-pool}
 find_n_strings [make_bsc_output_name TBase.bsv] {adding lifted dict} 0
 find_n_strings [make_bsc_output_name TBase.bsv] {dictPool hit} 0
 
-compile_pass L0.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L0.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L0.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L0.bsv] {dictPool hit} 398
 
-compile_pass L1.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L1.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L1.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L1.bsv] {dictPool hit} 398
 
-compile_pass L2.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L2.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L2.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L2.bsv] {dictPool hit} 398
 
-compile_pass L3.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L3.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L3.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L3.bsv] {dictPool hit} 398
 
-compile_pass L4.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L4.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L4.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L4.bsv] {dictPool hit} 398
 
-compile_pass L5.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L5.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L5.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L5.bsv] {dictPool hit} 398
 
-compile_pass L6.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L6.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L6.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L6.bsv] {dictPool hit} 398
 
-compile_pass L7.bsv {-sim -trace-lift-dicts -suppress-warnings T0127}
+compile_pass L7.bsv {-sim -trace-lift-dicts -share-types-no-pool -suppress-warnings T0127}
 find_n_strings [make_bsc_output_name L7.bsv] {adding lifted dict} 402
 find_n_strings [make_bsc_output_name L7.bsv] {dictPool hit} 398
 
-compile_pass PkgRefs.bsv {-sim -trace-lift-dicts}
+compile_pass PkgRefs.bsv {-sim -trace-lift-dicts -share-types-no-pool}
 find_n_strings [make_bsc_output_name PkgRefs.bsv] {adding lifted dict} 50
 find_n_strings [make_bsc_output_name PkgRefs.bsv] {dictPool hit} 2000
 
-compile_pass DA.bsv {-sim -trace-lift-dicts}
+compile_pass DA.bsv {-sim -trace-lift-dicts -share-types-no-pool}
 find_n_strings [make_bsc_output_name DA.bsv] {adding lifted dict} 400
 find_n_strings [make_bsc_output_name DA.bsv] {dictPool hit} 0
 
-compile_pass DB.bsv {-sim -trace-lift-dicts}
+compile_pass DB.bsv {-sim -trace-lift-dicts -share-types-no-pool}
 find_n_strings [make_bsc_output_name DB.bsv] {adding lifted dict} 400
 find_n_strings [make_bsc_output_name DB.bsv] {dictPool hit} 0
 
-compile_pass StressTop.bsv {-sim -trace-lift-dicts}
+compile_pass StressTop.bsv {-sim -trace-lift-dicts -share-types-no-pool}
 find_n_strings [make_bsc_output_name StressTop.bsv] {adding lifted dict} 0
 find_n_strings [make_bsc_output_name StressTop.bsv] {dictPool hit} 0
 
-# Compile, link and run the functional spot-check.
+# ---- pass 2: pool ON -- LiftDicts must find nothing ----
+
+compile_pass TBase.bsv {-sim -trace-lift-dicts -share-types}
+find_n_strings [make_bsc_output_name TBase.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name TBase.bsv] {dictPool hit} 0
+
+compile_pass L0.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L0.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L0.bsv] {dictPool hit} 0
+
+compile_pass L1.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L1.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L1.bsv] {dictPool hit} 0
+
+compile_pass L2.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L2.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L2.bsv] {dictPool hit} 0
+
+compile_pass L3.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L3.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L3.bsv] {dictPool hit} 0
+
+compile_pass L4.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L4.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L4.bsv] {dictPool hit} 0
+
+compile_pass L5.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L5.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L5.bsv] {dictPool hit} 0
+
+compile_pass L6.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L6.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L6.bsv] {dictPool hit} 0
+
+compile_pass L7.bsv {-sim -trace-lift-dicts -share-types -suppress-warnings T0127}
+find_n_strings [make_bsc_output_name L7.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name L7.bsv] {dictPool hit} 0
+
+compile_pass PkgRefs.bsv {-sim -trace-lift-dicts -share-types}
+find_n_strings [make_bsc_output_name PkgRefs.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name PkgRefs.bsv] {dictPool hit} 0
+
+compile_pass DA.bsv {-sim -trace-lift-dicts -share-types}
+find_n_strings [make_bsc_output_name DA.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name DA.bsv] {dictPool hit} 0
+
+compile_pass DB.bsv {-sim -trace-lift-dicts -share-types}
+find_n_strings [make_bsc_output_name DB.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name DB.bsv] {dictPool hit} 0
+
+compile_pass StressTop.bsv {-sim -trace-lift-dicts -share-types}
+find_n_strings [make_bsc_output_name StressTop.bsv] {adding lifted dict} 0
+find_n_strings [make_bsc_output_name StressTop.bsv] {dictPool hit} 0
+
+# Compile, link and run the functional spot-check.  Left in the pool-on
+# state above: that is the configuration the fleet compiles in, and this
+# is the assertion that catches unsound merging (each ladder rung must
+# print its OWN instance's value).
 test_c_only_bsv_modules_options Check {} {} sysCheck.out.expected
