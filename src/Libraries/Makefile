@@ -40,8 +40,18 @@ bloogle: build
 # just-built Prelude (see src/comp/tconcheck.hs); drift fails the build
 TCONCHECK ?= $(BINDIR)/tconcheck
 
+# Run it in BOTH type-sharing configurations rather than whichever is
+# currently the default.  The two disagreed: construction-time consing
+# keys a leaf on (qualifier, base, kind, sort tag) and not on the sort
+# PAYLOAD, so two spellings of one payload -- a .bo carrying a type's
+# constructors as the source package wrote them, and the re-qualified
+# form MakeSymTab produces -- collapsed onto whichever reached the table
+# first, and 8 of the 94 entries drifted under -share-types while all 94
+# passed without it.  Checking only the default configuration is what let
+# that ship: the fleet runs -share-types and this check did not.
 tconcheck: build
 	$(TCONCHECK) $(BUILDDIR)
+	BSC_OPTIONS=-share-types $(TCONCHECK) $(BUILDDIR)
 
 install: build bloogle tconcheck
 	install -d $(INSTALLDIR)
