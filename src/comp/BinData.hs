@@ -57,7 +57,7 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(hashInit, nextHashByte, showHash)
+import Util(hashBytes, showHash)
 
 import Data.List(sort, intercalate)
 import Control.Monad(replicateM, liftM, ap)
@@ -1685,5 +1685,5 @@ decode s = let (x, off) = runIn fromBin s
 decodeWithHash :: (Bin a) => BS.ByteString -> (a,String)
 decodeWithHash s = let (x, off) = runIn fromBin s
                    in if off == BS.length s
-                      then (x, showHash (BS.foldl' nextHashByte hashInit s))
+                      then (x, showHash (hashBytes s))
                       else internalError "BinData.decodeWithHash: unused trailing bytes"

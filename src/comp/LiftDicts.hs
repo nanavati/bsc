@@ -15,7 +15,7 @@ import Error(ErrorHandle)
 import ErrorUtil(internalError)
 import Flags(Flags)
 import IOUtil(progArgs)
-import Util(mapSndM, itos, hashInit, nextHashByte, showHash)
+import Util(mapSndM, itos)
 
 import CSyntax
 import FStringCompat(FString, mkFString)

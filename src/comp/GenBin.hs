@@ -8,7 +8,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import Position
 import Id(Id)
-import Util(hashInit, nextHashByte, showHash)
+import Util(hashBytesL, showHash)
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
@@ -60,7 +60,7 @@ pillByte p = B.singleton (if p then 1 else 0)
 -- imported def bodies -- rebuild ordering (make/bazel) is what covers that.
 sigHash :: (Position -> Position) -> CSignature -> String
 sigHash remapP sig =
-    showHash (BL.foldl' nextHashByte hashInit (encodeLazyWith remapP sig))
+    showHash (hashBytesL (encodeLazyWith remapP sig))
 
 genBinFile :: ErrorHandle -> (Position -> Position) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
