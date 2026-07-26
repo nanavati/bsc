@@ -86,7 +86,7 @@ import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes, getDeclsUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck)
 import PoisonUtils(mkPoisonedCDefn)
-import GenSign(genUserSign, genEverythingSign)
+import GenSign(genUserSign, genEverythingSign, getDeclsUsedByExports)
 import Simplify(simplify)
 import ISyntax(IPackage(..), IModule(..),
                IEFace(..), IDef(..), IExpr(..), fdVars)
@@ -467,11 +467,13 @@ compilePackage
     -- transitive closure, so any interface change anywhere invalidates it.
     -- Instances and fixities apply without being named and are absent here
     -- by construction; they can only ever be tracked per-package.
-    let dumpUsage =
+    let dumpUsage bi_sig =
           when (elem "-dump-usage" progArgs) $
-            let used = S.unions [declsUsedInCode, declsUsedInCtxReduce,
-                                 declsUsedInTypes]
-                self = let (CPackage sp _ _ _ _ _ _) = mctx in getIdString sp
+            let selfId = let (CPackage sp _ _ _ _ _ _) = mctx in sp
+                used = S.unions [declsUsedInCode, declsUsedInCtxReduce,
+                                 declsUsedInTypes,
+                                 getDeclsUsedByExports selfId bi_sig]
+                self = getIdString selfId
             in  mapM_ (\(p, d) -> putStrLnF ("USEDECL " ++ self ++ " " ++
                                              getIdString p ++ " " ++
                                              getIdBaseString d))
@@ -514,7 +516,7 @@ compilePackage
         checkForeignFuncDuplicates errh mod
         (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
         warnUnusedImports pkgsUsedInExports
-        dumpUsage
+        dumpUsage bi_sig
         let bc_filename = putInDir (bdir flags) name bcSuffix
             remapP = remapPositionFile (remapPathPrefix flags)
             -- The same list "fixupDefs" would put in ipkg_depends, built the
@@ -780,7 +782,7 @@ compilePackage
 
      -- Check for unused imports by combining packages from all three sources
      warnUnusedImports pkgsUsedInExports
-     dumpUsage
+     dumpUsage bi_sig
 
      -- Generate binary version of the internal tree .bo file
      let bin_filename = putInDir (bdir flags) name binSuffix
