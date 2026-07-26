@@ -17,7 +17,7 @@ import Data.Char(isSpace, toLower, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
             isPrefixOf, isSuffixOf, unzip5, intercalate, foldl', tails)
 import Data.Time.Clock.POSIX(getPOSIXTime)
-import Data.Maybe(isJust, isNothing)
+import Data.Maybe(isJust, isNothing, mapMaybe)
 import Numeric(showOct)
 
 import Control.Monad(when, unless, filterM, liftM, foldM)
@@ -83,7 +83,7 @@ import VModInfo(VPathInfo)
 import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
-                  getPackagesUsedInTypes)
+                  getPackagesUsedInTypes, getDeclsUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
@@ -433,10 +433,11 @@ compilePackage
     -- Extract packages used in type constructors from the parsed package
     -- (before any transformations that might expand synonyms or change types)
     let pkgsUsedInTypes = getPackagesUsedInTypes symt11 mder
+    let declsUsedInTypes = getDeclsUsedInTypes symt11 mder
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce, declsUsedInCtxReduce) <- cCtxReduceIO errh flags symt11 mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -452,7 +453,7 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt [] minst
+    (mod, tcErrors, pkgsUsedInCode, declsUsedInCode) <- cTypeCheck errh flags symt [] minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
@@ -460,6 +461,22 @@ compilePackage
     -- definition body is still a use (pkgsUsedInCode), so this must run on
     -- the check path too or -check-only reports a clean package that the
     -- real build warns about.
+    -- Declaration-level usage, for cutoff analysis: which declarations of
+    -- each import this package actually resolved.  The per-package sets
+    -- feeding T0157 cannot support cutoff -- a dependent records the whole
+    -- transitive closure, so any interface change anywhere invalidates it.
+    -- Instances and fixities apply without being named and are absent here
+    -- by construction; they can only ever be tracked per-package.
+    let dumpUsage =
+          when (elem "-dump-usage" progArgs) $
+            let used = S.unions [declsUsedInCode, declsUsedInCtxReduce,
+                                 declsUsedInTypes]
+                self = let (CPackage sp _ _ _ _ _ _) = mctx in getIdString sp
+            in  mapM_ (\(p, d) -> putStrLnF ("USEDECL " ++ self ++ " " ++
+                                             getIdString p ++ " " ++
+                                             getIdBaseString d))
+                      (sort (nub [ (p, d) | (p, d) <- S.toList used ]))
+
     let warnUnusedImports pkgsUsedInExports =
           let (CPackage _ _ imports _ _ _ _) = mctx
               allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce,
@@ -497,6 +514,7 @@ compilePackage
         checkForeignFuncDuplicates errh mod
         (bi_sig, pkgsUsedInExports) <- genUserSign errh symt mctx
         warnUnusedImports pkgsUsedInExports
+        dumpUsage
         let bc_filename = putInDir (bdir flags) name bcSuffix
             remapP = remapPositionFile (remapPathPrefix flags)
             -- The same list "fixupDefs" would put in ipkg_depends, built the
@@ -762,6 +780,7 @@ compilePackage
 
      -- Check for unused imports by combining packages from all three sources
      warnUnusedImports pkgsUsedInExports
+     dumpUsage
 
      -- Generate binary version of the internal tree .bo file
      let bin_filename = putInDir (bdir flags) name binSuffix
@@ -2549,11 +2568,11 @@ compileCDefToIDef errh flags dumpnames symt host_ds ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs) <- cTypeCheck errh flags symt taken_ids cpkg_ctx
+    (cpkg_chk, tcErrors, _usedPkgs, _usedDecls) <- cTypeCheck errh flags symt taken_ids cpkg_ctx
     t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
 
     start flags DFwrapper_simplified
