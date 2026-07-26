@@ -31,7 +31,7 @@ doTrace = elem "-trace-genbin" progArgs
 header :: [Byte]
 -- when a BinData-layer change bumps .bo and .ba together, give both
 -- formats the same version tag (see GenABin.hs)
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260725-2"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260726-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -97,7 +97,7 @@ readBinFile errh nm s =
 -- Its own tag means the S0005 version guard rejects a .bc fed to a compile
 -- that wants definitions, rather than that compile silently finding none.
 bcHeader :: [Byte]
-bcHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bc-20260725-3"
+bcHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bc-20260726-1"
 
 bcHeaderBS :: B.ByteString
 bcHeaderBS = B.pack bcHeader
@@ -107,14 +107,14 @@ bcHeaderBS = B.pack bcHeader
 -- of the file it was read from.  It cannot be recovered from the signature's
 -- own import list, which GenSign prunes to direct imports minus the Preludes.
 genBcFile :: ErrorHandle -> (Position -> Position) ->
-             String -> [(Id, String)] -> CSignature -> IO ()
+             String -> [(Id, Maybe String)] -> CSignature -> IO ()
 genBcFile errh remapP fn depends bi_sig =
     writeBinaryFileLazyCatch errh fn
         (BL.fromStrict bcHeaderBS `BL.append`
          encodeLazyWith remapP (sigHash remapP bi_sig, (depends, bi_sig)))
 
 readBcFile :: ErrorHandle -> String -> B.ByteString ->
-              IO (([(Id, String)], CSignature), String)
+              IO (([(Id, Maybe String)], CSignature), String)
 readBcFile errh nm s =
     let hlen = B.length bcHeaderBS
     in if B.take hlen s == bcHeaderBS

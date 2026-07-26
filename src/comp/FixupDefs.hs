@@ -65,7 +65,7 @@ type EvMap = M.Map Id (IType, Maybe DictEv)
 -- source, so the choice is deterministic.
 type DictBuckets = M.Map IType [Id]
 
-mkDictBuckets :: [(IPackage a, String)] -> DictBuckets
+mkDictBuckets :: [(IPackage a, Maybe String)] -> DictBuckets
 mkDictBuckets ipkgs =
     M.fromListWith (\ new old -> old ++ new)
         [ (t, [i])
@@ -177,7 +177,8 @@ redirectDictProps redirects d@(IDef i t e props)
 --
 -- The first argument must be "mkDictBuckets" applied to the same
 -- imported packages that are passed as the third argument.
-fixupDefs :: DictBuckets -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs :: DictBuckets -> IPackage a -> [(IPackage a, Maybe String)] ->
+             (IPackage a, [IDef a])
 fixupDefs buckets (IPackage mi _ ps ds) ipkgs =
     let
         (ms, _) = unzip ipkgs
@@ -228,7 +229,8 @@ fixupDefs buckets (IPackage mi _ ps ds) ipkgs =
 -- the post-synthesis definition.)
 -- The first argument must be "mkDictBuckets" applied to the same
 -- imported packages that are passed as the fourth argument.
-updDef :: DictBuckets -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef :: DictBuckets -> IDef a -> IPackage a -> [(IPackage a, Maybe String)] ->
+          IPackage a
 updDef buckets d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
         -- replace the def in the list

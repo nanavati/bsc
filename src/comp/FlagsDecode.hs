@@ -669,6 +669,7 @@ defaultFlags bluespecdir = Flags {
         dumps = [],
         elabOnly = False,
         checkOnly = False,
+        importHashes = True,
         enablePoisonPills = False,
         entry = Nothing,
         baDebugInfo = False,
@@ -1295,6 +1296,12 @@ externalFlags = [
         ("elab",
          (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
           "generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
+
+        ("import-hashes",
+         (Toggle (\f x -> f {importHashes=x}) (showIfTrue importHashes),
+          "record transitive-closure hashes in the depends list and check " ++
+          "them on import (default); -no-import-hashes omits them, which is " ++
+          "only safe when the build guarantees input consistency", Visible)),
 
         ("check-only",
          (Toggle (\f x -> f {checkOnly=x}) (showIfTrue checkOnly),
