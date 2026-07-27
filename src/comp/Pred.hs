@@ -18,6 +18,7 @@ import Prelude hiding ((<>))
 
 import Data.List(union, genericSplitAt, genericLength, intersperse)
 import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
 import Util(hashString, showHash)
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import System.IO.Unsafe(unsafePerformIO)
@@ -362,6 +363,17 @@ dictBaseName :: Type -> String -> String
 dictBaseName t disc =
     "_dict_" ++ dictRender (expandSyn t) ("_" ++ showHash (hashString disc))
 
+-- Rendered spines are memoized process-wide by canonical id.  Unlike
+-- expandSynNameMemo this is keyed by OBJECT, not by name: a canonical id
+-- names exactly one heap object for the life of the process (ccState only
+-- ever inserts, so ids are never reused), so a hit returns the very rendering
+-- the walk would have rebuilt.  isCanonType is therefore the right gate --
+-- groundness is not needed, and the id keys the cache but never reaches the
+-- name, so dictionary names stay intern-order independent.
+{-# NOINLINE dictRenderMemo #-}
+dictRenderMemo :: IORef (IM.IntMap ShowS)
+dictRenderMemo = unsafePerformIO $ newIORef IM.empty
+
 -- Structure-preserving, unlike mkInstId's flattening: a nested application is
 -- bracketed, so C (D E) F does not read as C D (E F).
 --
@@ -372,11 +384,24 @@ dictBaseName t disc =
 -- parent refer to its children instead of copying them; only dictBaseName
 -- flattens, once, straight onto the hash suffix.
 dictRender :: Type -> ShowS
-dictRender ty = case dictSpine ty [] of
-                  (h, [])   -> dictLeaf h
-                  (h, args) -> foldr (.) id $
-                                 intersperse (showChar '~')
-                                             (dictLeaf h : map dictArg args)
+dictRender ty
+    | useShareMemos, i >= 0 = unsafePerformIO (memo i)
+    | otherwise             = walk
+  where
+    i = typeCanonId ty
+    walk = case dictSpine ty [] of
+             (h, [])   -> dictLeaf h
+             (h, args) -> foldr (.) id $
+                            intersperse (showChar '~')
+                                        (dictLeaf h : map dictArg args)
+    memo k = do
+        m0 <- readIORef dictRenderMemo
+        case IM.lookup k m0 of
+          Just r -> return r
+          Nothing -> do
+            _ <- return $! walk
+            atomicModifyIORef' dictRenderMemo (\ m -> (IM.insert k walk m, ()))
+            return walk
 
 dictArg :: Type -> ShowS
 dictArg a = case dictSpine a [] of
