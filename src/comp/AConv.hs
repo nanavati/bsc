@@ -2,6 +2,7 @@ module AConv (aConv, aTypeConv, isLocalAId) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Control.Monad(when, liftM, forM, zipWithM)
 import Control.Monad.Except(throwError)
 import Control.Monad.State(StateT, runStateT, gets, get, put)
@@ -11,7 +12,7 @@ import PFPrint(pfpString)
 import Position
 import Id
 import FStringCompat
-import Flags(Flags)
+import Flags(Flags, warnDeadCode)
 import PreStrings(sSigned)
 import PreIds(idBit, idActionValue_, idAVAction_, idAVValue_, idClockOsc, idClockGate,
               idInout_, idPrimArray, idPrimPair, idPrimFst, idPrimSnd, idPrimUnit)
@@ -19,18 +20,20 @@ import Pragma
 import DefProp(DefProp, defPropsHasNoCSE)
 import Error(internalError, EMsg, WMsg, ErrMsg(..),
              ErrorHandle, bsError, bsWarning)
+import BackendNamingConventions(isRegInst)
 import ISyntax
 import ISyntaxUtil
 import ITransform(iTransExpr, iTransBoolExpr)
 import IntLit(ilDec)
 import ASyntax
 import ASyntaxUtil
+import qualified ASyntaxUtil as ASU
 import GenWrapUtils(isGenId, dropGenSuffixId)
 import Prim
 import Data.List(genericLength, nub)
-import Data.Maybe(fromMaybe)
+import Data.Maybe(fromMaybe, isJust)
 import VModInfo(lookupOutputClockWires, lookupOutputResetWire,
-                lookupIfcInoutWire, vArgs, VArgInfo(..))
+                lookupIfcInoutWire, vArgs, VArgInfo(..), vFields, VFieldInfo(..))
 import SignalNaming
 import InstNodes(mkInstTree)
 
@@ -141,6 +144,105 @@ getWMsgs = M $ \ s -> (s, wmsgs s)
 
 -----
 
+-- Dead state and unused submodule methods, observed at the IModule ->
+-- APackage boundary rather than in a backend.
+--
+-- Here for two reasons.  This is upstream of the backend split, so Bluesim
+-- and -elab-only report what the Verilog path reports: a register nothing
+-- writes is a fact about the design, not about the backend someone happened
+-- to ask for.  And it is upstream of aOpt and vInlineReg -- deadness must not
+-- depend on whether an optimization chose to inline a def or fold an enable,
+-- or the warning stops describing the source and starts describing the
+-- optimizer.  The port properties took this same route, from getIOProps (read
+-- off the emitted Verilog) to getIOPropsA (over the APackage), for the same
+-- reason.
+--
+-- There are two facts here, not four, and both are asked per (instance,
+-- method): a value method whose result nothing consumes, and an action method
+-- nothing ever enables.  "Register never read" and "register never written"
+-- are those same two facts about the legible case, so they share the
+-- traversal and differ only in wording -- dead state is a stronger claim than
+-- an unused method and says so without the hedge.  Asking per method rather
+-- than per instance also keeps a CReg honest, where one live port would
+-- otherwise make every port look live.
+--
+-- Both are asked in source terms: a value-position call reads, an
+-- action-position call enables.  No enables, no Q wires, nothing a backend
+-- invented -- which is why the constant-0 enable evidence AVerilog needed is
+-- not needed here.
+--
+-- What scheduling later adds is a different question with its own numbers: a
+-- write can exist and still never happen, because its rule never fires or its
+-- own condition is never true.  Neither is visible yet.
+--
+-- G0135 (dead logic) deliberately does NOT live here, and the reason is
+-- population rather than placement.  Dead logic has none before scheduling:
+-- anything statically dead -- an "if False" arm, an unread let -- is folded
+-- away by elaboration, so a def reaching AConv is live by construction.  The
+-- signals G0135 reports are ones aSchedule and aState generate and then do
+-- not consume.
+deadStateWarnings :: Flags -> APackage -> [WMsg]
+deadStateWarnings flags apkg
+    | not (warnDeadCode flags) = []
+    | otherwise =
+        [ (getPosition inst, w)
+        | avi <- apkg_state_instances apkg
+        , let inst  = avi_vname avi
+              isReg = isRegInst avi
+        , Method { vf_name = m, vf_outputs = outs, vf_enable = en }
+              <- vFields (avi_vmi avi)
+        -- readiness is the schedule's business, or the method is always
+        -- ready; an unconsumed RDY is ordinary rather than a finding
+        , not (isRdyId m)
+        , w <- [ if isReg then WRegNeverRead (getIdString inst)
+                          else WMethodResultUnused (getIdString inst)
+                                                   (getIdString m)
+               | not (null outs)
+               , not (any (portUsed inst) outs) ] ++
+               [ if isReg then WRegNeverWritten (getIdString inst)
+                          else WMethodNeverEnabled (getIdString inst)
+                                                   (getIdString m)
+               | isJust en
+               , methKey inst m `S.notMember` action_calls ] ]
+  where
+    ifcs  = apkg_interface apkg
+    rules = apkg_rules apkg ++ concatMap aIfaceRules ifcs
+
+    allExprs =
+        [ e | ADef _ _ e _ <- apkg_local_defs apkg ] ++
+        concatMap ruleExprs rules ++
+        concatMap ifcExprs ifcs ++
+        concatMap avi_iargs (apkg_state_instances apkg)
+    ruleExprs r = arule_pred r : concatMap aact_args (arule_actions r)
+    ifcExprs (AIDef { aif_pred = p, aif_value = ADef _ _ e _ })         = [p, e]
+    ifcExprs (AIActionValue { aif_pred = p, aif_value = ADef _ _ e _ }) = [p, e]
+    ifcExprs (AIAction { aif_pred = p })                                = [p]
+    ifcExprs _                                                          = []
+
+    -- keyed on base names: a call carries the defining package's qualifier
+    -- (Pkg::used_result) while the interface field does not, and instance ids
+    -- differ in properties, so neither side is comparable as an Id
+    methKey o m = (getIdBase o, getIdBase m)
+    value_calls  = S.fromList [ methKey o m
+                              | e <- allExprs, (o, m) <- aMethCalls e ]
+
+    -- Ask about the PORT, not the method name.  A submodule can offer two
+    -- names for one output -- FIFO's i_notFull is what the implicit
+    -- conditions call, notFull is what a user writes, and both are FULL_N --
+    -- so a name-keyed test reports the uncalled alias while the wire is
+    -- driving half the module.  Two methods sharing an output share a fate.
+    portsOf inst = M.fromListWith (++)
+                       [ (fst vp, [methKey inst (vf_name f)])
+                       | avi <- apkg_state_instances apkg
+                       , avi_vname avi == inst
+                       , f@(Method {}) <- vFields (avi_vmi avi)
+                       , vp <- vf_outputs f ]
+    portUsed inst vp =
+        any (`S.member` value_calls)
+            (M.findWithDefault [] (fst vp) (portsOf inst))
+    action_calls = S.fromList [ methKey (aact_objid a) (acall_methid a)
+                              | r <- rules, a@(ACall {}) <- arule_actions r ]
+
 aConv :: ErrorHandle -> [PProp] -> Flags -> IModule a -> IO APackage
 aConv errh pps flags imod =
     let itr = makeIdMap (map fst (imod_state_insts imod))
@@ -149,7 +251,8 @@ aConv errh pps flags imod =
           Left emsg -> bsError errh [emsg]
           Right (apkg, s) ->
               do
-                  let wmessages = wmsgs s
+                  let wmessages = wmsgs s ++ deadStateWarnings flags apkg
+                                       
                   when ((not . null) wmessages) $ bsWarning errh wmessages
                   return apkg
 

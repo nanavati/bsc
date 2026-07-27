@@ -1013,6 +1013,11 @@ data ErrMsg =
         | WSVReservedIdent String
         | WSVStdIdentRenamed String String
         | WSVStdIdentExternal String
+        | WRegNeverRead String
+        | WDeadLogic String
+        | WRegNeverWritten String
+        | WMethodResultUnused String String
+        | WMethodNeverEnabled String String
         | WMethodNeverReady String
         | WNoScheduleDump String [String]
         | WRuleNoDefaultClock String
@@ -4144,6 +4149,38 @@ getErrorText (WSVStdIdentExternal name) =
             "and cannot be renamed in the generated Verilog.  Some tools " ++
             "(for example verilator) will fail to parse code that uses " ++
             "this name.  Consider renaming it in the source."))
+
+getErrorText (WRegNeverRead inst) =
+    (Generate 134, empty,
+     s2par ("The register " ++ quote inst ++ " is written but its value " ++
+            "is never read, neither by generated hardware nor by " ++
+            "simulation constructs.  The state it holds is dead."))
+
+getErrorText (WDeadLogic name) =
+    (Generate 135, empty,
+     s2par ("The signal " ++ quote name ++ " is not consumed by " ++
+            "generated hardware nor by any simulation construct.  " ++
+            "The logic is dead and is not emitted."))
+
+getErrorText (WRegNeverWritten inst) =
+    (Generate 136, empty,
+     s2par ("The register " ++ quote inst ++ " is never written: no rule " ++
+            "or method of this module reaches a write of it.  Its value is " ++
+            "fixed for the life of the design -- its reset value, or " ++
+            "undefined if it has no reset."))
+
+getErrorText (WMethodNeverEnabled inst method) =
+    (Generate 138, empty,
+     s2par ("Nothing ever enables the method " ++ quote method ++
+            " of submodule " ++ quote inst ++ ".  No rule or method of this " ++
+            "module reaches a call of it.  If the submodule offers methods " ++
+            "this instantiation does not need, this is expected."))
+
+getErrorText (WMethodResultUnused inst method) =
+    (Generate 137, empty,
+     s2par ("Nothing uses the result of the method " ++ quote method ++
+            " of submodule " ++ quote inst ++ ".  Its wire is not emitted.  " ++
+            "If the method is called only for its effect, this is expected."))
 
 
 ---------------------------------------------------------------------------

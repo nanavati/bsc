@@ -1,0 +1,82 @@
+#
+# Tests for the dead-state reports under -warn-dead-code
+#
+# The two register reports are duals: G0136 is a register nothing writes,
+# G0134 is a register nothing reads.  Both are elaboration knowledge --
+# in the emitted netlist the first is an enable pin tied low and the
+# second is an unloaded output, neither of which distinguishes dead state
+# from state that is driven or consumed somewhere the netlist cannot see.
+#
+
+# ----------
+# A register that no rule or method ever writes
+
+compile_verilog_pass_warning RegNeverWritten.bsv G0136 1 mkRegNeverWritten \
+    {-warn-dead-code}
+
+# ----------
+# A register that is written but whose value nothing reads
+
+compile_verilog_pass_warning RegNeverRead.bsv G0134 1 mkRegNeverRead \
+    {-warn-dead-code}
+
+# ----------
+# The same register, but inlined into a module that has live logic too.
+#
+# Dead state is observed once, at elaboration.  An emission-time analysis
+# can see an inlined register as well, so this pins that the two do not
+# both report it: the count is exact, and a duplicate fails here.
+
+compile_verilog_pass_warning RegNeverReadInlined.bsv G0134 1 \
+    mkRegNeverReadInlined {-warn-dead-code}
+
+# ----------
+# A submodule method whose result nothing consumes.  Reported by method,
+# which only the interface knows: the wire is dropped, and even kept it
+# would not say which method it came from.
+
+compile_verilog_pass_warning MethodResultUnused.bsv G0137 1 \
+    mkMethodResultUnused {-warn-dead-code}
+
+# ----------
+# A submodule action method nothing ever enables.  The dual of G0137: that
+# one is a value method whose result nothing consumes, this is an action
+# method no rule or method reaches a call of.
+
+compile_verilog_pass_warning MethodNeverEnabled.bsv G0138 1 \
+    mkMethodNeverEnabled {-warn-dead-code}
+
+# ----------
+# G0135 (dead logic) has no case here.  Its population is post-scheduling --
+# signals aSchedule and aState generate and then do not consume -- and
+# nothing statically dead survives elaboration to stand in for it.
+
+# ----------
+# The reports can be turned off.
+#
+# Erase the .bo first.  Each source above has already been compiled by the
+# case that checks its warning, and bsc's dependency check does not consider
+# -warn-dead-code, so without this the compile is skipped, no output is
+# produced, and the case passes without testing anything.
+
+erase RegNeverWritten.bo
+compile_verilog_pass_no_warning RegNeverWritten.bsv mkRegNeverWritten \
+    {-no-warn-dead-code}
+
+erase RegNeverRead.bo
+compile_verilog_pass_no_warning RegNeverRead.bsv mkRegNeverRead \
+    {-no-warn-dead-code}
+
+erase RegNeverReadInlined.bo
+compile_verilog_pass_no_warning RegNeverReadInlined.bsv \
+    mkRegNeverReadInlined {-no-warn-dead-code}
+
+erase MethodResultUnused.bo
+erase mkPair.bo
+compile_verilog_pass_no_warning MethodResultUnused.bsv \
+    mkMethodResultUnused {-no-warn-dead-code}
+
+erase MethodNeverEnabled.bo
+erase mkSink.bo
+compile_verilog_pass_no_warning MethodNeverEnabled.bsv \
+    mkMethodNeverEnabled {-no-warn-dead-code}

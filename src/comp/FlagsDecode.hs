@@ -774,6 +774,7 @@ defaultFlags bluespecdir = Flags {
         suppressWarnings = SomeMsgs [],
         synthesize = False,
         systemVerilogOutput = False,
+        warnDeadCode = False,
         tclShowHidden = False,
         testAssert = False,
         timeStamps = True,
@@ -1632,6 +1633,10 @@ externalFlags = [
           "check that rule names are unique (when disabled unique numbers are assigned)", Hidden)),
 
 
+        ("warn-dead-code",
+         (Toggle (\f x -> f {warnDeadCode=x}) (showIfTrue warnDeadCode),
+         "warn about dead state and logic (written or driven, never read)", Hidden)),
+
         ("system-verilog-output",
          (Toggle (\f x -> f {systemVerilogOutput=x}) (showIfTrue systemVerilogOutput),
          "emit SystemVerilog output (SV tasks like $error, string parameters)", Hidden)),
@@ -2151,6 +2156,7 @@ showFlagsRaw flags =
           ("suppressWarnings", show (suppressWarnings flags)),
           ("synthesize", show (synthesize flags)),
           ("systemVerilogOutput", show (systemVerilogOutput flags)),
+          ("warnDeadCode", show (warnDeadCode flags)),
           ("tclShowHidden", show (tclShowHidden flags)),
           ("testAssert", show (testAssert flags)),
           ("timeStamps", show (timeStamps flags)),
