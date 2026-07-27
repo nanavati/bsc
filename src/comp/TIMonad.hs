@@ -154,9 +154,12 @@ initGroundDictState pkgName taken = GroundDictState {
 -- The pool this serves is keyed on the interned ground type, which
 -- "determines the qualified class name plus normalized ground type
 -- arguments" (see gdPool) -- so within a package a ground type identifies
--- exactly one dictionary.  Hashing the rendered type rather than the intern
--- key on purpose: the key is a process-global node id and so depends on
--- intern order.
+-- exactly one dictionary.  Hashing the type's own structure rather than the
+-- intern key on purpose: the key is a process-global node id and so depends
+-- on intern order.  hashType, not a rendering: gdPool calls this once per
+-- distinct ground type, so there is no repeat for a memo to collapse, and
+-- pretty-printing the type to make a string that is hashed and thrown away
+-- was 64% of IsaR2Tile's compile.
 newLiftedGroundDictId :: Position -> Type -> GroundDictState ->
                          (Id, GroundDictState)
 newLiftedGroundDictId pos t gd
@@ -164,7 +167,7 @@ newLiftedGroundDictId pos t gd
         = (mk (mkFString base), gd)
     | otherwise = (mk (getIdBase (enumId "lifted_dict" pos n')),
                    gd { gdNext = n' + 1 })
-  where base = dictBaseName t (ppString t)
+  where base = dictBaseName t (hashType t)
         fresh k | getIdBase (enumId "lifted_dict" pos k) `S.member` gdTaken gd
                     = fresh (k + 1)
                 | otherwise = k

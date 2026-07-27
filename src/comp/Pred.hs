@@ -6,7 +6,7 @@ module Pred(
             PredAncestor(..),
             getPredAncestors, mkPredAncestor, addPredAncestors,
             expandSyn, predToType, qualToType, mkInst,
-            dictBaseName,
+            dictBaseName, hashType,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
             pureInputPositions,
@@ -19,11 +19,11 @@ import Prelude hiding ((<>))
 import Data.List(union, genericSplitAt, genericLength, intersperse)
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
-import Util(hashString, showHash)
+import Util(Hash, hashInit, nextHashByte, nextHashString, showHash)
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import System.IO.Unsafe(unsafePerformIO)
 import Control.Monad(when)
-import FStringCompat(FString)
+import FStringCompat(FString, getFString)
 import TypeShareFlags(useGroundGuards, useNormalGuards, useShareMemos)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
@@ -359,9 +359,39 @@ expandNullaryMemo i walk = unsafePerformIO $ do
 -- systematic version.  The rendering below is therefore for readability only;
 -- distinctness rests on the hash, so nobody has to re-prove the rendering
 -- injective when type normalisation changes.
-dictBaseName :: Type -> String -> String
+dictBaseName :: Type -> Hash -> String
 dictBaseName t disc =
-    "_dict_" ++ dictRender (expandSyn t) ("_" ++ showHash (hashString disc))
+    "_dict_" ++ dictRender (expandSyn t) ("_" ++ showHash disc)
+
+-- Hash a type by walking its structure, without rendering it.
+--
+-- The discriminator has only to be a deterministic, collision-resistant
+-- function of the type -- it is never read back.  Producing one by
+-- pretty-printing built a Doc and laid it out, which measured at 64% of
+-- IsaR2Tile's compile once the readable rendering itself was memoized: all
+-- of it to make a string that is hashed and immediately discarded.
+--
+-- A constructor tag per node keeps this at least as discriminating as the
+-- printed form, because the application SHAPE is in the tags: C (D E) and
+-- C D E fold differently even though their leaves agree.  Qualified names,
+-- so two classes of the same base name in different packages cannot
+-- collide -- pPrint showed the base name and relied on the shape around it.
+--
+-- Positions are excluded deliberately: they are not stable across builds
+-- and a dictionary name must be (that is what this whole scheme exists
+-- for).  Kinds and sorts are excluded because the printed form did not
+-- carry them either; adding them could only split a name, never merge two.
+hashType :: Type -> Hash
+hashType = go hashInit
+  where
+    go h (TAp f a)             = go (go (nextHashByte h 1) f) a
+    go h (TCon c)              = tycon (nextHashByte h 2) c
+    go h (TVar (TyVar i _ _))  = nextHashString (nextHashByte h 3) (getIdString i)
+    go h (TGen _ n)            = nextHashString (nextHashByte h 4) (show n)
+    go h (TDefMonad _)         = nextHashByte h 5
+    tycon h (TyCon i _ _)      = nextHashString h (getIdString i)
+    tycon h (TyNum n _)        = nextHashString h (show n)
+    tycon h (TyStr s _)        = nextHashString h (getFString s)
 
 -- Rendered spines are memoized process-wide by canonical id.  Unlike
 -- expandSynNameMemo this is keyed by OBJECT, not by name: a canonical id
@@ -370,6 +400,12 @@ dictBaseName t disc =
 -- the walk would have rebuilt.  isCanonType is therefore the right gate --
 -- groundness is not needed, and the id keys the cache but never reaches the
 -- name, so dictionary names stay intern-order independent.
+--
+-- Few hits, but large ones: 690 hits against 6,711 entries on IsaR2Tile, and
+-- a single entry runs to 53KB, so the hit rate reads much worse than the
+-- 6.7% it is worth.  Measured against the same compiler with the memo off:
+-- 19.06s vs 20.33s, 55.2GB vs 56.7GB allocated, and no residency cost (the
+-- memo-off arm is marginally worse).
 {-# NOINLINE dictRenderMemo #-}
 dictRenderMemo :: IORef (IM.IntMap ShowS)
 dictRenderMemo = unsafePerformIO $ newIORef IM.empty
@@ -377,12 +413,14 @@ dictRenderMemo = unsafePerformIO $ newIORef IM.empty
 -- Structure-preserving, unlike mkInstId's flattening: a nested application is
 -- bracketed, so C (D E) F does not read as C D (E F).
 --
--- A ShowS rather than a String.  Concatenating at every level of nesting is
--- quadratic in depth, and dictionary types nest deeply enough for that to
--- dominate: on IsaR2Tile the old rendering was 67% of the compile and its
--- longest single render is 53KB.  Difference lists make it linear and let a
--- parent refer to its children instead of copying them; only dictBaseName
--- flattens, once, straight onto the hash suffix.
+-- A ShowS, not a String, and that is the larger half of the fix: concatenating
+-- at every level of nesting is quadratic in depth, and these types nest deeply
+-- enough that the old rendering was 67% of IsaR2Tile's compile.  Difference
+-- lists make it linear, let a parent refer to its children instead of copying
+-- them, and leave only dictBaseName to flatten -- once, straight onto the hash
+-- suffix.  Caching flat strings instead costs 2.1x peak residency for the same
+-- speed, because every nested rendering is then duplicated at every level
+-- above it.
 dictRender :: Type -> ShowS
 dictRender ty
     | useShareMemos, i >= 0 = unsafePerformIO (memo i)
@@ -392,8 +430,7 @@ dictRender ty
     walk = case dictSpine ty [] of
              (h, [])   -> dictLeaf h
              (h, args) -> foldr (.) id $
-                            intersperse (showChar '~')
-                                        (dictLeaf h : map dictArg args)
+                            intersperse (showChar '~') (dictLeaf h : map dictArg args)
     memo k = do
         m0 <- readIORef dictRenderMemo
         case IM.lookup k m0 of
@@ -403,6 +440,10 @@ dictRender ty
             atomicModifyIORef' dictRenderMemo (\ m -> (IM.insert k walk m, ()))
             return walk
 
+-- A bare leaf renders straight, bypassing the memo: routing leaves through it
+-- too measures identical (19.49s vs 19.52s over three rounds, 4MB of 55GB,
+-- same residency), the lookup costing about what rebuilding a leaf saves.
+-- Bypassing keeps the table smaller for no loss.
 dictArg :: Type -> ShowS
 dictArg a = case dictSpine a [] of
               (h, []) -> dictLeaf h

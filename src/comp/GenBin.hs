@@ -31,7 +31,7 @@ doTrace = elem "-trace-genbin" progArgs
 header :: [Byte]
 -- when a BinData-layer change bumps .bo and .ba together, give both
 -- formats the same version tag (see GenABin.hs)
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260726-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260727-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
