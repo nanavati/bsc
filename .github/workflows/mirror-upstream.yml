@@ -18,8 +18,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: |
+      - name: Fast-forward upstream-main (fail loudly on divergence)
+        run: |
           git remote add upstream https://github.com/B-Lang-org/bsc.git
           git fetch upstream main --tags
           git push origin upstream/main:refs/heads/upstream-main
-          git push origin --tags
+      - name: Sync tags (best effort)
+        # GITHUB_TOKEN cannot push refs that carry workflow-file changes,
+        # which rejects ancient upstream tags; those were pushed once
+        # manually, so rejections here should only ever be transient.
+        run: |
+          git push origin --tags || echo "::warning::some tag pushes rejected; recent tags still sync (see log)"
