@@ -88,8 +88,8 @@ aVerilog errh flags pps aspack ffmap =
        -- G0131 despite never being printed.)
        let suspect_str s = isVReservedWord s || isSVStdPackageIdent s
            suspect_vid (VId s _ _) = suspect_str s
-           dpi_name_vids = [ n | VDPI n _ _ <- dpi_decls ] ++
-                           [ a | VDPI _ _ args <- dpi_decls,
+           dpi_name_vids = [ n | VDPI n _ _ _ _ <- dpi_decls ] ++
+                           [ a | VDPI _ _ _ _ args <- dpi_decls,
                                  (a, _, _) <- args ]
            has_suspects = any suspect_vid dpi_name_vids ||
                           any (suspect_str . fst) foreign_func_names ||
@@ -2057,15 +2057,15 @@ instance VUse VExpr where
 renameSVStdIdents :: [(String, Position)] -> VProgram
                   -> (VProgram, [(String, String, Position)], [(String, Position)])
 renameSVStdIdents foreign_funcs (VProgram vmods dpis comments) =
-    let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ <- dpis ] ++
-                                [ s | VDPI _ _ args <- dpis,
+    let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ _ _ <- dpis ] ++
+                                [ s | VDPI _ _ _ _ args <- dpis,
                                       (VId s _ _, _, _) <- args ])
         -- foreign Verilog function/task calls name a definition in the
         -- user's own Verilog code, so, like DPI names, they must never
         -- be renamed (the call would no longer match its definition)
         extern_names = dpi_names `S.union` S.fromList (map fst foreign_funcs)
         dpi_clashes = [ (s, getPosition i)
-                      | VDPI (VId s i _) _ _ <- dpis,
+                      | VDPI (VId s i _) _ _ _ _ <- dpis,
                         isSVStdPackageIdent s ]
         foreign_clashes = [ (s, pos) | (s, pos) <- foreign_funcs,
                                        isSVStdPackageIdent s ]
@@ -2211,6 +2211,7 @@ vModuleDeclVIds vmod =
     go (VMRegGroup i _ _ it) = i : go it
     go (VMGroup _ itss)      = concatMap (concatMap go) itss
     go (VMFunction (VFunction n _ decls _)) = n : concatMap declVIds decls
+    go (VMDPI (VDPI n _ _ _ args)) = n : [ a | (a, _, _) <- args ]
     declVIds :: VVDecl -> [VId]
     declVIds (VVDecl _ _ vs) = map vvName vs
     declVIds (VVDWire _ v _) = [vvName v]
