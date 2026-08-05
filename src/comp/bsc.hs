@@ -1307,7 +1307,7 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 
        -- export the TRS IR when requested
        when (genBir flags) $
-            writeBirFile (prefix ++ toplevel ++ ".bir") sim_system_opt
+            writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags) sim_system_opt
 
        -- convert SimPackages and SimSchedules to SimCCBlocks and SimCCScheds
        start flags DFsimMakeCBlocks
