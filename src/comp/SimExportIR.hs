@@ -38,12 +38,12 @@ import Data.Word (Word32)
 import qualified Codec.CBOR.Encoding as C
 import qualified Codec.CBOR.Write as CW
 
-import Data.List (foldl', nub)
-import Data.Maybe (mapMaybe)
+import Data.List (foldl', nub, sortBy)
+import Data.Maybe (mapMaybe, isJust)
 
 import ErrorUtil (internalError)
 import Id (Id, getIdBaseString, getIdQualString, isSignedId,
-           mkIdCanFire, mkIdWillFire)
+           mkIdCanFire, mkIdWillFire, cmpIdByName)
 import IntLit (IntLit(..))
 import PPrint (ppReadable)
 import Prim (PrimOp(..))
@@ -156,7 +156,6 @@ encDesign ssys =
         msis = M.fromList [ (getIdBaseString (sp_name p),
                              analyzeModule pkgNames p)
                           | p <- pkgs ]
-        segmaps = M.map msi_segIdx msis
         instToMod = ssys_instmap ssys
 
         -- gates of top-level input clocks are always on in simulation
@@ -171,7 +170,7 @@ encDesign ssys =
                                    (msis M.! getIdBaseString (sp_name p)) p)
                           pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
-          compsEnc <- concat <$> mapM (encComposition instToMod segmaps topGates)
+          compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
                                        (ssys_schedules ssys)
           clkId <- traverse str (ssys_default_clk ssys)
           rstId <- traverse str (ssys_default_rst ssys)
@@ -211,6 +210,8 @@ data ModSchedInfo = ModSchedInfo
     , msi_segIdx  :: M.Map String ((Int, Int), Int)
     , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
     , msi_disj    :: M.Map String (S.Set String) -- rule -> disjoint rules
+    , msi_taskRules   :: S.Set String  -- rules with system/foreign tasks
+    , msi_finishRules :: S.Set String  -- rules calling $finish/$fatal/$stop
     }
 
 -- Segment lookup key for a schedule node ("S:rule" / "E:rule"), local
@@ -302,6 +303,25 @@ analyzeModule pkgNames pkg =
 
         doms = nub (M.elems ruleDom)
 
+        -- Rules with observable task effects: a $finish/$fatal in one rule
+        -- makes the relative Exec order with any other task-bearing rule
+        -- observable (bk_finished suppresses later output in the same
+        -- instant), so encComposition pins those orders to bsc's flat
+        -- order; finish rules also get singleton segments below
+        actTaskName (AFCall { afcall_fun = f }) = Just f
+        actTaskName (ATaskAction { ataskact_fun = f }) = Just f
+        actTaskName _ = Nothing
+        taskRules = S.fromList
+            [ getIdBaseString (arule_id r)
+            | r <- sp_rules pkg
+            , any (isJust . actTaskName) (arule_actions r) ]
+        finishRules = S.fromList
+            [ getIdBaseString (arule_id r)
+            | r <- sp_rules pkg
+            , any (\a -> actTaskName a `elem` [Just "$finish", Just "$fatal",
+                                               Just "$stop"])
+                  (arule_actions r) ]
+
         -- Rules in any ME (disjoint) relation also get per-node singleton
         -- segments: bsc's merged graph carries no ordering edge between ME
         -- rules, yet its flat order keeps every Sched ahead of the ME
@@ -310,6 +330,7 @@ analyzeModule pkgNames pkg =
         meRules = S.unions (M.elems disj)
                   `S.union` S.fromList [ r | (r, ds) <- M.toList disj
                                            , not (S.null ds) ]
+                  `S.union` finishRules
 
         -- Split this domain's rule nodes into segments: cut at interface
         -- method positions AND isolate child-calling / ME rules as
@@ -350,7 +371,9 @@ analyzeModule pkgNames pkg =
         ModSchedInfo { msi_domains = domSegs
                      , msi_segIdx = segIdx
                      , msi_execPos = execPos
-                     , msi_disj = disj }
+                     , msi_disj = disj
+                     , msi_taskRules = taskRules
+                     , msi_finishRules = finishRules }
 
 -- ===============
 -- Compositions
@@ -363,10 +386,11 @@ qualPath i = case getIdQualString i of
                q   -> q ++ "." ++ getIdBaseString i
 
 encComposition :: M.Map String String
-               -> M.Map String (M.Map String ((Int, Int), Int))
+               -> M.Map String ModSchedInfo
                -> [AId] -> SimSchedule -> EncM [C.Encoding]
-encComposition instToMod segmaps topGates ss = do
-    let order = ss_sched_order ss
+encComposition instToMod msis topGates ss = do
+    let segmaps = M.map msi_segIdx msis
+        order = ss_sched_order ss
 
         -- resolve a merged node to (instance path, segment index) plus
         -- the node's position inside the segment; top-module method nodes
@@ -436,7 +460,35 @@ encComposition instToMod segmaps topGates ss = do
                       ++ qualPath d)
               else True ]
 
-        unitEdges = graphEdges `S.union` meEdges
+        -- $finish/$fatal end output for the rest of the instant, so the
+        -- Exec order between a finish-calling rule and ANY task-bearing
+        -- rule is observable even with no graph edge; pin those pairs to
+        -- bsc's flat order (finish rules have singleton segments)
+        execUnit = M.fromList [ (qualPath n, u)
+                              | e@(Exec n) <- order
+                              , Just u <- [resolve e] ]
+        instMsi i = M.lookup (M.findWithDefault "" i instToMod) msis
+        qualsOf sel = [ q
+                      | i <- nub [ i' | (i', _) <- units ]
+                      , Just msi <- [instMsi i]
+                      , b <- S.toList (sel msi)
+                      , let q = qp i b
+                      , M.member q execPos ]
+        finishQs = qualsOf msi_finishRules
+        taskQs = qualsOf msi_taskRules
+        finishEdges = S.fromList
+            [ (ue, ul)
+            | f <- finishQs
+            , t <- taskQs
+            , f /= t
+            , let (e_, l_) = if execPos M.! f < execPos M.! t
+                             then (f, t)
+                             else (t, f)
+            , Just ue <- [M.lookup e_ execUnit]
+            , Just ul <- [M.lookup l_ execUnit]
+            , ue /= ul ]
+
+        unitEdges = graphEdges `S.union` meEdges `S.union` finishEdges
 
         -- Kahn's algorithm; ties broken by first appearance in the flat
         -- order so the output tracks bsc's own choice.
@@ -469,14 +521,37 @@ encComposition instToMod segmaps topGates ss = do
         execPos = M.fromList [ (qualPath i, p)
                              | (Exec i, p) <- zip order [(0 :: Int) ..] ]
 
-        crossPairs =
-            [ (qualPath r, qualPath d)
-            | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-            , d <- S.toList ds
-            , getIdQualString r /= getIdQualString d
-            , let pr = M.lookup (qualPath r) execPos
-            , let pd = M.lookup (qualPath d) execPos
-            , maybe False id ((<) <$> pr <*> pd) ]
+        -- ME inhibitors, mkMERuleInhibits semantics against the node
+        -- order the backend actually executes (the composed entries
+        -- expanded to their segment nodes): rule r is inhibited by
+        -- disjoint rule d iff Exec(d) runs before Sched(r).  All pairs
+        -- (same- or cross-instance) export at composition level; the
+        -- per-rule me_inhibits list is empty now that the composed order
+        -- is instance-specific.
+        segNodes inst (dom, seg) =
+            let modName = M.findWithDefault "" inst instToMod
+                segs = case M.lookup modName msis of
+                         Just msi -> case lookup dom (msi_domains msi) of
+                                       Just s -> s
+                                       Nothing -> []
+                         Nothing -> []
+            in  if seg < length segs then seg_nodes (segs !! seg) else []
+        qp i b = if null i then b else i ++ "." ++ b
+        composedNodes =
+            [ (i, node) | (i, ds) <- entries, node <- segNodes i ds ]
+        disjQ = M.fromListWith S.union
+                  ([ (qualPath r, S.map qualPath ds)
+                   | (r, ds) <- M.toList (ss_disjoint_rules_db ss) ]
+                   ++ [ (qualPath d, S.singleton (qualPath r))
+                      | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+                      , d <- S.toList ds ])
+        stepME (seen, acc) (i, Exec n) =
+            (S.insert (qp i (getIdBaseString n)) seen, acc)
+        stepME (seen, acc) (i, Sched n) =
+            let q = qp i (getIdBaseString n)
+                inh = S.intersection (M.findWithDefault S.empty q disjQ) seen
+            in  (seen, acc ++ [ (d, q) | d <- S.toList inh ])
+        crossPairs = snd (foldl' stepME (S.empty, []) composedNodes)
 
         -- direction-filter the primitive ticks against the primMap tick
         -- specs (doTickCall): a posedge schedule also produces a
@@ -595,8 +670,25 @@ encModule pkgNames msi pkg = do
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
     insEnc <- concat <$> mapM encInput (sp_inputs pkg)
-    instsEnc <- mapM (encInstance pkgNames (sp_method_order_map pkg))
-                     (M.elems (sp_state_instances pkg))
+    -- construction order matters for load-time output (RegFileLoad gap
+    -- warnings): match the C++ backend's alphabetization (raw_avis)
+    let avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
+                      (M.elems (sp_state_instances pkg))
+    instsEnc0 <- mapM (encInstance pkgNames (sp_method_order_map pkg)) avis
+    -- noinline functions instantiate as argument-less modules whose one
+    -- value method computes the function
+    niEnc <- mapM (\(iname, mname) -> do
+                     nmEnc <- strE iname
+                     kEnc <- encVariant "Module" <$> strE mname
+                     return $ encStruct
+                       [ ("name", nmEnc)
+                       , ("kind", kEnc)
+                       , ("args", encList [])
+                       , ("method_order", encList [])
+                       , ("port_counts", encList [])
+                       ])
+                  (sp_noinline_instances pkg)
+    let instsEnc = instsEnc0 ++ niEnc
     -- interface ActionValue return defs join the def table so the
     -- Def-reference results resolve on the backend side
     let av_defs = [ d | AIActionValue { aif_value = d } <- sp_interface pkg
@@ -880,15 +972,11 @@ encRule msi pkg r = do
                 Just (ClockDomain n) -> fromIntegral n
                 Nothing -> 0
         crossing = RPclockCrossingRule `elem` arule_pragmas r
-        -- disjoint rules of this module executing earlier in the module's
-        -- own order inhibit this rule (destructive-execution patch;
-        -- cross-module pairs live in the composition)
-        base = getIdBaseString (arule_id r)
-        myPos = M.findWithDefault maxBound base (msi_execPos msi)
-        earlier r' = M.findWithDefault maxBound r' (msi_execPos msi) < myPos
-        inhibits = filter earlier
-                     (S.toList (M.findWithDefault S.empty base (msi_disj msi)))
-    inhibitsEnc <- mapM strE inhibits
+    -- ME inhibitors are all composition-level (cross_inhibits): the
+    -- executed order is instance-specific, so a module-shared list
+    -- cannot express them (and the pragma-asserted pairs must not
+    -- inhibit at all when every Sched runs before its partners' Execs)
+    let inhibitsEnc = [] :: [C.Encoding]
     return $ encStruct
       [ ("name", nameId)
       , ("can_fire", cf)
@@ -972,6 +1060,7 @@ encMethodStruct pkg name kind inputs mpred body mresult props = do
 aTypeWidth :: AType -> Word32
 aTypeWidth (ATBit n) = fromIntegral n
 aTypeWidth (ATString _) = 0
+aTypeWidth ATReal = 64
 aTypeWidth t = internalError ("SimExportIR.aTypeWidth: " ++ ppReadable t)
 
 -- An Integer as little-endian 32-bit limbs (matching WideData layout).
@@ -988,6 +1077,7 @@ encExpr (ASInt _ t lit) =
           [ ("width", encW32 w)
           , ("limbs", encList (map encW32 (toLimbs w (ilValue lit))))
           ]
+encExpr (ASReal _ _ d) = return $ encVariant "Real" (C.encodeDouble d)
 encExpr (ASDef _ i) = encVariant "Def" <$> idE i
 encExpr (ASPort _ i) = encVariant "Port" <$> idE i
 encExpr (ASParam _ i) = encVariant "Param" <$> idE i
@@ -1089,6 +1179,7 @@ encCaseArms es =
     internalError ("SimExportIR.encCaseArms: " ++ ppReadable es)
 
 primOpName :: PrimOp -> String
+primOpName PrimStringConcat = "StringConcat"
 primOpName PrimAdd = "Add"
 primOpName PrimSub = "Sub"
 primOpName PrimAnd = "And"
