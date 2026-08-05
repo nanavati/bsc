@@ -53,7 +53,7 @@ import VModInfo (vName, getVNameString)
 import AScheduleInfo (AScheduleInfo(..), SchedNode(..), getSchedNodeId)
 import ASyntaxUtil (aVars)
 import SimCCBlock (SimCCFnStmt(..))
-import SimMakeCBlocks (cvtActions)
+import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimDomainInfo (DomainInfo(..))
 import ASyntax
 import SimPackage
@@ -474,7 +474,11 @@ encModule pkgNames msi pkg = do
     insEnc <- mapM encInput (sp_inputs pkg)
     instsEnc <- mapM (encInstance pkgNames (sp_method_order_map pkg))
                      (M.elems (sp_state_instances pkg))
-    defsEnc <- mapM encDef (M.elems (sp_local_defs pkg))
+    -- interface ActionValue return defs join the def table so the
+    -- Def-reference results resolve on the backend side
+    let av_defs = [ d | AIActionValue { aif_value = d } <- sp_interface pkg
+                  , not (M.member (adef_objid d) (sp_local_defs pkg)) ]
+    defsEnc <- mapM encDef (M.elems (sp_local_defs pkg) ++ av_defs)
     rulesEnc <- mapM (encRule msi pkg) (sp_rules pkg)
     methodsEnc <- concat <$> mapM (encMethod pkg) (sp_interface pkg)
     schedEnc <- encSchedule msi pkg
@@ -605,8 +609,19 @@ encInstance pkgNames mom avi = do
       , ("port_counts", encList portsEnc)
       ]
 
+-- ActionValue results are read through the synthetic temp def that the
+-- corresponding AvAction statement latches -- never by re-invoking the
+-- method (mirrors substAV, SimMakeCBlocks.hs:1481-1482).
+substAV :: AExpr -> AExpr
+substAV (AMethValue ty obj meth) = ASDef ty (mkAVMethTmpId obj meth)
+substAV (APrim i ty op es) = APrim i ty op (map substAV es)
+substAV (AMethCall ty obj meth es) = AMethCall ty obj meth (map substAV es)
+substAV (AFunCall ty i f isC es) = AFunCall ty i f isC (map substAV es)
+substAV e = e
+
 encDef :: ADef -> EncM C.Encoding
-encDef (ADef i t e _props) = do
+encDef (ADef i t e0 _props) = do
+    let e = substAV e0
     nameId <- idE i
     exprEnc <- encExpr e
     let base = getIdBaseString i
@@ -626,23 +641,40 @@ encDef (ADef i t e _props) = do
 -- The exact def/action interleaving that Bluesim executes: reuse the
 -- backend's own linearization (tsortActionsAndDefs via cvtActions) and
 -- encode its statement list.
-bodyStmts :: SimPackage -> Id -> WireProps -> S.Set AId -> [AAction]
+bodyStmts :: SimPackage -> Id -> WireProps -> Maybe ADef -> [AAction]
           -> [SimCCFnStmt]
-bodyStmts pkg rid wprops other_defs acts =
+bodyStmts pkg rid wprops mretdef acts =
     let reset_ids = [ ae_objid (areset_wire rst)
                     | n <- wpResets wprops
                     , Just rst <- [lookup n (sp_reset_list pkg)] ]
-    in  cvtActions (sp_name pkg) rid (sp_local_defs pkg)
+        -- an ActionValue return def joins the linearization so its reads
+        -- are positioned by the method-order edges (a deq-then-return-
+        -- first method must read first before the deq; cvtIFace does the
+        -- same, SimMakeCBlocks.hs:560-575)
+        defmap = case mretdef of
+                   Just d -> M.insert (adef_objid d) d (sp_local_defs pkg)
+                   Nothing -> sp_local_defs pkg
+        closure seen [] = seen
+        closure seen (i : rest)
+          | i `S.member` seen = closure seen rest
+          | otherwise = case M.lookup i defmap of
+              Nothing -> closure (S.insert i seen) rest
+              Just (ADef _ _ e _) ->
+                  closure (S.insert i seen) (aVars e ++ rest)
+        other_defs = case mretdef of
+                       Just d -> closure S.empty [adef_objid d]
+                       Nothing -> S.empty
+    in  cvtActions (sp_name pkg) rid defmap
                    (sp_method_order_map pkg) other_defs acts reset_ids
 
 type SignedOracle = AId -> Bool
 
 encStmt :: SignedOracle -> SimCCFnStmt -> EncM C.Encoding
-encStmt _ (SFSDef _ (_, i) (Just _)) = encVariant "Def" <$> idE i
+encStmt _ (SFSDef _ (_, i) (Just e)) = encDefStmt i e
 encStmt _ (SFSDef _ _ Nothing) =
     -- declaration only (e.g. a task temp); the Task action fills it
     return mempty
-encStmt _ (SFSAssign _ i _) = encVariant "Def" <$> idE i
+encStmt _ (SFSAssign _ i e) = encDefStmt i e
 encStmt sgn (SFSAction act) = encVariant "Action" <$> encAction sgn act
 encStmt sgn (SFSAssignAction _ i act _) = do
     dE <- idE i
@@ -656,6 +688,17 @@ encStmt sgn (SFSCond c ts es) = do
                (encStruct [("cond", cE), ("then_", tE), ("else_", eE)])
 encStmt _ s = internalError ("SimExportIR.encStmt: " ++ ppReadable s)
 
+-- The statement's own expression is authoritative (it carries the
+-- tsort's ActionValue substitutions, which the def table may not after
+-- inlining re-embedded calls); substAV catches AMethValue forms the
+-- tsort leaves for the reader.
+encDefStmt :: AId -> AExpr -> EncM C.Encoding
+encDefStmt i e = do
+    nameE <- idE i
+    exprE <- encExpr (substAV e)
+    return $ encVariant "Def"
+               (encStruct [("name", nameE), ("expr", exprE)])
+
 -- mempty markers from declaration-only stmts must not appear in the list
 encStmts :: SignedOracle -> [SimCCFnStmt] -> EncM C.Encoding
 encStmts sgn stmts = do
@@ -664,14 +707,12 @@ encStmts sgn stmts = do
     encList <$> mapM (encStmt sgn) (filter keep stmts)
 
 -- Signed display for a system-task argument: encodeArgs's "-" prefix
--- checks the referenced Id's sign property; the property may live on the
--- reference or on the def's own id (removeSignCasts rewrites both ways).
+-- checks exactly the referenced Id's sign property
+-- (ForeignFunctions.hs:258).  Checking the def's own id as well
+-- over-flags and widens columns Bluesim prints unsigned (found by the
+-- sweep regressing when it was tried).
 mkSignedOracle :: SimPackage -> SignedOracle
-mkSignedOracle pkg i =
-    isSignedId i
-    || case M.lookup i (sp_local_defs pkg) of
-         Just (ADef di _ _ _) -> isSignedId di
-         Nothing -> False
+mkSignedOracle _ = isSignedId
 
 encRule :: ModSchedInfo -> SimPackage -> ARule -> EncM C.Encoding
 encRule msi pkg r = do
@@ -685,7 +726,7 @@ encRule msi pkg r = do
     wf <- idE (mkIdWillFire (arule_id r))
     bodyEnc <- encStmts (mkSignedOracle pkg)
                         (bodyStmts pkg (arule_id r) (arule_wprops r)
-                                   S.empty (arule_actions r))
+                                   Nothing (arule_actions r))
     let dom = case wpClockDomain (arule_wprops r) of
                 Just (ClockDomain n) -> fromIntegral n
                 Nothing -> 0
@@ -720,13 +761,38 @@ encMethod pkg (AIAction inputs props pred_ name body _) = do
     m <- encMethodStruct pkg name "Action" (concat inputs) (Just pred_)
                          (concatMap arule_actions body) Nothing props
     return [m]
-encMethod pkg (AIActionValue inputs props pred_ name body (ADef _ t e _) _) = do
-    m <- encMethodStruct pkg name "ActionValue" (concat inputs) (Just pred_)
-                         (concatMap arule_actions body) (Just (t, e)) props
+encMethod pkg (AIActionValue inputs props pred_ name body retdef _) = do
+    m <- encMethodStructAV pkg name (concat inputs) (Just pred_)
+                           (concatMap arule_actions body) retdef props
     return [m]
 encMethod _ (AIClock {}) = return []
 encMethod _ (AIReset {}) = return []
 encMethod _ (AIInout {}) = return []
+
+-- ActionValue methods: the return def is linearized with the body and
+-- the result is a reference to it.
+encMethodStructAV :: SimPackage -> Id -> [AInput] -> Maybe APred
+                  -> [AAction] -> ADef -> WireProps -> EncM C.Encoding
+encMethodStructAV pkg name inputs mpred body retdef props = do
+    nameId <- idE name
+    argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
+    readyEnc <- traverse encExpr mpred
+    bodyEnc <- encStmts (mkSignedOracle pkg)
+                        (bodyStmts pkg name props (Just retdef) body)
+    let ADef ret_id rt _ _ = retdef
+    resultEnc <- encExpr (ASDef rt ret_id)
+    let dom = case wpClockDomain props of
+                Just (ClockDomain n) -> fromIntegral n
+                Nothing -> 0
+    return $ encStruct
+      [ ("name", nameId)
+      , ("kind", encUnitVariant "ActionValue")
+      , ("args", encList argsEnc)
+      , ("ready", encMaybe id readyEnc)
+      , ("body", bodyEnc)
+      , ("result", resultEnc)
+      , ("clock_domain", encW32 dom)
+      ]
 
 encMethodStruct :: SimPackage -> Id -> String -> [AInput] -> Maybe APred
                 -> [AAction] -> Maybe (AType, AExpr) -> WireProps
@@ -735,14 +801,8 @@ encMethodStruct pkg name kind inputs mpred body mresult props = do
     nameId <- idE name
     argsEnc <- mapM (\it -> encPort it "MethodArg") inputs
     readyEnc <- traverse encExpr mpred
-    -- defs the result expression needs must be computed with the body
-    -- (an ActionValue's return can depend on the body's effects order)
-    let result_defs = case mresult of
-          Just (_, e) -> S.fromList
-              [ i | i <- aVars e, i `M.member` sp_local_defs pkg ]
-          Nothing -> S.empty
     bodyEnc <- encStmts (mkSignedOracle pkg)
-                        (bodyStmts pkg name props result_defs body)
+                        (bodyStmts pkg name props Nothing body)
     resultEnc <- traverse (encExpr . snd) mresult
     let dom = case wpClockDomain props of
                 Just (ClockDomain n) -> fromIntegral n
