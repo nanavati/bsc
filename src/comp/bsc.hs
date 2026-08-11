@@ -11,7 +11,8 @@ import System.FilePath(takeDirectory)
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
 import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
-import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
+import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory,
+                        makeAbsolute)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, toLower, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
@@ -1913,10 +1914,18 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
         outFile = oFile flags
         soFile = outFile ++ ".bdpi.so"
     -- place the .bir next to the executable, where the wrapper (and the
-    -- runtime's .bdpi.so search) expect it
-    when (outFile ++ ".bir" /= birFile) $ do
+    -- runtime's .bdpi.so search) expect it.  Textual inequality is not
+    -- file identity (a relative -o names the exported .bir relatively,
+    -- e.g. plain `-o <top>`), so compare absolute paths -- and read
+    -- strictly so that even an aliased self-copy (symlinked directory)
+    -- rewrites the file instead of truncating it mid-read.
+    let outBir = outFile ++ ".bir"
+    absBir <- makeAbsolute birFile
+    absOut <- makeAbsolute outBir
+    when (absOut /= absBir) $ do
         contents <- L.readFile birFile
-        L.writeFile (outFile ++ ".bir") contents
+        CE.evaluate (L.length contents)
+        L.writeFile outBir contents
     -- compile the user's BDPI C files (with the C compiler, so symbols
     -- keep C linkage) and link the objects into one dlopen-able object
     when (not (null user_cfiles) || not (null user_ofiles)) $ do
