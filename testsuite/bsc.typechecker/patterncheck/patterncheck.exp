@@ -65,6 +65,12 @@ compare_file GuardPlaceLinkIncomplete.bsv.bsc-out
 compile_pass_warning GuardPlaceContradict.bs T0166 1 {-no-warn-incomplete-patterns}
 compare_file GuardPlaceContradict.bs.bsc-out
 
+# A user definition spelled with a leading underscore is reported as
+# written; an instance method (internally prefixed with an underscore)
+# is reported by its source spelling.
+compile_pass_warning UnderscoreName.bs T0165 2
+compare_file UnderscoreName.bs.bsc-out
+
 # Guard normalization and DNF reduction consume the same configurable fuel as
 # the pattern matrix.  Six operations exactly complete this small proof; one
 # fewer must lose the redundancy conclusion conservatively.

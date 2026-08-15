@@ -1472,10 +1472,13 @@ describeCtx (PMDef i)
     | otherwise = "the clauses for `" ++ displayName ++ "'"
   where
     base = getIdBaseString i
-    -- instance methods are internally prefixed with an underscore
-    displayName = case base of
-                    ('_' : rest@(_:_)) -> rest
-                    _ -> base
+    -- Instance methods are internally prefixed with an underscore; their
+    -- display name records the source spelling (see Id.mkUId).  A user
+    -- definition that genuinely begins with an underscore has no display
+    -- name and is reported exactly as written.
+    displayName = case getIdDisplayName i of
+                    Just _ -> getIdBaseString (addIdDisplayName i)
+                    Nothing -> base
 
 -- | Check one obligation, producing warnings for non-exhaustive matching
 -- and redundant arms.  Runs after typechecking of the enclosing top-level
