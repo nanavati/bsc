@@ -71,15 +71,11 @@ tiDefns errh s flags ds = do
   -- Accumulate all used packages (only from the first round, poison pills don't use new symbols)
   let allUsedPkgs = S.unions pkgss
   let mergedATFCache = foldl mergeCATFCaches M.empty atfCaches
-  -- Typeclass defaults are typechecked at the class declaration and again
-  -- wherever an instance inherits them, so identical warnings can arise
-  -- from several definitions; report each warning once
-  let uniqueWarns = nub (concat wss)
   -- XXX: we give up - some type signatures are bogus
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
       bsError errh (nub errors) -- the underyling error should be in errors
   when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
-  return (ds' ++ error_defs', uniqueWarns, allUsedPkgs, have_errors, mergedATFCache)
+  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors, mergedATFCache)
 
 nullAssump :: [Assump]
 nullAssump = []
@@ -90,7 +86,7 @@ tiOneDef d@(CValueSign (CDef i t s)) = do
         (rs, ~(CLValueSign d' _)) <- tiExpl nullAssump (i, t, s, [])
         checkTopPreds (Just i) d rs
         -- report pattern-match warnings, now that the types are resolved
-        flushPatObligations (getPosition i)
+        flushPatObligations expandSynN
         s <- getSubst'
         clearSubst
         return (CValueSign (apSub s d'))
@@ -114,7 +110,7 @@ tiOneDef d@(Cclass incoh cps ik is fd ats fs) = do
           return (f { cf_default = fcs' })
     fs' <- mapM tiF fs
     -- report pattern-match warnings from the field defaults
-    flushPatObligations (getPosition ik)
+    flushPatObligations expandSynN
     -- XXX We could return the mangled typechecked clauses here if
     -- XXX * we typecheck Cclass first and re-insert into the symt
     -- XXX * typecheck the rest of the pkg (which may use those defaults)

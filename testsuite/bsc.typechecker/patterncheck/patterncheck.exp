@@ -5,6 +5,12 @@
 compile_pass_warning IncompleteCase.bsv T0165 2
 compare_file IncompleteCase.bsv.bsc-out
 
+# The default operation budget completes this analysis (above), while a
+# deliberately tiny budget must fail conservatively without issuing a warning.
+erase IncompleteCase.bo
+compile_pass_no_warning IncompleteCase.bsv {-pattern-check-fuel 1}
+erase IncompleteCase.bo
+
 # non-exhaustive matches over enums, sized literals and structs;
 # a guarded arm does not count towards completeness
 compile_pass_warning IncompleteEnumLit.bsv T0165 4
@@ -22,18 +28,75 @@ compile_pass_no_warning CompleteCase.bsv
 # of a non-power-of-2 enum) and the ".Tag" selection sugar must not warn
 compile_pass_no_warning DerivingClean.bsv
 
-# guards (&&&) are conservative: a guarded arm does not count towards
-# completeness, does not shadow later arms, but a subsumed arm is dead
-# even when it carries a guard; pattern conditions in rules, if and the
-# conditional operator are filters; implicit method conditions neither
-# warn nor mask incomplete matches inside the method
+# Unsupported guards remain conservative: they do not count towards
+# completeness or shadow later arms, but a subsumed arm is dead even when it
+# carries a guard.  Pattern conditions in rules, if and the conditional
+# operator are filters; implicit method conditions neither warn nor mask
+# incomplete matches inside the method.
 compile_pass_warning GuardsCond.bsv T0165 1
 erase GuardsCond.bo
 compile_pass_warning GuardsCond.bsv T0166 1
 
-# matches containing mixed literals (4'b1?01) are not analyzed, since
-# the masks alone can complete a match
-compile_pass_no_warning MixedLit.bsv
+# Typed Bool guards over pattern-bound places and resolved ambient variables
+# are analyzed propositionally.  Complementary guards are complete; repeated,
+# False, True-shadowed and complement-shadowed arms are redundant.
+# Alpha-renamed binders at the same place correlate, while a free variable
+# with the same spelling, a non-Prelude `not', and a local definition named
+# "otherwise" do not.
+compile_pass_no_warning GuardComplete.bsv
+compile_pass_warning GuardRedundant.bsv T0166 4 {-no-warn-incomplete-patterns}
+compare_file GuardRedundant.bsv.bsc-out
+compile_pass_warning GuardAlpha.bs T0166 1 {-no-warn-incomplete-patterns}
+compare_file GuardAlpha.bs.bsc-out
+compile_pass_warning GuardSafety.bs T0165 2 {-no-warn-overlapping-patterns}
+compare_file GuardSafety.bs.bsc-out
+compile_pass GuardCustomNotProvider.bs {-suppress-warnings P0102}
+compile_pass_warning GuardCustomNot.bs T0165 1 {-no-warn-overlapping-patterns}
+compare_file GuardCustomNot.bs.bsc-out
+
+# Guard normalization and DNF reduction consume the same configurable fuel as
+# the pattern matrix.  Six operations exactly complete this small proof; one
+# fewer must lose the redundancy conclusion conservatively.
+compile_pass_no_warning GuardFuel.bsv {-pattern-check-fuel 5 -no-warn-incomplete-patterns}
+erase GuardFuel.bo
+compile_pass_warning GuardFuel.bsv T0166 1 {-pattern-check-fuel 6 -no-warn-incomplete-patterns}
+compare_file GuardFuel.bsv.bsc-out
+
+# Mixed Bit literals are analyzed symbolically, including masks narrower than
+# the scrutinee, partial overlap, multi-column correlation and union coverage.
+compile_pass_no_warning MixedLitComplete.bsv
+compile_pass_warning MixedLitIncomplete.bsv T0165 2
+compile_pass_warning MixedLitRedundant.bsv T0166 4
+compare_file MixedLitRedundant.bsv.bsc-out
+
+# Closed associated type functions are reduced when finding literal domains;
+# unresolved widths remain opaque.
+compile_pass_no_warning AssociatedTypeWidth.bs
+
+# Unsupported higher-rank payload subcolumns remain opaque without losing the
+# enclosing constructor's exhaustiveness/redundancy facts.
+compile_pass_warning HigherRankPayload.bs T0165 1
+erase HigherRankPayload.bo
+compile_pass_warning HigherRankPayload.bs T0166 1
+
+# Arbitrary overloaded string conversions remain local unknowns on both finite
+# and unbounded targets, without suppressing unrelated outer-tag diagnostics.
+compile_pass_warning StringLiteralOpaque.bsv T0165 1
+erase StringLiteralOpaque.bo
+compile_pass_warning StringLiteralOpaque.bsv T0166 1
+
+# Concrete Real patterns use numeric equality (including signed zero and the
+# closed Integer-to-Real conversion); custom RealLiteral targets stay opaque.
+compile_pass_warning RealPatterns.bsv T0165 1
+erase RealPatterns.bo
+compile_pass_warning RealPatterns.bsv T0166 2
+
+# Int#(0) has the singleton literal domain {0}; BSV singleton-string Char
+# patterns use the closed Prelude conversion and retain exact equality.
+compile_pass_no_warning ZeroWidthInt.bsv
+compile_pass_warning CharPatterns.bsv T0165 1
+erase CharPatterns.bo
+compile_pass_warning CharPatterns.bsv T0166 1
 
 # Classic: function clauses, tuples and integer literals
 compile_pass_warning PatFun.bs T0165 3
@@ -65,6 +128,16 @@ compile_pass_warning NegLitFun.bs T0166 1
 # the incomplete match in a typeclass default is reported once, at the
 # class declaration, not per inheriting instance
 compile_pass_warning ClassDefault.bs T0165 1
+
+# Source included inside a definition keeps the include file's position;
+# differing definition/match filenames must not suppress the warning
+compile_pass_warning IncludedCase.bsv T0165 1
+compile_pass_warning IncludedCaseTwoOwners.bsv T0165 2
+
+# An exported default is diagnosed while compiling its provider.  Reading
+# that default from the .bo and inheriting it must not report it again.
+compile_pass_warning ClassDefaultProvider.bs T0165 1
+compile_pass_no_warning ClassDefaultImport.bs
 
 # a guard-only (zero-pattern) definition is not reported
 compile_pass_no_warning ZeroArgGuard.bs
