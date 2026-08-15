@@ -587,6 +587,7 @@ defaultFlags bluespecdir = Flags {
         optSched = True,
         optUndet = False,
         parallelSimLink = 1,
+        patternCheckFuel = 100000,
         printFlags = False,
         printFlagsHidden = False,
         printFlagsRaw = False,
@@ -735,7 +736,7 @@ decodeFlags (('-':s):ss) (sets,warnings, bad, flags) =
               let eExpectsArg = (cmdPosition, EOneArgFlag ('-':s))
               in  case ss of
                     (s2:ss') ->
-                      if (isFlag s2) then
+                      if isFlag s2 && not (isNegativeIntegerArg s2) then
                         decodeFlags ss (sets, perhaps_warn, eExpectsArg : bad, flags)
                       else
                         case (dofunc flags s2) of
@@ -772,6 +773,14 @@ decodeFlags ss (sets, warnings, bad, flags) = (sets, warnings, bad, flags, ss)
 isFlag :: String -> Bool
 isFlag ('-':_) = True
 isFlag _ = False
+
+-- A required argument which is syntactically a negative decimal integer is
+-- still an argument, not another flag.  Its option-specific decoder decides
+-- whether negative values are permitted.  This keeps unknown flags distinct
+-- while allowing numeric options to report their precise range error.
+isNegativeIntegerArg :: String -> Bool
+isNegativeIntegerArg ('-':d:ds) = isDigit d && all isDigit ds
+isNegativeIntegerArg _ = False
 
 isDumpName :: String -> Bool
 isDumpName s =
@@ -1351,6 +1360,15 @@ externalFlags = [
               (Just (FRTString (show . parallelSimLink))),
           "specify the # of simultaneous jobs when linking Bluesim", Visible)),
 
+        ("pattern-check-fuel",
+         (Arg "n"
+              (\f s -> case (mread s) of
+                         Just n | n > 0 -> Left (f {patternCheckFuel=n})
+                         _ -> Right (cmdPosition,
+                                     EPositiveIntegerArgFlag "-pattern-check-fuel"))
+              (Just (FRTString (show . patternCheckFuel))),
+          "maximum pattern-matrix operations per analysis", Visible)),
+
         ("print-flags",
          (Toggle (\f x -> f {printFlags=x}) (showIfTrue printFlags),
           "print flag values after command-line parsing", Visible)),
@@ -1897,6 +1915,7 @@ showFlagsRaw flags =
           ("optSched", show (optSched flags)),
           ("optUndet", show (optUndet flags)),
           ("parallelSimLink", show (parallelSimLink flags)),
+          ("patternCheckFuel", show (patternCheckFuel flags)),
           ("passThroughAssertions", show (passThroughAssertions flags)),
           ("preprocessOnly", show (preprocessOnly flags)),
           ("printFlags", show (printFlags flags)),

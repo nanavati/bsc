@@ -20,6 +20,7 @@ Flags:
      -lift
      -o   a.out
      -parallel-sim-link   1
+     -pattern-check-fuel   100000
      -print-flags
      -remove-empty-rules
      -remove-false-rules

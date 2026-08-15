@@ -40,6 +40,7 @@ Compiler flags:
 -opt-undetermined-vals  aggressive optimization of undetermined values
 -p path                 directory path (``:'' sep.) for source and intermediate files
 -parallel-sim-link jobs specify the # of simultaneous jobs when linking Bluesim
+-pattern-check-fuel n   maximum pattern-matrix operations per analysis
 -print-flags            print flag values after command-line parsing
 -promote-warnings list  treat a list of warnings as errors (``:'' sep list of tags)
 -q                      same as -quiet

@@ -87,6 +87,7 @@ data Flags = Flags {
         optSched :: Bool,
         optUndet :: Bool,
         parallelSimLink :: Integer,
+        patternCheckFuel :: Int,
         printFlags :: Bool,
         printFlagsHidden :: Bool,
         printFlagsRaw :: Bool,
