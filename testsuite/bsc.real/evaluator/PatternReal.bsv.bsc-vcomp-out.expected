@@ -1,0 +1,10 @@
+checking package dependencies
+compiling PatternReal.bsv
+code generation for sysPatternReal starts
+Compilation message: "PatternReal.bsv", line 16, column 12: negative Real pattern
+Compilation message: "PatternReal.bsv", line 18, column 12: zero Real pattern
+Compilation message: "PatternReal.bsv", line 20, column 12: negative zero uses numeric equality
+Compilation message: "PatternReal.bsv", line 22, column 12: positive Real pattern
+Compilation message: "PatternReal.bsv", line 24, column 12: Real pattern default
+Verilog file created: sysPatternReal.v
+All packages are up to date.
