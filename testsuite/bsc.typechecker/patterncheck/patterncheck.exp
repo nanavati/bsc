@@ -133,6 +133,7 @@ compile_pass_warning ClassDefault.bs T0165 1
 # differing definition/match filenames must not suppress the warning
 compile_pass_warning IncludedCase.bsv T0165 1
 compile_pass_warning IncludedCaseTwoOwners.bsv T0165 2
+compile_pass_warning IncludedCaseSameOwner.bsv T0165 2
 
 # An exported default is diagnosed while compiling its provider.  Reading
 # that default from the .bo and inheriting it must not report it again.

@@ -43,7 +43,7 @@ import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth,
              warnIncompletePatterns, warnOverlappingPatterns)
 import TCPatCheck(PatMatchContext, PatMatchTypedRow,
-                  PatMatchRow(..), PatMatchObligation(..), mkClausesObligation,
+                  PatMatchObligation, mkClausesObligation,
                   completePatMatchObligation, checkPatMatches)
 import Subst
 import Pred
@@ -56,7 +56,7 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
-import Data.List(nubBy, sortBy)
+import Data.List(sortBy)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
@@ -391,18 +391,14 @@ flushPatObligations expandTy = do
         flags <- getFlags
         r <- getSymTab
         -- Reservations retain source order even though nested matches finish
-        -- first.  Deduplicate by source owner and the source-only skeleton:
-        -- recursive inference can type the same match with different fresh
-        -- variables, while identical included text in two definitions is
-        -- still two distinct matches and must warn twice.
+        -- first.  Every surviving token represents a distinct match: copied
+        -- defaults are suppressed when recording, and failed typechecking
+        -- attempts restore the recoverable obligation state.  In particular,
+        -- do not deduplicate by source syntax, because one include can expand
+        -- to several distinct matches under the same owner.
         let ordered = sortBy byToken obs
-            unique = nubBy sameSource ordered
-            obs' = map apSubEntry unique
+            obs' = map apSubEntry ordered
             byToken (t1, _, _) (t2, _, _) = compare t1 t2
-            sameSource (_, owner1, o1) (_, owner2, o2) =
-                owner1 == owner2 && sourceOnly o1 == sourceOnly o2
-            sourceOnly o = o { pmo_rows = map stripTyped (pmo_rows o) }
-            stripTyped row = row { pmr_typed = Nothing }
             apSubEntry (_, _, o) = apSub s o
             normTy = expandTy flags r
         mapM_ twarn (concatMap (checkPatMatches flags r normTy) obs')
