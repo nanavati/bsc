@@ -1,16 +1,16 @@
-# Tests for pattern-match exhaustiveness (T0159) and redundancy (T0160)
+# Tests for pattern-match exhaustiveness (T0165) and redundancy (T0166)
 # checking
 
 # non-exhaustive case expressions over tagged unions, with nesting
-compile_pass_warning IncompleteCase.bsv T0159 2
+compile_pass_warning IncompleteCase.bsv T0165 2
 compare_file IncompleteCase.bsv.bsc-out
 
 # non-exhaustive matches over enums, sized literals and structs;
 # a guarded arm does not count towards completeness
-compile_pass_warning IncompleteEnumLit.bsv T0159 4
+compile_pass_warning IncompleteEnumLit.bsv T0165 4
 
 # arms that can never match
-compile_pass_warning RedundantCase.bsv T0160 3
+compile_pass_warning RedundantCase.bsv T0166 3
 compare_file RedundantCase.bsv.bsc-out
 
 # exhaustive matches, statement-context matches, plain case statements,
@@ -27,25 +27,25 @@ compile_pass_no_warning DerivingClean.bsv
 # even when it carries a guard; pattern conditions in rules, if and the
 # conditional operator are filters; implicit method conditions neither
 # warn nor mask incomplete matches inside the method
-compile_pass_warning GuardsCond.bsv T0159 1
+compile_pass_warning GuardsCond.bsv T0165 1
 erase GuardsCond.bo
-compile_pass_warning GuardsCond.bsv T0160 1
+compile_pass_warning GuardsCond.bsv T0166 1
 
 # matches containing mixed literals (4'b1?01) are not analyzed, since
 # the masks alone can complete a match
 compile_pass_no_warning MixedLit.bsv
 
 # Classic: function clauses, tuples and integer literals
-compile_pass_warning PatFun.bs T0159 3
+compile_pass_warning PatFun.bs T0165 3
 compare_file PatFun.bs.bsc-out
 erase PatFun.bo
-compile_pass_warning PatFun.bs T0160 1
+compile_pass_warning PatFun.bs T0166 1
 
 # Classic: "when" guards on clauses and case arms, pattern guards,
 # and implicit method conditions
-compile_pass_warning PatCond.bs T0159 3
+compile_pass_warning PatCond.bs T0165 3
 erase PatCond.bo
-compile_pass_warning PatCond.bs T0160 1
+compile_pass_warning PatCond.bs T0166 1
 
 # literal patterns outside the type's domain (only diagnosed at
 # elaboration) abandon the analysis; unenumerably wide types must not
@@ -54,17 +54,17 @@ compile_pass_no_warning OutOfRange.bsv
 
 # negative literal patterns match the value (negate lit), wrapping on
 # Bit; Int#(n) matches can be exhaustive (or redundant) via negatives
-compile_pass_warning NegLit.bsv T0159 1
+compile_pass_warning NegLit.bsv T0165 1
 erase NegLit.bo
-compile_pass_warning NegLit.bsv T0160 2
+compile_pass_warning NegLit.bsv T0166 2
 compare_file NegLit.bsv.bsc-out
-compile_pass_warning NegLitFun.bs T0159 1
+compile_pass_warning NegLitFun.bs T0165 1
 erase NegLitFun.bo
-compile_pass_warning NegLitFun.bs T0160 1
+compile_pass_warning NegLitFun.bs T0166 1
 
 # the incomplete match in a typeclass default is reported once, at the
 # class declaration, not per inheriting instance
-compile_pass_warning ClassDefault.bs T0159 1
+compile_pass_warning ClassDefault.bs T0165 1
 
 # a guard-only (zero-pattern) definition is not reported
 compile_pass_no_warning ZeroArgGuard.bs
@@ -77,4 +77,4 @@ compile_pass_no_warning RedundantCase.bsv {-no-warn-overlapping-patterns}
 
 # and can be suppressed by tag (leaving only the suppression summary)
 erase IncompleteCase.bo
-compile_pass_warning IncompleteCase.bsv S0080 1 {-suppress-warnings T0159}
+compile_pass_warning IncompleteCase.bsv S0080 1 {-suppress-warnings T0165}

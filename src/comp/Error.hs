@@ -3023,7 +3023,7 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
             " against instance " ++ root_inst))
 
 getErrorText (WNonExhaustivePattern ctx examples truncated) =
-    (Type 159, empty,
+    (Type 165, empty,
      s2par ("Pattern matching in " ++ ctx ++ " is not exhaustive." ++
             " The following " ++
             (if length examples == 1 && not truncated
@@ -3032,7 +3032,7 @@ getErrorText (WNonExhaustivePattern ctx examples truncated) =
      nest 2 (vcat (map text (examples ++ (if truncated then ["..."] else [])))))
 
 getErrorText (WRedundantPattern ctx pat) =
-    (Type 160, empty,
+    (Type 166, empty,
      s2par ("This pattern in " ++ ctx ++ " can never match, because" ++
             " the preceding patterns cover all of its cases:") $$
      nest 2 (text pat))
