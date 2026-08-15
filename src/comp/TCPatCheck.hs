@@ -37,7 +37,7 @@ module TCPatCheck(
 
 import Data.Bits((.&.), (.|.), xor, complement, bit, testBit, setBit, clearBit,
                  shiftR)
-import Data.List(find, nub, zipWith4)
+import Data.List(find, findIndex, intercalate, nub, zipWith4)
 import Data.Maybe(isNothing)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -54,7 +54,7 @@ import Flags(Flags, patternCheckFuel, warnIncompletePatterns,
 import CSyntax
 import CFreeVars(getPV, getFVE, fvSetToFreeVars)
 import CType
-import Type(tString, tBitN)
+import Type(tString, tBool, tBitN)
 import Pred(expandSyn, Qual(..))
 import qualified Pred(inst)
 import Scheme
@@ -839,6 +839,65 @@ guardCubePats atoms cube = map atAtom atoms
                  Just False -> NLit (LKInt 0)
                  Just True -> NLit (LKInt 1)
 
+-- A guard atom that denotes a pattern place is not independent of the
+-- patterns: it IS the value at that place.  Modeling it as an extra matrix
+-- column would let the analysis assign the atom and the place's pattern
+-- inconsistently and report impossible uncovered witnesses.  Instead, each
+-- cube's pattern-place assignments are folded into the row's own pattern
+-- vector, so the guard constrains the same column the patterns constrain.
+-- Only free-variable atoms become extra (shared) Bit#(1) columns.
+
+-- | The Bool constructor matched when the atom has the given value.
+boolConDesc :: NormType -> SymTab -> Bool -> Maybe NConDesc
+boolConDesc normTy r v =
+    case colKind normTy r tBool of
+      CKData _ cds -> find (\ cd -> nc_name cd `qualEq` name) cds
+      _ -> Nothing
+  where name = if v then idTrue else idFalse
+
+-- | Constrain the pattern vector at a place to a Boolean value.
+-- @Nothing@: the place cannot be navigated (e.g. it is inside an opaque
+-- node), so the enclosing guard must be treated as unknown; this is
+-- independent of the value, letting callers pre-check with either one.
+-- @Just Nothing@: the assignment contradicts the pattern (an empty match
+-- set).  @Just (Just ps)@: the constrained vector.
+foldPlaceAtom :: NormType -> SymTab -> [NPat] -> CoveragePlace -> Bool
+              -> Maybe (Maybe [NPat])
+foldPlaceAtom normTy r ps0 (CoveragePlace col projs) v = atCol col ps0
+  where
+    atCol _ [] = Nothing
+    atCol 0 (p : rest) = fmap (fmap (: rest)) (atPat projs p)
+    atCol n (p : rest) = fmap (fmap (p :)) (atCol (n - 1) rest)
+
+    atPat [] p = leaf p
+    atPat (proj : rest) (NCon cd args) = do
+        n <- projIndex cd proj
+        arg <- indexMaybe args n
+        let rewrap arg' = NCon cd (take n args ++ arg' : drop (n + 1) args)
+        fmap (fmap rewrap) (atPat rest arg)
+    atPat _ _ = Nothing
+
+    projIndex cd (CoverageConArg cn n) | nc_name cd `qualEq` cn = Just n
+    projIndex cd (CoverageField f) =
+        findIndex (\ fid -> fid `qualEq` f || unQualId fid == unQualId f)
+                  (nc_fieldIds cd)
+    projIndex _ _ = Nothing
+
+    indexMaybe xs n | n >= 0, (x : _) <- drop n xs = Just x
+                    | otherwise = Nothing
+
+    -- The binder was typed Bool (buildCoverageGuard checks), so the leaf
+    -- is a wildcard or a Bool constructor pattern (via an as-pattern).
+    leaf NWild = do
+        cd <- boolConDesc normTy r v
+        Just (Just (NCon cd [NWild]))
+    leaf p@(NCon cd _)
+      | nc_typeId cd `qualEq` idBool =
+          if nc_name cd `qualEq` (if v then idTrue else idFalse)
+          then Just (Just p)
+          else Just Nothing
+    leaf _ = Nothing
+
 -- Mixed literals are implemented by rmPatLit as equality tests on their known
 -- bit slices.  The rightmost source chunk is at bit zero; wildcard chunks and
 -- bits above the textual literal impose no constraint.
@@ -971,6 +1030,26 @@ negLitKey _ _ = Nothing
 -- matches degrade to "no warning" instead of blowing up compile time
 -- (the analysis is exponential in the worst case, as in GHC).
 type Fuel = Int
+
+-- The analysis state: the remaining fuel, plus a cache of column kinds.
+-- 'colKind' resolves every constructor of the column type against the
+-- symbol table; the matrix analysis asks about the same column types over
+-- and over across specialization steps, so the resolution is memoized per
+-- (un-normalized) column type for the duration of one warning class.
+data St = St { stFuel :: !Fuel, stKinds :: M.Map CType ColKind }
+
+mkSt :: Fuel -> St
+mkSt fuel = St { stFuel = fuel, stKinds = M.empty }
+
+spend :: St -> St
+spend st = st { stFuel = stFuel st - 1 }
+
+stColKind :: NormType -> SymTab -> St -> CType -> (St, ColKind)
+stColKind normTy r st t =
+    case M.lookup t (stKinds st) of
+      Just ck -> (st, ck)
+      Nothing -> let ck = colKind normTy r t
+                 in  (st { stKinds = M.insert t ck (stKinds st) }, ck)
 
 -- maximum number of example patterns reported for a non-exhaustive match
 maxWitnesses :: Int
@@ -1115,17 +1194,17 @@ cubeWitness LDInfinite _ = WWild
 
 -- | Compute (up to maxWitnesses+1) examples of value vectors not covered by
 -- the normalized pattern/guard rows.  Nothing means the fuel ran out.
-uncovered :: NormType -> SymTab -> Fuel -> [CType] -> [[NPat]]
-          -> (Fuel, Maybe [[WPat]])
-uncovered normTy r fuel _ _ | fuel <= 0 = (fuel, Nothing)
-uncovered normTy r fuel ts [] =
+uncovered :: NormType -> SymTab -> St -> [CType] -> [[NPat]]
+          -> (St, Maybe [[WPat]])
+uncovered normTy r st _ _ | stFuel st <= 0 = (st, Nothing)
+uncovered normTy r st ts [] =
     -- nothing covers anything: everything is a witness
-    (fuel - 1, Just [replicate (length ts) WWild])
-uncovered normTy r fuel [] rows = (fuel - 1, Just [])
-uncovered normTy r fuel (t : ts) rows =
-    case colKind normTy r t of
-      CKData _ cons
-        | sigComplete cons -> perCon (fuel - 1) cons []
+    (spend st, Just [replicate (length ts) WWild])
+uncovered normTy r st [] rows = (spend st, Just [])
+uncovered normTy r st0 (t : ts) rows =
+    case stColKind normTy r st0 t of
+      (st, CKData _ cons)
+        | sigComplete cons -> perCon (spend st) cons []
         | otherwise ->
             -- witnesses with the missing constructors first, then keep
             -- looking inside the constructors that are present
@@ -1134,16 +1213,16 @@ uncovered normTy r fuel (t : ts) rows =
                        then [WWild]
                        else [ WCon cd (replicate (length (nc_argTypes cd)) WWild)
                             | cd <- missing ]
-            in  thenPerCon (prefixDefault (fuel - 1) wits) present
-      CKStruct sd -> perCon (fuel - 1) [sd] []
-      CKLit dom@(LDFinite _ _ _) -> uncoveredFinite (fuel - 1) dom
-      CKLit LDInfinite ->
+            in  thenPerCon (prefixDefault (spend st) wits) present
+      (st, CKStruct sd) -> perCon (spend st) [sd] []
+      (st, CKLit dom@(LDFinite _ _ _)) -> uncoveredFinite (spend st) dom
+      (st, CKLit LDInfinite) ->
           let lits = headLits rows
               wit = if null lits then WWild else WLitOther lits
-          in  thenPerLit (prefixDefault (fuel - 1) [wit]) lits
-      CKOpaque
-        | all wildHead rows -> prefixDefault (fuel - 1) [WWild]
-        | otherwise -> (fuel - 1, Just [])  -- can't analyze: assume covered
+          in  thenPerLit (prefixDefault (spend st) [wit]) lits
+      (st, CKOpaque)
+        | all wildHead rows -> prefixDefault (spend st) [WWild]
+        | otherwise -> (spend st, Just [])  -- can't analyze: assume covered
   where
     present = headCons rows
     notPresent cd = all (\ cd' -> nc_conNo cd' /= nc_conNo cd) present
@@ -1152,130 +1231,133 @@ uncovered normTy r fuel (t : ts) rows =
     wildHead _ = False
     cap ws = take (maxWitnesses + 1) ws
     -- specialize per constructor, wrapping witnesses back up
-    perCon f [] acc = (f, Just (cap acc))
-    perCon f (cd : cds) acc
-      | length acc > maxWitnesses = (f, Just (cap acc))
+    perCon st [] acc = (st, Just (cap acc))
+    perCon st (cd : cds) acc
+      | length acc > maxWitnesses = (st, Just (cap acc))
       | otherwise =
         let arity = length (nc_argTypes cd)
-            (f', mws) = uncovered normTy r f (nc_argTypes cd ++ ts)
+            (st', mws) = uncovered normTy r st (nc_argTypes cd ++ ts)
                                           (specCon cd rows)
         in  case mws of
-              Nothing -> (f', Nothing)
+              Nothing -> (st', Nothing)
               Just ws ->
-                  perCon f' cds
+                  perCon st' cds
                       (acc ++ [ WCon cd (take arity w) : drop arity w
                               | w <- ws ])
-    perLit f [] acc = (f, Just (cap acc))
-    perLit f (k : ks) acc
-      | length acc > maxWitnesses = (f, Just (cap acc))
+    perLit st [] acc = (st, Just (cap acc))
+    perLit st (k : ks) acc
+      | length acc > maxWitnesses = (st, Just (cap acc))
       | otherwise =
-        let (f', mws) = uncovered normTy r f ts (specLit k rows)
+        let (st', mws) = uncovered normTy r st ts (specLit k rows)
         in  case mws of
-              Nothing -> (f', Nothing)
-              Just ws -> perLit f' ks (acc ++ [ WLit k : w | w <- ws ])
-    uncoveredFinite f dom =
+              Nothing -> (st', Nothing)
+              Just ws -> perLit st' ks (acc ++ [ WLit k : w | w <- ws ])
+    uncoveredFinite st dom =
         case (domainCube dom, mapM rowCube rows) of
           (Just universe, Just cubeRows) ->
-              case partitionCubes f universe (map fst cubeRows) of
-                (f', Nothing) -> (f', Nothing)
-                (f', Just cells) -> perCell f' dom cubeRows cells []
-          _ -> (f, Nothing)
+              case partitionCubes (stFuel st) universe (map fst cubeRows) of
+                (f', Nothing) -> (st { stFuel = f' }, Nothing)
+                (f', Just cells) ->
+                    perCell (st { stFuel = f' }) dom cubeRows cells []
+          _ -> (st, Nothing)
       where
         rowCube (p : ps) = do cube <- patCube dom p; return (cube, ps)
         rowCube [] = Nothing
-    perCell f _ _ [] acc = (f, Just (cap acc))
-    perCell f dom cubeRows (cell : cells) acc
-      | f <= 0 = (f, Nothing)
-      | length acc > maxWitnesses = (f, Just (cap acc))
+    perCell st _ _ [] acc = (st, Just (cap acc))
+    perCell st dom cubeRows (cell : cells) acc
+      | stFuel st <= 0 = (st, Nothing)
+      | length acc > maxWitnesses = (st, Just (cap acc))
       | otherwise =
           let tails = [ ps | (cube, ps) <- cubeRows,
                              cubeContains cube cell ]
-              (f', mws) = uncovered normTy r f ts tails
+              (st', mws) = uncovered normTy r st ts tails
           in  case mws of
-                Nothing -> (f', Nothing)
+                Nothing -> (st', Nothing)
                 Just ws ->
-                    perCell f' dom cubeRows cells
+                    perCell st' dom cubeRows cells
                             (acc ++ [ cubeWitness dom cell : w | w <- ws ])
-    prefixDefault f wits =
-        let (f', mws) = uncovered normTy r f ts (defaultMat rows)
+    prefixDefault st wits =
+        let (st', mws) = uncovered normTy r st ts (defaultMat rows)
         in  case mws of
-              Nothing -> (f', Nothing)
-              Just ws -> (f', Just (cap [ wit : w | w <- ws, wit <- wits ]))
-    thenPerCon (f, Nothing) _ = (f, Nothing)
-    thenPerCon (f, Just acc) cds
-      | length acc > maxWitnesses = (f, Just (cap acc))
-      | otherwise = perCon f cds acc
-    thenPerLit (f, Nothing) _ = (f, Nothing)
-    thenPerLit (f, Just acc) ks
-      | length acc > maxWitnesses = (f, Just (cap acc))
-      | otherwise = perLit f ks acc
+              Nothing -> (st', Nothing)
+              Just ws -> (st', Just (cap [ wit : w | w <- ws, wit <- wits ]))
+    thenPerCon (st, Nothing) _ = (st, Nothing)
+    thenPerCon (st, Just acc) cds
+      | length acc > maxWitnesses = (st, Just (cap acc))
+      | otherwise = perCon st cds acc
+    thenPerLit (st, Nothing) _ = (st, Nothing)
+    thenPerLit (st, Just acc) ks
+      | length acc > maxWitnesses = (st, Just (cap acc))
+      | otherwise = perLit st ks acc
 
 -- | Is the vector qs useful w.r.t. the rows (can it match something the
 -- rows do not)?  Nothing means the fuel ran out.
-useful :: NormType -> SymTab -> Fuel -> [CType] -> [[NPat]] -> [NPat]
-       -> (Fuel, Maybe Bool)
-useful normTy r fuel _ _ _ | fuel <= 0 = (fuel, Nothing)
-useful normTy r fuel [] rows [] = (fuel - 1, Just (null rows))
-useful normTy r fuel [] _ _ = (fuel - 1, Just True)  -- shape mismatch: be quiet
-useful normTy r fuel _ _ [] = (fuel - 1, Just True)
-useful normTy r fuel (t : ts) rows (q : qs) =
+useful :: NormType -> SymTab -> St -> [CType] -> [[NPat]] -> [NPat]
+       -> (St, Maybe Bool)
+useful normTy r st _ _ _ | stFuel st <= 0 = (st, Nothing)
+useful normTy r st [] rows [] = (spend st, Just (null rows))
+useful normTy r st [] _ _ = (spend st, Just True)  -- shape mismatch: be quiet
+useful normTy r st _ _ [] = (spend st, Just True)
+useful normTy r st0 (t : ts) rows (q : qs) =
     case q of
       NCon cd args ->
-          useful normTy r (fuel - 1) (nc_argTypes cd ++ ts)
+          useful normTy r (spend st0) (nc_argTypes cd ++ ts)
                  (specCon cd rows) (args ++ qs)
       NLit k ->
-          case colKind normTy r t of
-            CKLit dom@(LDFinite _ _ _) -> usefulFinite (fuel - 1) dom
-            _ -> useful normTy r (fuel - 1) ts (specLit k rows) qs
+          case stColKind normTy r st0 t of
+            (st, CKLit dom@(LDFinite _ _ _)) -> usefulFinite (spend st) dom
+            (st, _) -> useful normTy r (spend st) ts (specLit k rows) qs
       NMask _ ->
-          case colKind normTy r t of
-            CKLit dom@(LDFinite _ _ _) -> usefulFinite (fuel - 1) dom
-            _ -> (fuel - 1, Nothing)
+          case stColKind normTy r st0 t of
+            (st, CKLit dom@(LDFinite _ _ _)) -> usefulFinite (spend st) dom
+            (st, _) -> (spend st, Nothing)
       NUnknown ->
-          useful normTy r (fuel - 1) (t : ts) rows (NWild : qs)
+          useful normTy r (spend st0) (t : ts) rows (NWild : qs)
       NWild ->
-          case colKind normTy r t of
-            CKData _ cons
-              | sigComplete cons -> anyCon (fuel - 1) cons
-              | otherwise -> useful normTy r (fuel - 1) ts (defaultMat rows) qs
-            CKStruct sd -> anyCon (fuel - 1) [sd]
-            CKLit dom@(LDFinite _ _ _) -> usefulFinite (fuel - 1) dom
-            CKLit LDInfinite ->
-                useful normTy r (fuel - 1) ts (defaultMat rows) qs
-            CKOpaque -> useful normTy r (fuel - 1) ts (defaultMat rows) qs
+          case stColKind normTy r st0 t of
+            (st, CKData _ cons)
+              | sigComplete cons -> anyCon (spend st) cons
+              | otherwise ->
+                  useful normTy r (spend st) ts (defaultMat rows) qs
+            (st, CKStruct sd) -> anyCon (spend st) [sd]
+            (st, CKLit dom@(LDFinite _ _ _)) -> usefulFinite (spend st) dom
+            (st, CKLit LDInfinite) ->
+                useful normTy r (spend st) ts (defaultMat rows) qs
+            (st, CKOpaque) -> useful normTy r (spend st) ts (defaultMat rows) qs
   where
     present = headCons rows
     sigComplete cons =
         all (\ cd -> any (\ cd' -> nc_conNo cd' == nc_conNo cd) present) cons
-    anyCon f [] = (f, Just False)
-    anyCon f (cd : cds) =
+    anyCon st [] = (st, Just False)
+    anyCon st (cd : cds) =
         let arity = length (nc_argTypes cd)
-            (f', mu) = useful normTy r f (nc_argTypes cd ++ ts)
-                              (specCon cd rows) (replicate arity NWild ++ qs)
+            (st', mu) = useful normTy r st (nc_argTypes cd ++ ts)
+                               (specCon cd rows) (replicate arity NWild ++ qs)
         in  case mu of
-              Nothing -> (f', Nothing)
-              Just True -> (f', Just True)
-              Just False -> anyCon f' cds
-    usefulFinite f dom =
+              Nothing -> (st', Nothing)
+              Just True -> (st', Just True)
+              Just False -> anyCon st' cds
+    usefulFinite st dom =
         case (patCube dom q, mapM rowCube rows) of
           (Just queryCube, Just cubeRows) ->
-              case partitionCubes f queryCube (map fst cubeRows) of
-                (f', Nothing) -> (f', Nothing)
-                (f', Just cells) -> usefulCells f' cubeRows cells
-          _ -> (f, Nothing)
+              case partitionCubes (stFuel st) queryCube (map fst cubeRows) of
+                (f', Nothing) -> (st { stFuel = f' }, Nothing)
+                (f', Just cells) ->
+                    usefulCells (st { stFuel = f' }) cubeRows cells
+          _ -> (st, Nothing)
       where
         rowCube (p : ps) = do cube <- patCube dom p; return (cube, ps)
         rowCube [] = Nothing
-    usefulCells f _ [] = (f, Just False)
-    usefulCells f _ _ | f <= 0 = (f, Nothing)
-    usefulCells f cubeRows (cell : cells) =
+    usefulCells st _ [] = (st, Just False)
+    usefulCells st _ _ | stFuel st <= 0 = (st, Nothing)
+    usefulCells st cubeRows (cell : cells) =
         let tails = [ ps | (cube, ps) <- cubeRows,
                            cubeContains cube cell ]
-            (f', mu) = useful normTy r f ts tails qs
+            (st', mu) = useful normTy r st ts tails qs
         in  case mu of
-              Nothing -> (f', Nothing)
-              Just True -> (f', Just True)
-              Just False -> usefulCells f' cubeRows cells
+              Nothing -> (st', Nothing)
+              Just True -> (st', Just True)
+              Just False -> usefulCells st' cubeRows cells
 
 -- ---------------------------------------------------------------------------
 -- Witness rendering
@@ -1313,10 +1395,6 @@ tupleElems cd [w1, w2]
           _ -> [w1, w2]
 tupleElems _ ws = ws
 
-commaJoin :: [String] -> String
-commaJoin [] = ""
-commaJoin ss = foldr1 (\ a b -> a ++ ", " ++ b) ss
-
 showWitness :: Bool -> [WPat] -> String
 showWitness classic ws = unwords (map (showW False) ws)
   where
@@ -1326,7 +1404,7 @@ showWitness classic ws = unwords (map (showW False) ws)
     showW _ (WLitOther ks) =
         let shown = map showLitKey (take maxLitsListed ks)
             more = if length ks > maxLitsListed then ", ..." else ""
-        in  "v when v is not one of {" ++ commaJoin shown ++ more ++ "}"
+        in  "v when v is not one of {" ++ intercalate ", " shown ++ more ++ "}"
     showW nested (WCon cd ws')
         | nc_isStruct cd = showStruct cd ws'
         | otherwise = showCon nested cd ws'
@@ -1366,7 +1444,7 @@ showWitness classic ws = unwords (map (showW False) ws)
           let es = tupleElems cd ws'
               open = if classic then "(" else "{"
               close = if classic then ")" else "}"
-          in  open ++ commaJoin (map (showW False) es) ++ close
+          in  open ++ intercalate ", " (map (showW False) es) ++ close
       | null (nc_fieldIds cd) = if classic then "()" else "{}"
       | otherwise =
           getIdBaseString (nc_typeId cd) ++ " " ++
@@ -1380,7 +1458,7 @@ showWitness classic ws = unwords (map (showW False) ws)
     showFields fps =
         let sep = if classic then " = " else ": "
         in  "{ " ++
-            commaJoin [ getIdBaseString f ++ sep ++ showW False w
+            intercalate ", " [ getIdBaseString f ++ sep ++ showW False w
                       | (f, w) <- fps ] ++ " }"
 
 -- ---------------------------------------------------------------------------
@@ -1437,16 +1515,52 @@ checkPatMatches flags r normTy o
                 guard = buildCoverageGuard normTy binders
                            (pmr_sourceQuals row) (pmtr_qualGroups typedRow)
             nps <- mapM (normCoveragePat normTy r) coveragePats
-            return (row, nps, guard)
+            return (row, nps, vetGuard nps guard)
 
+    -- Demote a guard to unknown when any of its pattern-place atoms cannot
+    -- be folded into this row's pattern vector (for example, the place is
+    -- inside an opaque node).  After this check, folding a cube in
+    -- 'guardedVector' can only fail by contradicting the patterns.
+    vetGuard nps guard
+        | all foldable [pl | CoveragePatternPlace pl
+                               <- S.toList (guardFormulaAtoms guard)] = guard
+        | otherwise = CoverageGuardUnknown
+      where
+        foldable pl = case foldPlaceAtom normTy r nps pl True of
+                        Nothing -> False
+                        Just _ -> True
+
+    -- Only free-variable atoms become matrix columns; pattern-place atoms
+    -- are folded into the pattern vector itself (see 'foldPlaceAtom').
     guardAtoms nrows = S.toList (S.unions
-        [guardFormulaAtoms guard | (_, _, guard) <- nrows])
+        [S.filter isFreeAtom (guardFormulaAtoms guard)
+        | (_, _, guard) <- nrows])
+      where
+        isFreeAtom (CoverageFreeVariable _) = True
+        isFreeAtom (CoveragePatternPlace _) = False
 
     matrixTypes atoms =
         colTypes ++ replicate (length atoms) (tBitN 1 noPosition)
 
-    guardedVector atoms nps cube =
-        map unknownAsWild nps ++ guardCubePats atoms cube
+    -- The vector matched by one cube of a row's guard: the row's patterns
+    -- constrained by the cube's pattern-place assignments, then one column
+    -- per free-variable atom.  Nothing if the cube contradicts the patterns
+    -- (the cube matches nothing).
+    guardedVector atoms nps cube = do
+        nps' <- foldPlaces nps [ (pl, v)
+                               | (CoveragePatternPlace pl, v) <- M.toList cube ]
+        return (map unknownAsWild nps' ++ guardCubePats atoms cube)
+      where
+        foldPlaces ps [] = Just ps
+        foldPlaces ps ((pl, v) : rest) =
+            case foldPlaceAtom normTy r ps pl v of
+              Just (Just ps') -> foldPlaces ps' rest
+              Just Nothing -> Nothing
+              -- unreachable: 'vetGuard' pre-checked every place atom
+              Nothing -> Nothing
+
+    guardedVectors atoms nps cubes =
+        [ vec | Just vec <- map (guardedVector atoms nps) cubes ]
 
     -- Unknown guards retain the historical conservative policy and do not
     -- contribute to completeness.  Fuel exhaustion is different: the flag's
@@ -1459,7 +1573,7 @@ checkPatMatches flags r normTy o
           case guardCubes f guard of
             (f', Nothing) -> (f', Nothing)
             (f', Just cubes) ->
-              let vectors = map (guardedVector atoms nps) cubes
+              let vectors = guardedVectors atoms nps cubes
               in  go f' (reverse vectors ++ acc) rows
 
     incompleteWarnings nrows
@@ -1469,7 +1583,8 @@ checkPatMatches flags r normTy o
         in case coverMatrix (patternCheckFuel flags) atoms nrows of
              (_, Nothing) -> []
              (fuel, Just matrix) ->
-               case snd (uncovered normTy r fuel (matrixTypes atoms) matrix) of
+               case snd (uncovered normTy r (mkSt fuel)
+                                   (matrixTypes atoms) matrix) of
                  Just ws@(_:_) ->
                    let shown = map (showWitness (isClassic ()) .
                                     take nSourceCols)
@@ -1481,22 +1596,20 @@ checkPatMatches flags r normTy o
 
     redundantWarnings nrows
       | not doOverlap = []
-      | otherwise = go (patternCheckFuel flags) [] nrows
+      | otherwise = go (mkSt (patternCheckFuel flags)) [] nrows
       where
         atoms = guardAtoms nrows
         tys = matrixTypes atoms
 
         go _ _ [] = []
-        go fuel _ _ | fuel <= 0 = []
-        go fuel prior ((row, nps, guard) : rest)
-          | fuel <= 0 = []
-          | otherwise =
-              case rowVectors fuel nps guard of
+        go st _ _ | stFuel st <= 0 = []
+        go st prior ((row, nps, guard) : rest) =
+              case rowVectors (stFuel st) nps guard of
                 (_, Nothing) -> []
                 (fuel1, Just (queries, premises)) ->
-                  case usefulAny fuel1 prior queries of
+                  case usefulAny (st { stFuel = fuel1 }) prior queries of
                     (_, Nothing) -> []
-                    (fuel2, Just isUseful) ->
+                    (st2, Just isUseful) ->
                       let prior' = if any hasUnknown nps
                                    then prior
                                    else prior ++ premises
@@ -1505,7 +1618,7 @@ checkPatMatches flags r normTy o
                             then [(pmr_pos row,
                                    WRedundantPattern ctxStr (showRow row))]
                             else []
-                      in  warnings ++ go fuel2 prior' rest
+                      in  warnings ++ go st2 prior' rest
           where
             rowVectors f ps CoverageGuardUnknown =
               let query = map unknownAsWild ps ++ replicate (length atoms) NWild
@@ -1514,17 +1627,18 @@ checkPatMatches flags r normTy o
               case guardCubes f g of
                 (f', Nothing) -> (f', Nothing)
                 (f', Just cubes) ->
-                  let vectors = map (guardedVector atoms ps) cubes
+                  let vectors = guardedVectors atoms ps cubes
                   in  (f', Just (vectors, vectors))
 
         -- A source row whose guard has several cubes is redundant only when
-        -- every satisfying cube is already covered.  A false guard has zero
-        -- cubes and is therefore unreachable.
-        usefulAny f _ [] = (f, Just False)
-        usefulAny f prior (query:queries) =
-          case useful normTy r f tys prior query of
-            (f', Nothing) -> (f', Nothing)
-            (f', Just True) -> (f', Just True)
-            (f', Just False) -> usefulAny f' prior queries
+        -- every satisfying cube is already covered.  A guard with no
+        -- satisfiable cube (False, or contradicting its own patterns) is
+        -- unreachable.
+        usefulAny st _ [] = (st, Just False)
+        usefulAny st prior (query:queries) =
+          case useful normTy r st tys prior query of
+            (st', Nothing) -> (st', Nothing)
+            (st', Just True) -> (st', Just True)
+            (st', Just False) -> usefulAny st' prior queries
 
         showRow row = unwords (map pfpString (pmr_sourcePats row))

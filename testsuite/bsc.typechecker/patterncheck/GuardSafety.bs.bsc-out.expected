@@ -6,7 +6,7 @@ Warning: "GuardSafety.bs", line 10, column 22: (P0102)
 Warning: "GuardSafety.bs", line 10, column 17: (T0165)
   Pattern matching in the clauses for `boundVersusFree' is not exhaustive. The
   following pattern is not covered:
-    Valid _
+    Valid False
 Warning: "GuardSafety.bs", line 22, column 5: (T0165)
   Pattern matching in this case expression is not exhaustive. The following
   pattern is not covered:

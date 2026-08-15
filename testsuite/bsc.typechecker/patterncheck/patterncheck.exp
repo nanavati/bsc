@@ -54,6 +54,17 @@ compile_pass GuardCustomNotProvider.bs {-suppress-warnings P0102}
 compile_pass_warning GuardCustomNot.bs T0165 1 {-no-warn-overlapping-patterns}
 compare_file GuardCustomNot.bs.bsc-out
 
+# A guard over a pattern-bound variable constrains the value at that
+# pattern place, the same value other arms' patterns constrain: together
+# they can be exhaustive (at a payload, the root, or a struct field),
+# an uncovered witness names the exact remaining value, and a guard that
+# contradicts its own row's pattern makes the arm unreachable.
+compile_pass_no_warning GuardPlaceLink.bsv
+compile_pass_warning GuardPlaceLinkIncomplete.bsv T0165 1
+compare_file GuardPlaceLinkIncomplete.bsv.bsc-out
+compile_pass_warning GuardPlaceContradict.bs T0166 1 {-no-warn-incomplete-patterns}
+compare_file GuardPlaceContradict.bs.bsc-out
+
 # Guard normalization and DNF reduction consume the same configurable fuel as
 # the pattern matrix.  Six operations exactly complete this small proof; one
 # fewer must lose the redundancy conclusion conservatively.
