@@ -162,8 +162,16 @@ data NConDesc = NConDesc {
 
 -- | Literal domains: Bit n and UInt n have the values [0, 2^n), while Int n
 -- has [-2^(n-1), 2^(n-1)-1]; everything else is treated as unbounded.
-data LitDomain = LDFinite Integer Integer  -- lo, hi (inclusive)
+data LitDomain = LDFinite Integer Integer NegRule  -- lo, hi (inclusive)
                | LDInfinite
+    deriving (Eq)
+
+-- | What a negated literal means at the type, mirroring the ranges
+-- accepted by the conversion primitives at elaboration (see
+-- PrimIntegerToBit\/UIntBits\/IntBits in IExpand)
+data NegRule = NegWrap Integer  -- ^ Bit n: wraps; magnitude at most 2^(n-1)
+             | NegNone          -- ^ UInt n: negative literals are invalid
+             | NegExact         -- ^ Int n: the negated value must be in range
     deriving (Eq)
 
 data LitKey = LKInt Integer | LKStr String | LKChar Char | LKReal Double
@@ -226,17 +234,21 @@ colKind normTy r t =
                   -- cheap to compute and compare
                   [n] | isTNum n, getTNum n <= 65536 ->
                     let w = getTNum n
-                    in  CKLit (LDFinite 0 (2^w - 1))
+                        neg = if tcid `qualEq` idBit && w > 0
+                              then NegWrap (2^(w-1))
+                              else NegNone
+                    in  CKLit (LDFinite 0 (2^w - 1) neg)
                   [n] | isTNum n -> CKLit LDInfinite
                   _ -> CKOpaque
             | tcid `qualEq` idInt ->
                 case tyConArgs t' of
                   [n] | isTNum n, getTNum n == 0 ->
                     -- Prelude's inLiteralRange for Int#(0) admits exactly 0.
-                    CKLit (LDFinite 0 0)
+                    CKLit (LDFinite 0 0 NegExact)
                   [n] | isTNum n, getTNum n >= 1, getTNum n <= 65536 ->
                     let w = getTNum n
-                    in  CKLit (LDFinite (negate (2^(w-1))) (2^(w-1) - 1))
+                    in  CKLit (LDFinite (negate (2^(w-1))) (2^(w-1) - 1)
+                                        NegExact)
                   [n] | isTNum n -> CKLit LDInfinite
                   _ -> CKOpaque
             | any (qualEq tcid)
@@ -366,8 +378,16 @@ normPat normTy r t p =
                     -- typecheck-time literal is only range-checked at
                     -- elaboration) would break completeness analysis
                     case (k, dom) of
-                      (LKInt v, LDFinite lo hi) | v < lo || v > hi -> Nothing
+                      (LKInt v, LDFinite lo hi _) | v < lo || v > hi -> Nothing
                       _ -> Just (NLit k)
+            _ -> Just NUnknown
+      CPNegLit (CLiteral _ l) ->
+          case colKind normTy r t of
+            CKLit dom -> do
+                sourceKey <- litKey l
+                case canonicalLitKey normTy t sourceKey of
+                  Just k -> NLit <$> negLitKey k dom
+                  Nothing -> Just NUnknown
             _ -> Just NUnknown
       CPCon1 _ c p' -> normPat normTy r t (CPCon c [p'])
       CPCon c [p1, p2] | c `qualEq` idComma ->
@@ -488,6 +508,8 @@ buildCoveragePat normTy r place ty source typed =
             _ -> (CoverageOpaque pos place nty,
                   [CoverageBinder i place nty (getPosition i)])
       CPLit l -> (CoverageLitPat pos place nty (CoveragePositive l), [])
+      CPNegLit l ->
+          (CoverageLitPat pos place nty (CoverageNegative l), [])
       CPMixedLit p base chunks ->
           (CoverageMaskPat p place nty base chunks, [])
       CPCon c [p1, p2] | c `qualEq` idComma ->
@@ -584,6 +606,8 @@ normCoveragePat normTy r cp =
           NCon (coverageNConDesc cc) <$> mapM (normCoveragePat normTy r) ps
       CoverageLitPat _ _ t (CoveragePositive l) ->
           normPat normTy r t (CPLit l)
+      CoverageLitPat _ _ t (CoverageNegative l) ->
+          normPat normTy r t (CPNegLit l)
       CoverageMaskPat p _ t base chunks ->
           normPat normTy r t (CPMixedLit p base chunks)
 
@@ -980,6 +1004,25 @@ litKey (LChar c) = Just (LKChar c)
 litKey (LReal d) = Just (LKReal d)
 litKey LPosition = Nothing
 
+-- | The value matched by a negated literal pattern at the column type.
+-- Literals whose negation the type does not accept (an elaboration
+-- error if the match is ever elaborated) abandon the analysis.
+negLitKey :: LitKey -> LitDomain -> Maybe LitKey
+negLitKey (LKInt v) (LDFinite lo hi rule) =
+    case rule of
+      NegWrap maxmag
+        | v <= maxmag -> Just (LKInt (negate v `mod` (hi + 1)))
+        | otherwise -> Nothing
+      NegNone
+        | v == 0 -> Just (LKInt 0)
+        | otherwise -> Nothing
+      NegExact
+        | negate v >= lo -> Just (LKInt (negate v))
+        | otherwise -> Nothing
+negLitKey (LKInt v) LDInfinite = Just (LKInt (negate v))
+negLitKey (LKReal d) _ = Just (LKReal (negate d))
+negLitKey _ _ = Nothing
+
 -- ---------------------------------------------------------------------------
 -- The usefulness analysis
 
@@ -1046,11 +1089,11 @@ defaultMat :: [[NPat]] -> [[NPat]]
 defaultMat rows = [ ps | (NWild : ps) <- rows ]
 
 litDomainSize :: LitDomain -> Maybe Integer
-litDomainSize (LDFinite lo hi) = Just (hi - lo + 1)
+litDomainSize (LDFinite lo hi _) = Just (hi - lo + 1)
 litDomainSize LDInfinite = Nothing
 
 domainCube :: LitDomain -> Maybe BitCube
-domainCube dom@(LDFinite _ _) = do
+domainCube dom@(LDFinite _ _ _) = do
     size <- litDomainSize dom
     width <- exactLog2 size
     return (BitCube width 0 0)
@@ -1074,11 +1117,11 @@ patCube dom pat = do
     case (dom, pat) of
       (_, NWild) -> Just universe
       (_, NUnknown) -> Just universe
-      (LDFinite lo hi, NLit (LKInt v))
+      (LDFinite lo hi _, NLit (LKInt v))
         | v >= lo, v <= hi ->
             Just (BitCube (bc_width universe) (lowMask (bc_width universe))
                           (v - lo))
-      (LDFinite lo hi, NMask cube)
+      (LDFinite lo hi _, NMask cube)
         | lo == 0, hi + 1 == 2^(bc_width cube),
           bc_width cube == bc_width universe -> Just cube
       _ -> Nothing
@@ -1146,7 +1189,7 @@ partitionCubes fuel root cuts = go fuel [root] []
           Nothing -> firstSplit (f - 1) cell rest
 
 cubeWitness :: LitDomain -> BitCube -> WPat
-cubeWitness (LDFinite lo _) cube = WLit (LKInt (lo + bc_value cube))
+cubeWitness (LDFinite lo _ _) cube = WLit (LKInt (lo + bc_value cube))
 cubeWitness LDInfinite _ = WWild
 
 -- | Compute (up to maxWitnesses+1) examples of value vectors not covered by
@@ -1172,7 +1215,7 @@ uncovered normTy r st0 (t : ts) rows =
                             | cd <- missing ]
             in  thenPerCon (prefixDefault (spend st) wits) present
       (st, CKStruct sd) -> perCon (spend st) [sd] []
-      (st, CKLit dom@(LDFinite _ _)) -> uncoveredFinite (spend st) dom
+      (st, CKLit dom@(LDFinite _ _ _)) -> uncoveredFinite (spend st) dom
       (st, CKLit LDInfinite) ->
           let lits = headLits rows
               wit = if null lits then WWild else WLitOther lits
@@ -1262,11 +1305,11 @@ useful normTy r st0 (t : ts) rows (q : qs) =
                  (specCon cd rows) (args ++ qs)
       NLit k ->
           case stColKind normTy r st0 t of
-            (st, CKLit dom@(LDFinite _ _)) -> usefulFinite (spend st) dom
+            (st, CKLit dom@(LDFinite _ _ _)) -> usefulFinite (spend st) dom
             (st, _) -> useful normTy r (spend st) ts (specLit k rows) qs
       NMask _ ->
           case stColKind normTy r st0 t of
-            (st, CKLit dom@(LDFinite _ _)) -> usefulFinite (spend st) dom
+            (st, CKLit dom@(LDFinite _ _ _)) -> usefulFinite (spend st) dom
             (st, _) -> (spend st, Nothing)
       NUnknown ->
           useful normTy r (spend st0) (t : ts) rows (NWild : qs)
@@ -1277,7 +1320,7 @@ useful normTy r st0 (t : ts) rows (q : qs) =
               | otherwise ->
                   useful normTy r (spend st) ts (defaultMat rows) qs
             (st, CKStruct sd) -> anyCon (spend st) [sd]
-            (st, CKLit dom@(LDFinite _ _)) -> usefulFinite (spend st) dom
+            (st, CKLit dom@(LDFinite _ _ _)) -> usefulFinite (spend st) dom
             (st, CKLit LDInfinite) ->
                 useful normTy r (spend st) ts (defaultMat rows) qs
             (st, CKOpaque) -> useful normTy r (spend st) ts (defaultMat rows) qs

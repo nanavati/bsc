@@ -2363,8 +2363,9 @@ incomplete, because statement lowering supplies an implicit no-op
 default arm.  When no pattern matches at
 elaboration time, the result is an undetermined value, which is
 rarely the intent.  Matching over the entire domain of a sized
-numeric type (for example, both literals of \te{Bit\#(1)}, or all
-$2^n$ values of \te{Bit\#(n)} or \te{UInt\#(n)}) is
+numeric type (for example, both literals of \te{Bit\#(1)}, all
+$2^n$ values of \te{Bit\#(n)} or \te{UInt\#(n)}, or all values of
+\te{Int\#(n)} using negative literal patterns where needed) is
 recognized as complete.  Unions of mixed \te{Bit} literal patterns
 containing \te{?} wildcard digits are analyzed symbolically and can
 also be recognized as complete.  Typed Boolean guards (\te{\&\&\&}

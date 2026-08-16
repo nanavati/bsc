@@ -1,0 +1,34 @@
+package NegLitFun where
+
+infixl 10 %-%
+
+-- negative literal patterns in Classic: allowed at pattern top level
+-- (case arms) and parenthesized as function arguments
+
+-- exhaustive over Int 2
+allInt :: Int 2 -> Bit 2
+allInt (-2) = 0
+allInt (-1) = 1
+allInt 0 = 2
+allInt 1 = 3
+
+-- missing -2, reported as the witness
+missingNeg :: Int 2 -> Bit 2
+missingNeg x = case x of
+                 -1 -> 1
+                 0 -> 2
+                 1 -> 3
+
+-- the negated arm can never match after a wildcard
+dupNeg :: Int 2 -> Bit 2
+dupNeg x = case x of
+             _ -> 0
+             -1 -> 1
+
+-- an operator definition still parses (the clause argument positions
+-- do not admit bare negative literals)
+(%-%) :: Bit 4 -> Bit 4 -> Bit 4
+a %-% b = a - b
+
+useOp :: Bit 4 -> Bit 4
+useOp x = x %-% 1

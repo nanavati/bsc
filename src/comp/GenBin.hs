@@ -26,7 +26,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260714-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260814-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -227,6 +227,7 @@ instance Bin CPat where
     writeBytes (CPAny p) = do putI 4; toBin p
     writeBytes (CPLit l) = do putI 5; toBin l
     writeBytes (CPMixedLit pos n ns) = do putI 6; toBin pos; toBin n; toBin ns
+    writeBytes (CPNegLit l) = do putI 10; toBin l
     writeBytes (CPOper ops) = do putI 7; toBin ops
     writeBytes (CPCon1 i1 i2 p) = do putI 8; toBin i1; toBin i2; toBin p
     writeBytes (CPConTs i1 i2 ts ps) =
@@ -249,6 +250,7 @@ instance Bin CPat where
                      9 -> do i1 <- fromBin; i2 <- fromBin;
                              ts <- fromBin; ps <- fromBin;
                              return (CPConTs i1 i2 ts ps)
+                     10 -> do l <- fromBin; return (CPNegLit l)
                      n -> internalError $ "GenBin.Bin(CPat).readBytes: " ++ show n
 
 instance Bin CPOp where

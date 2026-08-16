@@ -883,6 +883,17 @@ rmPatLit p@(CPAny {}) = return (p, [])
 rmPatLit (CPLit (CLiteral p l)) = do
     v <- newVar p "rmPatLit"
     return (CPVar v, [CQFilter (cVApply idEqual [CVar v, CLit (CLiteral p l)])])
+rmPatLit (CPNegLit (CLiteral p l)) = do
+    -- fold the minus sign into the literal's value, exactly as the
+    -- expression parser does for a numeric literal with a leading
+    -- minus (see pNumericLiteral in CVParser)
+    v <- newVar p "rmPatLit"
+    neg_l <- case l of
+               LInt il -> return (LInt (il { ilValue = negate (ilValue il) }))
+               LReal r -> return (LReal (negate r))
+               _ -> internalError "TCMisc.rmPatLit: CPNegLit"
+    return (CPVar v,
+            [CQFilter (cVApply idEqual [CVar v, CLit (CLiteral p neg_l)])])
 rmPatLit (CPMixedLit pos base ps) = do
     -- only binary, hex and octal are legal
     let bitwidth = log2 base

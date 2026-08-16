@@ -1150,6 +1150,7 @@ instance PVPrint CPat where
     pvPrint d p (CPAs a pp) = pvPrint d maxPrec a <> t"@" <> pvPrint d maxPrec pp
     pvPrint d p (CPAny _) = text ".*"
     pvPrint d p (CPLit l) = pvPrint d p l
+    pvPrint d p (CPNegLit l) = pvparen (p>(maxPrec-1)) $ t"-" <> pvPrint d maxPrec l
     pvPrint d p (CPMixedLit _ base ps) =
         let f (len, Just val) = integerFormat len base val
             f (len, Nothing)  = genericReplicate len '?'

@@ -801,6 +801,10 @@ data CPat
         | CPAs Id CPat
         | CPAny Position
         | CPLit CLiteral
+        -- a numeric literal preceded by unary minus; as in expressions
+        -- (and as in Haskell), it matches the value (negate literal),
+        -- which for the sized unsigned types wraps around
+        | CPNegLit CLiteral
         -- position, base, [(length, value or don't-care)] starting from MSB
         -- note that length is length in digits, not bits!
         | CPMixedLit Position Integer [(Integer, Maybe Integer)]
@@ -819,6 +823,7 @@ instance NFData CPat where
     rnf (CPAs a pp) = rnf2 a pp
     rnf (CPAny pos) = rnf pos
     rnf (CPLit lit) = rnf lit
+    rnf (CPNegLit lit) = rnf lit
     rnf (CPMixedLit pos base ps) = rnf3 pos base ps
     rnf (CPOper ops) = rnf ops
     rnf (CPCon1 ti ci p) = rnf3 ti ci p
@@ -969,6 +974,7 @@ instance HasPosition CPat where
     getPosition (CPAs i _) = getPosition i
     getPosition (CPAny p) = p
     getPosition (CPLit l) = getPosition l
+    getPosition (CPNegLit l) = getPosition l
     getPosition (CPMixedLit p _ _) = p
     getPosition (CPOper ps) = getPosition ps
     getPosition (CPCon1 _ c _) = getPosition c
@@ -1496,6 +1502,7 @@ instance PPrint CPat where
     pPrint d p (CPAs a pp) = pPrint d maxPrec a <> t"@" <> pPrint d maxPrec pp
     pPrint d p (CPAny _) = text "_"
     pPrint d p (CPLit l) = pPrint d p l
+    pPrint d p (CPNegLit l) = pparen (p>(maxPrec-1)) $ t"-" <> pPrint d maxPrec l
     pPrint d p (CPMixedLit _ base ps) =
         let f (len, Just val) = integerFormat len base val
             f (len, Nothing)  = genericReplicate len '?'

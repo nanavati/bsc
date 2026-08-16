@@ -2797,9 +2797,25 @@ Parse a pattern and return it
 >        s   <- pQuotedString <?> "string"
 >        return (CPLit $ CLiteral pos $ LString s)
 
+A numeric literal preceded by unary minus; as in expressions, it
+matches the value (negate literal)
+
+> pNegativeNumericLiteralPattern :: SV_Parser CPat
+> pNegativeNumericLiteralPattern =
+>     do pos <- getPos
+>        pSymbol SV_SYM_minus
+>        pat <- pNumericLiteralPattern
+>        case pat of
+>          CPLit (CLiteral _ lit) ->
+>              return (CPNegLit (CLiteral pos lit))
+>          _ -> failWithErr
+>                 (pos, EGeneric ("A literal pattern with wildcard digits " ++
+>                                 "cannot be negated"))
+
 > pConstPattern :: SV_Parser CPat
 > pConstPattern =
 >         pNumericLiteralPattern                  -- numbers
+>     <|> pNegativeNumericLiteralPattern          -- negated numbers
 >     <|> pStringLiteralPattern                   -- strings
 
 > pEnumPattern :: SV_Parser CPat
