@@ -40,6 +40,11 @@ compile_no_source_fail_error pattern-check-fuel-negative \
 compile_no_source_fail_error pattern-check-fuel-nonnumeric \
     {-pattern-check-fuel abc} S0083
 
+# Every one-argument flag treats a following negative number as a flag,
+# not as its value (numeric flags must not silently store negatives).
+compile_no_source_fail_error steps-negative \
+    {-steps -100} S0012
+
 
 # Test that the expected file has not been accidentally corrupted.
 find_n_strings bsc.print-flags.out.expected BLUESPECDIR 2

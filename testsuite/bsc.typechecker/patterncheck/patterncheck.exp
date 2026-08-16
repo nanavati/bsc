@@ -71,6 +71,29 @@ compare_file GuardPlaceContradict.bs.bsc-out
 compile_pass_warning UnderscoreName.bs T0165 2
 compare_file UnderscoreName.bs.bsc-out
 
+# Guard cubes over pattern places, beyond a single atom: one cube fixing
+# two places (nested payloads and clause roots), a disjunction folding one
+# vector per cube, a De Morgan complement with alpha-renamed binders, a
+# cube mixing a folded place with a free variable, and a guard that agrees
+# with its own as-pattern.  Folded guards also shadow later arms.
+compile_pass_no_warning GuardPlaceCube.bs
+compile_pass_no_warning GuardPlaceAgree.bs
+compile_pass_warning GuardPlaceShadow.bs T0166 2
+compare_file GuardPlaceShadow.bs.bsc-out
+
+# The column-kind cache: repeated kind queries across sibling constructor
+# specializations, columns, rows and synonym aliases must resolve exactly
+# as cold lookups do -- for completeness verdicts, witness precision and
+# redundancy proofs alike -- and fuel exhaustion still abandons the
+# conclusion conservatively on a cache-heavy analysis.
+compile_pass_no_warning KindMemo.bs
+compile_pass_no_warning KindMemoWarn.bs {-pattern-check-fuel 1}
+erase KindMemoWarn.bo
+compile_pass_warning KindMemoWarn.bs T0165 1
+erase KindMemoWarn.bo
+compile_pass_warning KindMemoWarn.bs T0166 1
+compare_file KindMemoWarn.bs.bsc-out
+
 # Guard normalization and DNF reduction consume the same configurable fuel as
 # the pattern matrix.  Six operations exactly complete this small proof; one
 # fewer must lose the redundancy conclusion conservatively.
