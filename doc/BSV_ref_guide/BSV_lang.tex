@@ -7332,8 +7332,10 @@ conditional expressions, rule conditions, and method conditions.
 \gramalt      { \nterm{tuplePattern} }           \hfill Tuple
 
 \gram{constantPattern}{ \nterm{intLiteral} } \\
+\gramalt              { \term{-} \nterm{intLiteral}} \\
 \gramalt              { \nterm{realLiteral}} \\
-\gramalt              { \nterm{stringLiteral}} \\                    
+\gramalt              { \term{-} \nterm{realLiteral}} \\
+\gramalt              { \nterm{stringLiteral}} \\
 \gramalt              { \nterm{Identifier} }     \hfill Enum label
 
 \gram{taggedUnionPattern}{ \term{tagged} \nterm{Identifier} \opt{ \nterm{pattern} } }
@@ -7359,9 +7361,15 @@ In a pattern \texttt{.$x$}, the variable $x$ is declared at that point as
 a pattern variable, and is bound to the corresponding component of the
 value being matched.
 
-A constant pattern is an integer literal, or an enumeration label
-(such as \texttt{True} or \texttt{False}).  Integer literals can
-include the wildcard character \te{?} (example: \te{4'b00??}).
+A constant pattern is an integer literal, real literal, string literal,
+or an enumeration label (such as \texttt{True} or \texttt{False}).
+Binary, octal, and hexadecimal integer literals can include the wildcard
+character \te{?} (example: \te{4'b00??}).
+An integer or real literal may be preceded by a minus sign; as in
+expressions, it matches the negated value (which, for the unsigned
+types such as \te{Bit}, wraps around; for example, \te{-1} matches
+the all-ones value).  A literal with wildcard characters cannot be
+negated.
 
 
 A tagged union pattern consists of the \texttt{tagged} keyword followed
@@ -7417,13 +7425,10 @@ The wildcard pattern \texttt{.*} always succeeds.
 
 \item
 A constant pattern succeeds if $V$ is equal to the value of the
-constant. Literals, including integer literals, string literals, and
-real literals, can 
-include the wildcard character \te{?}.  
-A literal containing a wildcard will match any
-constant obtained by replacing each wildcard character by a valid
-digit.  For example, \te{'h12?4} will match any constant between
-\te{'h1204} and \te{'h12f4} inclusive.
+constant.  In a binary, octal, or hexadecimal integer pattern, each
+wildcard character \te{?} independently matches any digit valid for
+that base.  For example, \te{'h12?4} matches
+\te{'h1204}, \te{'h1214}, through \te{'h12f4}.
 
 \item
 A tagged union pattern succeeds if the value has the same tag and,

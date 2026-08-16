@@ -149,6 +149,16 @@ compile_pass_warning PatCond.bs T0166 1
 # blow up compile time
 compile_pass_no_warning OutOfRange.bsv
 
+# negative literal patterns match the value (negate lit), wrapping on
+# Bit; Int#(n) matches can be exhaustive (or redundant) via negatives
+compile_pass_warning NegLit.bsv T0165 1
+erase NegLit.bo
+compile_pass_warning NegLit.bsv T0166 2
+compare_file NegLit.bsv.bsc-out
+compile_pass_warning NegLitFun.bs T0165 1
+erase NegLitFun.bo
+compile_pass_warning NegLitFun.bs T0166 1
+
 # the incomplete match in a typeclass default is reported once, at the
 # class declaration, not per inheriting instance
 compile_pass_warning ClassDefault.bs T0165 1

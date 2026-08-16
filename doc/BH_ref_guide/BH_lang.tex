@@ -2545,6 +2545,23 @@ matches its corresponding component in the actual value.  The variable
 bindings produced by the match is the union of the variable bindings
 of the individual {\nterm{apat}} matches.
 
+\index{patterns!literal|textbf}
+
+A constant pattern is a numeric literal, optionally preceded by a
+minus sign.  As in expressions, a negated literal matches the value
+{\mbox{(\te{negate} \emph{literal})}}, which for the unsigned types
+such as {\te{Bit}} wraps around (so {\te{-1}} matches the all-ones
+value).  A negated literal is accepted wherever a full pattern may
+appear, such as a case arm; in an argument position it must be
+parenthesized:
+\begin{verbatim}
+ f :: Int 2 -> Bit 2
+ f (-2) = 0
+ f x = case x of
+         -1 -> 1
+         _ -> 2
+\end{verbatim}
+
 % ----------------------------------------------------------------
 
 \subsection{Struct and Tuple patterns}

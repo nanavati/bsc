@@ -99,6 +99,7 @@ instance Types CoverageCon where
 
 data CoverageLiteral
     = CoveragePositive CLiteral
+    | CoverageNegative CLiteral
     deriving (Eq, Ord, Show)
 
 -- | A typed pattern.  Every node retains its scrutinee place and resolved

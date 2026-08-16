@@ -25,3 +25,12 @@ function Bit#(2) h(Bit#(100000000000) x);
               .*: 2'd2;
            endcase);
 endfunction
+
+// negative literals are not valid for UInt: the analysis is abandoned
+// (elaborating such a match would report an invalid literal)
+function Bit#(2) negUInt(UInt#(2) x);
+   return (case (x) matches
+              -1: 0;
+              .*: 1;
+           endcase);
+endfunction

@@ -77,6 +77,7 @@ tiPat' td pat@(CPVar i) = do
     return ([], [i :>: toScheme td], pat)
 
 tiPat' td pat@(CPLit l) = internalError "TCPat.tiPat: CPLit"
+tiPat' td pat@(CPNegLit l) = internalError "TCPat.tiPat: CPNegLit"
 tiPat' td pat@(CPMixedLit {}) = internalError "TCPat.tiPat: CPMixedLit"
 
 tiPat' td (CPAs i p) = do
@@ -171,6 +172,7 @@ detectDuplicatePV env (CPCon1 _ _ pat) = detectDuplicatePV env pat
 detectDuplicatePV env (CPConTs _ _ _ pats) = foldM detectDuplicatePV env pats
 detectDuplicatePV env (CPAny {}) = return env
 detectDuplicatePV env (CPLit _) = return env
+detectDuplicatePV env (CPNegLit _) = return env
 detectDuplicatePV env (CPMixedLit {}) = return env
 detectDuplicatePV env (CPOper opPats) = foldM detectDuplicatePVOp env opPats
     where detectDuplicatePVOp env (CPRand pat) = detectDuplicatePV env pat
