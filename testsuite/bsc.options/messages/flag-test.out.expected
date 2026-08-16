@@ -7,6 +7,7 @@ Flags:
      -lift
      -o   a.out
      -parallel-sim-link   1
+     -pattern-check-fuel   100000
      -print-flags
      -remove-empty-rules
      -remove-false-rules
@@ -22,5 +23,7 @@ Flags:
      -suppress-warnings   T1234:T0001:T0002:T0003
      -unspecified-to   A
      -warn-action-shadowing
+     -warn-incomplete-patterns
      -warn-method-urgency
+     -warn-overlapping-patterns
 
