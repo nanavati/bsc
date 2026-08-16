@@ -2761,6 +2761,9 @@ Parse a pattern and return it
 >                                     base = maybeBase }) =
 >               Just $ CPLit $ CLiteral pos $ LInt $ ilDec 0
 >           accept (SV_Token_Number { start_position = pos,
+>                                     value = SV_NUM_Real num }) =
+>               Just $ CPLit $ CLiteral pos $ LReal num
+>           accept (SV_Token_Number { start_position = pos,
 >                                     value = SV_NUM_Mixed bs,
 >                                     base = maybeBase })
 >            | (all (not . isXZ . snd) bs) =
@@ -2782,12 +2785,6 @@ Parse a pattern and return it
 >                                          value = SV_NUM_Mixed _,
 >                                          originalText = txt }) =
 >               Just (pos, EUnsupportedNumUndetermined txt)
->           acceptError (SV_Token_Number { start_position = pos,
->                                          value = SV_NUM_Real _,
->                                          originalText = txt }) =
->               -- equality of real numbers is tricky, so require users
->               -- to express their meaning of equality via a guard
->               Just (pos, EUnsupportedNumReal txt)
 >           acceptError _ = Nothing
 
 > pStringLiteralPattern :: SV_Parser CPat
