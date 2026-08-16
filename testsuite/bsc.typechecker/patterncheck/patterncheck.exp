@@ -125,6 +125,12 @@ compile_pass_warning StringLiteralOpaque.bsv T0165 1
 erase StringLiteralOpaque.bo
 compile_pass_warning StringLiteralOpaque.bsv T0166 1
 
+# Concrete Real patterns use numeric equality (including signed zero and the
+# closed Integer-to-Real conversion); custom RealLiteral targets stay opaque.
+compile_pass_warning RealPatterns.bsv T0165 1
+erase RealPatterns.bo
+compile_pass_warning RealPatterns.bsv T0166 2
+
 # Int#(0) has the singleton literal domain {0}; BSV singleton-string Char
 # patterns use the closed Prelude conversion and retain exact equality.
 compile_pass_no_warning ZeroWidthInt.bsv

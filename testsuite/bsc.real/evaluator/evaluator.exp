@@ -7,6 +7,13 @@ compile_verilog_pass LiteralEqOrd.bsv
 compare_file [make_bsc_vcomp_output_name LiteralEqOrd.bsv]
 
 # ---------------
+# Test positive and negative Real patterns.  Haskell-style numeric patterns
+# use overloaded conversion and equality; in particular, -0.0 matches 0.0.
+
+compile_verilog_pass PatternReal.bsv
+compare_file [make_bsc_vcomp_output_name PatternReal.bsv]
+
+# ---------------
 # Test basic Arith instance operators
 
 compile_verilog_pass Arith.bsv
