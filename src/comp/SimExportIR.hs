@@ -64,7 +64,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 1
+birVersion = 2
 
 -- ===============
 -- String interning
@@ -220,7 +220,6 @@ data ModSchedInfo = ModSchedInfo
       -- node key -> ((domain, segment), position within segment)
     , msi_segIdx  :: M.Map String ((Int, Int), Int)
     , msi_execPos :: M.Map String Int         -- rule name -> local exec pos
-    , msi_disj    :: M.Map String (S.Set String) -- rule -> disjoint rules
     , msi_taskRules   :: S.Set String  -- rules with system/foreign tasks
     , msi_finishRules :: S.Set String  -- rules calling $finish/$fatal/$stop
     }
@@ -250,14 +249,6 @@ analyzeModule pkgNames pkg =
         execPos = M.fromList
             [ (getIdBaseString i, p)
             | (Exec i, p) <- zip order [(0 :: Int) ..] ]
-
-        disj0 = exclRulesDBToDisjRulesDB (asi_exclusive_rules_db asi)
-        isRule s = M.member s ruleDom
-        disj = M.fromList
-            [ (rs, S.filter isRule (S.map getIdBaseString ds))
-            | (r, ds) <- M.toList disj0
-            , let rs = getIdBaseString r
-            , isRule rs ]
 
         doms = nub (M.elems ruleDom)
 
@@ -324,7 +315,6 @@ analyzeModule pkgNames pkg =
         ModSchedInfo { msi_domains = domSegs
                      , msi_segIdx = segIdx
                      , msi_execPos = execPos
-                     , msi_disj = disj
                      , msi_taskRules = taskRules
                      , msi_finishRules = finishRules }
 
@@ -755,15 +745,9 @@ encSchedule msi pkg = do
                             bsE <- mapM idE blockers
                             return (encPair rE (encList bsE)))
                          esposito
-    disjEnc <- mapM (\(r, ds) -> do
-                       rE <- strE r
-                       dsE <- mapM strE (S.toList ds)
-                       return (encPair rE (encList dsE)))
-                    (M.toList (msi_disj msi))
     return $ encStruct
       [ ("domains", encList domsEnc)
       , ("conflicts", encList conflictsEnc)
-      , ("disjoint", encList disjEnc)
       ]
 
 encModSched :: (Int, [Seg]) -> EncM C.Encoding
