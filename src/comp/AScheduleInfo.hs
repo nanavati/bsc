@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 module AScheduleInfo (
+    ADynSched(..),
     AScheduleErrInfo(..),
     AScheduleInfo(..),
     Conflicts(..),
@@ -71,8 +72,34 @@ data AScheduleInfo = AScheduleInfo
       asi_schedule             :: ASchedule,
       asi_sched_graph          :: [(SchedNode, [SchedNode])],
       asi_rule_relation_db     :: RuleRelationDB,
-      asi_v_sched_info         :: VSchedInfo
+      asi_v_sched_info         :: VSchedInfo,
+
+      -- Rule pairs whose cross-boundary execution order (via method calls
+      -- with rules between them) could not be pinned statically, resolved
+      -- dynamically instead (-sched-dynamic; trs backend only).
+      asi_dyn_scheds           :: [ADynSched]
     } deriving (Show)
+
+-- A dynamically scheduled rule pair (see verifyStaticScheduleTwoRules):
+-- method fusion at link time requires ads_ruleE to execute before rules of
+-- a submodule which must in turn execute before ads_ruleL, while this
+-- module's static schedule orders ads_ruleL (transitively) before
+-- ads_ruleE.  The rules' CAN_FIREs are disjoint, so each cycle at most one
+-- ordering constraint is active: when ads_guardE holds (== ruleE's
+-- CAN_FIRE, inlined to register reads and constants so it can be evaluated
+-- against pre-edge state), the linker must use an order satisfying ruleE's
+-- constraint; otherwise ruleE cannot fire and the static order stands.
+data ADynSched = ADynSched
+    {
+      ads_ruleE   :: ARuleId,  -- must precede the submodule rules between
+      ads_guardE  :: AExpr,    -- ruleE's CAN_FIRE (registers/constants only)
+      ads_ruleL   :: ARuleId,  -- must follow the submodule rules between
+      ads_meths   :: [(MethodId, MethodId)], -- flagged (early, late) calls
+      ads_between :: [ARuleId] -- submodule rules between the method pairs
+    } deriving (Eq, Show)
+
+instance NFData ADynSched where
+  rnf (ADynSched re g rl ms bs) = rnf5 re g rl ms bs
 
 
 instance PPrint AScheduleInfo where
@@ -96,8 +123,8 @@ instance PPrint AScheduleInfo where
             )
 
 instance NFData AScheduleInfo where
-  rnf (AScheduleInfo w m r rat er so sched graph rrdb vsi) =
-    rnf10 w m r rat er so sched graph rrdb vsi
+  rnf (AScheduleInfo w m r rat er so sched graph rrdb vsi dyns) =
+    rnf11 w m r rat er so sched graph rrdb vsi dyns
 
 
 -- ---------------

@@ -289,8 +289,55 @@ simExpandSched abis0 hiermap instmap topmod = do
     -- create the SimSchedule
 
     let
-        mkPosSched (aclk, csi) =
-            let (sched_graph, sched_order) = flattenCombSchedGraph csi
+        mkPosSched (aclk, csi0) =
+            let -- ----------
+                -- dynamic scheduling (-sched-dynamic): resolve the
+                -- recorded pair by dropping the per-cycle-inactive
+                -- constraint's edges from the merged graph.  The base
+                -- order covers cycles where ruleE cannot fire (its
+                -- CAN_FIRE — the guard — is false): ruleE's fused
+                -- cross-instance outgoing edges are vacuous.  The
+                -- alternative covers cycles where the guard holds, so
+                -- ruleL cannot fire (CAN_FIREs are disjoint): ruleL's
+                -- fused cross-instance incoming edges are vacuous.  Rule
+                -- guard evaluation (Sched nodes) keeps all its edges in
+                -- both, so every guard still reads correctly-ordered
+                -- values.
+                sched_map0 = csi_sched_map csi0
+                qualOf sn = getIdQualString (getSchedNodeId sn)
+                (base_map, alt_specs) =
+                    case (csi_dyn_scheds csi0) of
+                      [] -> (sched_map0, [])
+                      [(path, d)] ->
+                          let qual i = if null path then i
+                                       else qualifyChildId path i
+                              eNode = Exec (qual (ads_ruleE d))
+                              lNode = Exec (qual (ads_ruleL d))
+                              bmap = M.mapWithKey
+                                       (\n ps -> if qualOf n /= path
+                                                 then filter (/= eNode) ps
+                                                 else ps)
+                                       sched_map0
+                              amap = M.adjust
+                                       (filter (\p -> qualOf p == path))
+                                       lNode sched_map0
+                          in  (bmap, [(path, ads_guardE d, amap)])
+                      ds -> internalError
+                              ("SimExpand: dynamic scheduling v1 supports "
+                               ++ "one dynamic rule pair per design, found: "
+                               ++ ppReadable [ (p, ads_ruleE d, ads_ruleL d)
+                                             | (p, d) <- ds ])
+                csi = csi0 { csi_sched_map = base_map }
+                mkAlt (path, g, amap) =
+                    let (agraph, aorder) =
+                            flattenCombSchedGraph (csi0 { csi_sched_map = amap })
+                    in  SimSchedAlt { ssa_guard_path = path
+                                    , ssa_guard = g
+                                    , ssa_sched_graph = agraph
+                                    , ssa_sched_order = aorder }
+                alts = map mkAlt alt_specs
+
+                (sched_graph, sched_order) = flattenCombSchedGraph csi
 
                 (sched_nodes, exec_nodes) = partition isSchedNode sched_order
                 urgency_order = map getSchedNodeId sched_nodes
@@ -310,7 +357,10 @@ simExpandSched abis0 hiermap instmap topmod = do
                            , let r = getSchedNodeId n
                            , r `elem` early_rules
                            ]
-            in if (null before_early_rules)
+            in if (not (null alts) && not (null early_rules))
+               then internalError ("SimExpand: dynamic scheduling with " ++
+                                   "clock-crossing rules is not supported")
+               else if (null before_early_rules)
                then SimSchedule { ss_clock = aclk
                                 , ss_posedge = True
                                 , ss_schedule = asched
@@ -319,6 +369,7 @@ simExpandSched abis0 hiermap instmap topmod = do
                                 , ss_sched_order = sched_order
                                 , ss_domain_info_map = csi_domain_info_map csi
                                 , ss_early_rules = early_rules
+                                , ss_alts = alts
                                 }
                else internalError $ "unexpected nodes before clock-crossing rule: " ++
                                     (show before_early_rules)
@@ -422,7 +473,11 @@ data CombSchedInfo = CombSchedInfo
       csi_sched_map :: SchedMap,
       csi_rule_rel_map :: RuleRelationMap,
       -- clock domain info (rules, clocked submods, resets)
-      csi_domain_info_map :: DomainInfoMap
+      csi_domain_info_map :: DomainInfoMap,
+      -- dynamically scheduled rule pairs (-sched-dynamic), each paired
+      -- with the instance path of the module that recorded it ("" = the
+      -- module this CSI describes)
+      csi_dyn_scheds :: [(String, ADynSched)]
     }
   deriving (Eq, Show)
 
@@ -813,6 +868,7 @@ splitCSIByClock topifc csi =
         smap = csi_sched_map csi -- SchedMap
         dmap = csi_domain_info_map csi -- DomainInfoMap
         rrmap = csi_rule_rel_map csi -- RuleRelationMap
+        dyn_all = csi_dyn_scheds csi -- [(String, ADynSched)]
 
         -- make a map from domain to the top-level methods in that domain
         ifc_dmap =
@@ -858,12 +914,19 @@ splitCSIByClock topifc csi =
                 cd_rules = di_rules dinfo
                 cd_methods = getDomainMeths cd
                 cd_rules_and_meths = cd_rules ++ cd_methods
+                -- keep the dynamic pairs whose rules are in this domain
+                cd_rule_set = S.fromList cd_rules
+                keepDyn (p, d) =
+                    let e = if null p then ads_ruleE d
+                            else qualifyChildId p (ads_ruleE d)
+                    in  e `S.member` cd_rule_set
                 csi = CombSchedInfo {
                          csi_conflicts = extractConflicts cd_rules_and_meths,
                          csi_drdb = extractDRDB cd_rules_and_meths,
                          csi_sched_map = extractSchedMap cd_rules_and_meths,
                          csi_domain_info_map = M.singleton cd dinfo,
-                         csi_rule_rel_map = extractRuleRelMap cd_rules_and_meths
+                         csi_rule_rel_map = extractRuleRelMap cd_rules_and_meths,
+                         csi_dyn_scheds = filter keepDyn dyn_all
                       }
             in (aclk, csi)
 
@@ -1023,7 +1086,9 @@ makeCSIForModule curmod_abi =
                   csi_drdb = curmod_drdb,
                   csi_sched_map = curmod_sched_map,
                   csi_rule_rel_map = curmod_rule_rel_map,
-                  csi_domain_info_map = curmod_dmap
+                  csi_domain_info_map = curmod_dmap,
+                  csi_dyn_scheds =
+                      [ ("", d) | d <- asi_dyn_scheds curmod_aschedinfo ]
               }
     in
         -- return the domain Id map separately
@@ -1092,13 +1157,20 @@ combineCombSchedInfo use_map domain_id_map parent_abi parent_csi
                                  domain_id_map
                                  (csi_domain_info_map parent_csi)
                                  (csi_domain_info_map child_csi)
+        -- qualify the child's dynamic pairs with the instance name
+        comb_dyn_scheds =
+            csi_dyn_scheds parent_csi ++
+            [ (p', d)
+            | (p, d) <- csi_dyn_scheds child_csi
+            , let p' = if null p then inst else inst ++ "." ++ p ]
     in
         CombSchedInfo {
             csi_conflicts = comb_conflicts,
             csi_drdb = comb_drdb,
             csi_sched_map = comb_sched_map,
             csi_rule_rel_map = comb_rule_rel_db,
-            csi_domain_info_map = comb_domain_info_map
+            csi_domain_info_map = comb_domain_info_map,
+            csi_dyn_scheds = comb_dyn_scheds
         }
 
 
