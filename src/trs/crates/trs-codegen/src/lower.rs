@@ -274,6 +274,30 @@ fn nope<T>(why: impl Into<String>) -> Result<T, Ineligible> {
     Err(Ineligible(why.into()))
 }
 
+/// Variant name for ineligibility notes: the catch-alls must say WHICH
+/// expression kind they refused, or the sweep's why= column lumps every
+/// unlowered variant into one unactionable bucket.
+fn expr_kind(e: &Expr) -> &'static str {
+    match e {
+        Expr::Const { .. } => "Const",
+        Expr::Def(..) => "Def",
+        Expr::Port(..) => "Port",
+        Expr::Param(..) => "Param",
+        Expr::MethCall { .. } => "MethCall",
+        Expr::MethValue { .. } => "MethValue",
+        Expr::TaskValue { .. } => "TaskValue",
+        Expr::ForeignCall { .. } => "ForeignCall",
+        Expr::Str(..) => "Str",
+        Expr::Clock { .. } => "Clock",
+        Expr::Real(..) => "Real",
+        Expr::Reset { .. } => "Reset",
+        Expr::Gate { .. } => "Gate",
+        Expr::Prim { .. } => "Prim",
+        Expr::If { .. } => "If",
+        Expr::Case { .. } => "Case",
+    }
+}
+
 fn words_for(w: u32) -> u32 {
     w.div_ceil(64)
 }
@@ -1738,7 +1762,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     nope("zero-width expression")
                 }
             }
-            _ => nope("expression kind not compilable"),
+            _ => nope(format!(
+                "expression kind not compilable: {}",
+                expr_kind(e)
+            )),
         }
     }
 
@@ -2065,7 +2092,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             Expr::ForeignCall { width, func, args } => {
                 self.bdpi_value_call(f, (*width).max(1), *func, args)
             }
-            _ => nope("expression kind not compilable"),
+            _ => nope(format!(
+                "expression kind not compilable: {}",
+                expr_kind(e)
+            )),
         }
     }
 
