@@ -111,7 +111,15 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
-    if is_action {
+    if method == trs_codegen::lower::GATE_OUT_METHOD {
+        // compiled Expr::Gate on a prim child: not a method — answer
+        // gate_out(), the interp's exact read
+        let g = match &interp.insts[inst].kind {
+            InstKind::Prim(p) => p.gate_out() as u64,
+            _ => 1,
+        };
+        *out = g;
+    } else if is_action {
         interp.call_action(inst, method, &argv);
     } else {
         let v = interp.call_value(inst, method, &argv, ret_width);
@@ -125,7 +133,12 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     if let Some(t0) = _t0 {
         prof::add(&prof::PRIM_NS, t0);
         prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let meth = interp.s(method).to_string();
+        // the gate sentinel is no string id — interp.s() would index OOB
+        let meth = if method == trs_codegen::lower::GATE_OUT_METHOD {
+            "$gate_out".to_string()
+        } else {
+            interp.s(method).to_string()
+        };
         prof::PRIM_HIST
             .lock()
             .unwrap()
@@ -2139,12 +2152,12 @@ impl Interp {
         let mut rules: Vec<RuleInfo> = Vec::new();
         let mut rule_ord: HashMap<(usize, StrId), usize> = HashMap::new();
         for rc in rcomps {
-            if !rc.early.is_empty() {
-                if trace {
-                    eprintln!("trs jit: off (early rules)");
-                }
-                return None;
-            }
+            // clock-crossing "early" rules never enter the compiled
+            // edge walk: the general loop's after-edge pass (PG_FINAL)
+            // runs them interpreted over the same arena-backed state,
+            // exactly like a cold exec cell — so they are SKIPPED here
+            // (kept out of rule_ord and the node stream), not refused.
+            // The central fast loop already bails on early comps.
             // eager defs owned by entries already walked in THIS comp,
             // per instance: later rules of the same instance may load
             // their slots instead of re-expanding the cone
@@ -2152,6 +2165,9 @@ impl Interp {
             for en in &rc.entries {
                 for &node in &en.nodes {
                     let SchedNode::Sched(r) = node else { continue };
+                    if rc.early.contains(&(en.inst, r)) {
+                        continue; // after-edge pass runs it interpreted
+                    }
                     if rule_ord.contains_key(&(en.inst, r)) {
                         continue;
                     }
@@ -2520,6 +2536,7 @@ impl Interp {
                     memo_slot,
                     port_consts,
                     real_consts,
+                    gates: gates.clone(),
                     region: (region_start, 0),
                 },
             );
@@ -2599,6 +2616,16 @@ impl Interp {
                     e.real_consts.iter().map(|(&k, &v)| (k, v)).collect();
                 m12.sort_unstable();
                 m12.hash(&mut h);
+                // gate wiring pins the sig: owner slots are ABSOLUTE in
+                // deduped bodies, so instances gated differently (other
+                // owner, other expr) must never share exec code
+                let mut m13: Vec<_> = e
+                    .gates
+                    .iter()
+                    .map(|(&k, (o, g))| (k, *o, format!("{g:?}")))
+                    .collect();
+                m13.sort_unstable();
+                m13.hash(&mut h);
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e
@@ -2630,6 +2657,9 @@ impl Interp {
                     let SchedNode::Exec(r) = node else { continue };
                     if !self.mods[module].rules.contains_key(&r) {
                         continue; // method exec node
+                    }
+                    if rc.early.contains(&(en.inst, r)) {
+                        continue; // after-edge pass runs it interpreted
                     }
                     if !rule_ord.contains_key(&(en.inst, r)) {
                         if trace {

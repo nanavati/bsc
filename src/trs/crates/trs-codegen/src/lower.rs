@@ -172,6 +172,12 @@ pub struct InstEnv {
     /// spec marks the argument Real (decode rebuilds Arg::Real).  Part
     /// of the exec dedup signature.
     pub real_consts: HashMap<StrId, u64>,
+    /// Input clock-gate ports bound at instantiation: port name ->
+    /// (owner instance, gate expr) — reads lower the expr in the
+    /// OWNER's frame, mirroring the interp's parent-context gate
+    /// evaluation.  Part of the exec dedup signature (owner slots are
+    /// absolute in deduped bodies, so gate wiring must pin the sig).
+    pub gates: HashMap<StrId, (usize, Expr)>,
     /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
     /// instance); reads of other rules' fire signals become slot loads
     pub cfwf_slot: HashMap<StrId, u32>,
@@ -769,10 +775,35 @@ impl Drop for AotModeGuard {
     }
 }
 
+/// Sentinel method id in a PrimCallSpec: not a method call — the
+/// trampoline answers the prim's gate_out() (compiled Expr::Gate).
+pub const GATE_OUT_METHOD: StrId = u32::MAX;
+
+/// A gate expression a compiled read may re-expand: static cones only
+/// (constants, parameters, and pure combinationals over them).  Defs
+/// are excluded because the interp's gate eval prefers their LATCHED
+/// values; prim-state chases (Gate, method reads, flattened
+/// $CLK_GATE_OUT ports) are excluded pending schedule-time gate slots.
+fn gate_static(e: &Expr) -> bool {
+    match e {
+        Expr::Const { .. } | Expr::Param(_) => true,
+        Expr::Prim { args, .. } => args.iter().all(gate_static),
+        Expr::If { cond, then_, else_, .. } => {
+            gate_static(cond) && gate_static(then_) && gate_static(else_)
+        }
+        Expr::Case { scrutinee, arms, default, .. } => {
+            gate_static(scrutinee)
+                && arms.iter().all(|(_, a)| gate_static(a))
+                && gate_static(default)
+        }
+        _ => false,
+    }
+}
+
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 10;
+pub const AOT_LAYOUT_REV: u64 = 11;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -1783,6 +1814,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
             }
             Expr::Real(_) => Ok(64), // f64 bits carrier
+            Expr::Gate { .. } => Ok(1),
             Expr::Const { width, .. }
             | Expr::MethCall { width, .. }
             | Expr::MethValue { width, .. }
@@ -2031,6 +2063,22 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if let Some(&bits) = ie.real_consts.get(p) {
                     return Ok(self.ctx.i64_type().const_int(bits, false));
                 }
+                // input clock-gate port bound at instantiation: the
+                // interp evaluates the recorded gate expr in the OWNER
+                // instance's context, where LATCHED defs win over
+                // recomputation — a compiled re-expansion only matches
+                // when the cone is static (no defs, no prim-state
+                // chases), so dynamic gates stay interp until gate
+                // values get schedule-time slots (mcd_Rand measured a
+                // cross-domain divergence with live re-expansion)
+                if let Some((owner, g)) = ie.gates.get(p) {
+                    if !gate_static(g) {
+                        return nope("dynamic input gate (latch semantics)");
+                    }
+                    let (owner, g) = (*owner, g.clone());
+                    let mut of = self.child_frame(f, owner, None)?;
+                    return self.expr(&mut of, &g);
+                }
                 nope("port read outside args/reset/EN/consts")
             }
             Expr::Param(p) => {
@@ -2050,6 +2098,56 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // args (and real params) consume them, so the bits never
                 // mix into integer arithmetic
                 Ok(self.ctx.i64_type().const_int(r.to_bits(), false))
+            }
+            Expr::Gate { instance, clock } => {
+                // a submodule's output clock gate (AMGate): prim
+                // children answer gate_out() through the trampoline
+                // (GATE_OUT_METHOD sentinel); user children evaluate
+                // their recorded ifc gate expr in the child's frame; no
+                // recorded gate = ungated (constant 1) — all three
+                // mirror the interp's Expr::Gate
+                let ie = self.ie(f.inst)?;
+                let Some(&child) = ie.children.get(instance) else {
+                    return nope("gate read on unknown child");
+                };
+                if self.env.insts.contains_key(&child) {
+                    let cie = self.ie(child)?;
+                    let cmod = &self.env.d.modules[cie.mir];
+                    let g = cmod
+                        .ifc_clock_gates
+                        .iter()
+                        .find(|(n, _)| n == clock)
+                        .map(|(_, e)| e.clone());
+                    return match g {
+                        Some(e) => {
+                            // same latch-semantics restriction as bound
+                            // input gates, except a direct child prim
+                            // gate chase (Expr::Gate) is a LIVE read on
+                            // both engines and stays eligible
+                            if !gate_static(&e)
+                                && !matches!(e, Expr::Gate { .. })
+                            {
+                                return nope(
+                                    "dynamic ifc gate (latch semantics)",
+                                );
+                            }
+                            let mut cf = self.child_frame(f, child, None)?;
+                            self.expr(&mut cf, &e)
+                        }
+                        None => Ok(self.ity(1).const_int(1, false)),
+                    };
+                }
+                match self.emit_prim_call(
+                    f,
+                    child,
+                    GATE_OUT_METHOD,
+                    &[],
+                    1,
+                    false,
+                )? {
+                    Some(v) => Ok(v),
+                    None => nope("gate_out returned no value"),
+                }
             }
             Expr::MethCall { width, instance, method, port, args } => {
                 self.value_call(f, *width, *instance, *method, *port, args)
