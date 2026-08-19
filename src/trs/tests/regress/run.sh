@@ -141,4 +141,30 @@ check_vcd() { # name top
     echo "PASS $name"
 }
 check_vcd FifoVcd sysFifoVcd
+# dynamic scheduling v1 (G0100 single pair): no reference Bluesim exe
+# exists by design — the classic C++ backend refuses the design — so
+# stdout diffs against a hand-derived golden instead.  Also gates the
+# two refusals: plain -sim errors (G0100), and -sched-dynamic without
+# -trs errors at link.
+check_dyn() { # name top
+    name=$1; top=$2
+    cp "$SRC/$name.bsv" .
+    if $BSC -sim -u -g "$top" "$name.bsv" >dyn_err1.out 2>&1; then
+        echo "FAIL $name (static compile unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "G0100" dyn_err1.out || { echo "FAIL $name (expected G0100)"; fail=1; return; }
+    $BSC -sim -sched-dynamic -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc -sched-dynamic)"; fail=1; return; }
+    if $BSC -sim -sched-dynamic -bir -e "$top" -o dyn_ref.exe >dyn_err2.out 2>&1; then
+        echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
+    fi
+    grep -q "trs backend" dyn_err2.out || { echo "FAIL $name (expected trs-backend refusal)"; fail=1; return; }
+    $BSC -sim -sched-dynamic -bir -trs -e "$top" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (bsc -trs link)"; fail=1; return; }
+    "$TRS" run "$top.bir" > got.out 2>&1 || { echo "FAIL $name (trs run)"; fail=1; return; }
+    if ! cmp -s "$SRC/$name.expected" got.out; then echo "FAIL $name (run stdout)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return; fi
+    "$TRS" link "$top.bir" -o dynart >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    TRS="$TRS" ./dynart > gota.out 2>&1 || { echo "FAIL $name (art run)"; fail=1; return; }
+    if ! cmp -s "$SRC/$name.expected" gota.out; then echo "FAIL $name (art stdout)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_dyn DynSched sysDynSched
 exit $fail

@@ -49,7 +49,8 @@ import Id(Id, emptyId, getIdString, getIdBaseString, getIdPosition,
           isRdyId, addToBase, mk_homeless_id, mkIdWillFire, addSuffix)
 import Position
 import Flags(Flags(..))
-import VModInfo(vSched, vFields, VSchedInfo, VMethodConflictInfo, VFieldInfo(..))
+import VModInfo(vSched, vFields, vName, getVNameString,
+                VSchedInfo, VMethodConflictInfo, VFieldInfo(..))
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import IOUtil(progArgs)
 import FileNameUtil
@@ -366,7 +367,8 @@ data SState = SState {
                 sm_schedule             :: Maybe ASchedule,
                 sm_sched_graph          :: Maybe [(SchedNode, [SchedNode])],
                 sm_rule_relation_db     :: Maybe RuleRelationDB,
-                sm_v_sched_info         :: Maybe VSchedInfo
+                sm_v_sched_info         :: Maybe VSchedInfo,
+                sm_dyn_scheds           :: [ADynSched]
               }
 
 initSState :: SState
@@ -380,7 +382,8 @@ initSState = SState {
                sm_schedule             = Nothing,
                sm_sched_graph          = Nothing,
                sm_rule_relation_db     = Nothing,
-               sm_v_sched_info         = Nothing
+               sm_v_sched_info         = Nothing,
+               sm_dyn_scheds           = []
              }
 
 addWarnings :: [EMsg] -> SM ()
@@ -436,7 +439,7 @@ aSchedule errh flags prefix urgency_pairs pps amod = do
             -- if the required fields were not reached, exit with the errors
             case s of
               SState ws (Just mumap) (Just rumap) rat erdb
-                        sorder sch sgraph rrdb vsi
+                        sorder sch sgraph rrdb vsi _
                   -> do let
                             schedule_info = AScheduleErrInfo
                                                 (map processWarning ws)
@@ -451,12 +454,12 @@ aSchedule errh flags prefix urgency_pairs pps amod = do
             case s of
               SState ws (Just mumap) (Just rumap) (Just rat) (Just erdb)
                         (Just sorder) (Just sch) (Just sgraph)
-                        (Just rrdb) (Just vsi)
+                        (Just rrdb) (Just vsi) dyns
                   -> let
 
                          schedule_info = AScheduleInfo (map processWarning ws)
                                              mumap rumap rat erdb
-                                             sorder sch sgraph rrdb vsi
+                                             sorder sch sgraph rrdb vsi dyns
                      in
                          return (Right (schedule_info, amod'))
               _ -> internalError "aSchedule: missing info"
@@ -1380,12 +1383,18 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
   -- includes any rules where a pair of methods was ignore because the
   -- conditions on those calls were disjoint ("setToTestForStaticSchedule").
 
-  (gen_backend2, implied_edges) <-
+  (gen_backend2, implied_edges, dyn_scheds) <-
       tr "verifyStaticScheduleTwoRules" $
       verifyStaticScheduleTwoRules errh flags gen_backend1 nm
           ruleBetweenMap ruleMethodUseMap ruleNames
+          ifcRuleNames (aDynSchedGuard amod)
           exclusive_rules_db cf_rules_test setToTestForStaticSchedule
           seq_reachmap seq_map seq_graph sched_id_order
+
+  -- record the dynamically scheduled pairs in the state
+  when (not (null dyn_scheds)) $ do
+      s0 <- get
+      put (s0 { sm_dyn_scheds = dyn_scheds })
 
   -- the implied edges are only between CF/ME rules so it is OK to add them all
   let seq_graph_implied = addEdgesToCSGraph implied_edges seq_graph
@@ -4513,22 +4522,96 @@ verifyStaticScheduleOneRule errh flags gen_backend
 -- However, even if the backend is tainted, we return all safe rule pairs,
 -- to minimize Bluesim/Verilog differences
 
+-- Inline a rule predicate down to register reads and constants, for use
+-- as a dynamic-scheduling guard evaluated against pre-edge state.
+-- Returns Nothing if the predicate's cone contains anything whose value
+-- can change during an edge (wires, ports, non-register method calls,
+-- foreign functions), which would make the guard position-dependent
+-- within the schedule.
+aDynSchedGuard :: APackage -> AExpr -> Maybe AExpr
+aDynSchedGuard amod e0 =
+    let defmap = M.fromList [ (adef_objid d, adef_expr d)
+                            | d <- apkg_local_defs amod ]
+        regset = S.fromList [ avi_vname avi
+                            | avi <- apkg_state_instances amod
+                            , getVNameString (vName (avi_vmi avi))
+                                  `elem` ["RegN", "RegUN", "RegA"] ]
+        -- cap the inlined cone size (inlining shares nothing, so a
+        -- heavily shared def DAG could otherwise explode)
+        limit = 4096 :: Int
+
+        go :: Int -> AExpr -> Maybe (Int, AExpr)
+        go n _ | n > limit = Nothing
+        go n (ASDef _ i) =
+            case (M.lookup i defmap) of
+              Just e -> go (n+1) e
+              Nothing -> Nothing
+        go n e@(ASInt {}) = Just (n+1, e)
+        go n e@(AMethCall _ obj meth [])
+            | obj `S.member` regset && getIdBaseString meth == "read"
+            = Just (n+1, e)
+        go n (APrim aid t op args) = do
+            (n', args') <- goList (n+1) args
+            return (n', APrim aid t op args')
+        go _ _ = Nothing
+
+        goList n [] = Just (n, [])
+        goList n (a:as) = do
+            (n', a') <- go n a
+            (n'', as') <- goList n' as
+            return (n'', a' : as')
+    in  snd <$> go 0 e0
+
+-- The three possible outcomes for a rule pair:
+-- an error, an implied biasing edge, or (with -sched-dynamic) a
+-- recorded dynamically scheduled pair
+data VSSRes = VSSErr EMsg
+            | VSSEdge (ARuleId, ARuleId, [(MethodId, MethodId)])
+            | VSSDyn ADynSched
+
 verifyStaticScheduleTwoRules ::
     ErrorHandle -> Flags -> Maybe Backend -> AId ->
     RuleBetweenMap -> RuleMethodUseMap ->
-    [ARuleId] -> ExclusiveRulesDB -> RuleDisjointTest ->
+    [ARuleId] -> [ARuleId] -> (AExpr -> Maybe AExpr) ->
+    ExclusiveRulesDB -> RuleDisjointTest ->
     S.Set (ARuleId, ARuleId) ->
     ReachableMap -> CSMap -> [(CSNode,[CSNode])] -> SchedOrdMap ->
-    SM (Maybe Backend, [(CSNode, CSNode, CSEdge)])
+    SM (Maybe Backend, [(CSNode, CSNode, CSEdge)], [ADynSched])
 verifyStaticScheduleTwoRules errh flags gen_backend moduleId
                              ruleBetweenMap ruleMethodUseMap
-                             ruleNames erdb cf_rules_test setToTest
+                             ruleNames ifcRuleNames inlineGuard
+                             erdb cf_rules_test setToTest
                              reachmap seq_map seq_graph sched_id_order =
     let
+        ifcRuleSet = S.fromList ifcRuleNames
+
+        -- Attempt to resolve a failed pair dynamically (-sched-dynamic):
+        -- rE must execute before submodule rules which must execute before
+        -- rL, but this module's schedule orders rL before rE.  Because the
+        -- rules' CAN_FIREs are disjoint, at most one constraint is active
+        -- per cycle; record rE's CAN_FIRE (inlined to registers and
+        -- constants, so it is stable against pre-edge state) as the guard
+        -- selecting the alternative order at simulation time.  Only rules
+        -- qualify (methods fuse into callers at link time, which would
+        -- invalidate the recorded rule Ids).
+        mkDynSched :: ARuleId -> ARuleId ->
+                      [((MethodId, MethodId), [ARuleId])] -> Maybe ADynSched
+        mkDynSched rE rL uses
+          | not (schedDynamic flags) = Nothing
+          | rE `S.member` ifcRuleSet || rL `S.member` ifcRuleSet = Nothing
+          | not (areRulesDisjoint erdb rE rL) = Nothing
+          | otherwise =
+              case (M.lookup rE ruleMethodUseMap) of
+                Just (predE, _) ->
+                    do g <- inlineGuard predE
+                       return (ADynSched rE g rL (map fst uses)
+                                   (nub (concatMap snd uses)))
+                Nothing -> Nothing
+
         -- avoid duplicate messages by applying to a whole list
         checkOneRule ::
             [(ARuleId, (AExpr, M.Map AId [(AId, AExpr)]))] ->
-            [Either EMsg (ARuleId, ARuleId, [(MethodId, MethodId)])]
+            [VSSRes]
         checkOneRule ((r1, (_, r1_usemap)):rest) =
           let
               r2s = map fst rest
@@ -4538,7 +4621,7 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
 
               checkSecondRule ::
                   ARuleId ->
-                  [Either EMsg (ARuleId, ARuleId, [(MethodId, MethodId)])]
+                  [VSSRes]
               checkSecondRule r2 | ( (r1 == r2) ||
                                      not ((excl_or_cf r1 r2) ||
                                           (S.member (r1, r2) setToTest))
@@ -4590,38 +4673,45 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
                                                map pfpString rs)
 
                     -- check for an error in the given direction
-                    check_err r1 r2 uses =
+                    -- (uses_dyn is uses with each method pair oriented
+                    -- (early, late), for recording a dynamic resolution)
+                    check_err r1 r2 uses uses_dyn =
                       case (M.lookup (mkCSNExec sched_id_order r1) reachmap) of
-                        Nothing -> [Right (r2, r1, map fst uses)]
+                        Nothing -> [VSSEdge (r2, r1, map fst uses)]
                         Just reachables ->
                           case (lookup (mkCSNExec sched_id_order r2) reachables) of
-                            Nothing -> [Right (r2, r1, map fst uses)]
+                            Nothing -> [VSSEdge (r2, r1, map fst uses)]
                             Just raw_path ->
                               let -- the path is in reverse
                                   path = reverse raw_path
                                   (expl_doc, path_strs) =
                                       mkPathExplanation seq_map path
                               in
-                                  [Left (getPosition r1,
-                                         EDynamicExecOrderTwoRules
-                                          (pfpString r1) (pfpString r2)
-                                          (map pfpMethUse uses)
-                                          path_strs expl_doc)]
+                                  case (mkDynSched r2 r1 uses_dyn) of
+                                    Just d -> [VSSDyn d]
+                                    Nothing ->
+                                        [VSSErr (getPosition r1,
+                                             EDynamicExecOrderTwoRules
+                                              (pfpString r1) (pfpString r2)
+                                              (map pfpMethUse uses)
+                                              path_strs expl_doc)]
 
                     -- left error
                     -- method use requires (r1 before r2) so check in graph
                     -- for (r2 before r1)
-                    check_left_err = check_err r2 r1 left_pairs
+                    check_left_err = check_err r2 r1 left_pairs left_pairs
 
                     -- right error
                     -- method use requires (r2 before r1) so check in graph
                     -- for (r1 before r2)
-                    check_right_err = check_err r1 r2 right_pairs
+                    check_right_err =
+                        check_err r1 r2 right_pairs
+                            [ ((m2, m1), rs) | ((m1, m2), rs) <- right_pairs ]
                 in
                     if (not (null left_pairs))
                     then if (not (null right_pairs))
                          then -- bidirectional error
-                              [Left (getPosition r1,
+                              [VSSErr (getPosition r1,
                                      EDynamicExecOrderTwoRulesBothDir
                                       (pfpString r1) (pfpString r2)
                                       (map pfpMethUse left_pairs)
@@ -4634,8 +4724,11 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
               concatMap checkSecondRule r2s ++ checkOneRule rest
         checkOneRule [] = []
 
-        (pair_errs, raw_edges) =
-            separate $ checkOneRule (M.toList ruleMethodUseMap)
+        (pair_errs, raw_edges, dyn_scheds) =
+            let f (VSSErr e)  (es, gs, ds) = (e:es, gs, ds)
+                f (VSSEdge g) (es, gs, ds) = (es, g:gs, ds)
+                f (VSSDyn d)  (es, gs, ds) = (es, gs, d:ds)
+            in  foldr f ([], [], []) $ checkOneRule (M.toList ruleMethodUseMap)
 
         edges = [ (mkCSNExec sched_id_order r1, mkCSNExec sched_id_order r2, CSE_Conflict [CArbitraryChoice])
                       | (r1, r2, _) <- raw_edges ]
@@ -4660,14 +4753,14 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
         errs = pair_errs ++ cycle_errs
     in
         if (null errs)
-        then return (gen_backend, edges)
+        then return (gen_backend, edges, dyn_scheds)
         else
             if (backend flags == Just Bluesim)
             then throwError (EMsgs errs)
             else convEM errh $
                      -- taint the .ba file to be just for Verilog
-                     -- and don't return any edges
-                     EMWarning errs (Just Verilog, [])
+                     -- and don't return any edges or dynamic pairs
+                     EMWarning errs (Just Verilog, [], [])
 
 
 -- See if the new edges create any cycles and, if so, report them as errors
