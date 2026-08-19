@@ -2455,6 +2455,12 @@ impl Interp {
             // parent (MCD), EN/reset ports have arena slots, string
             // params are marker values, and unslotted method enables
             // stay ineligible rather than folding to a wrong constant.
+            // A BOUND value the u64 fold cannot carry (wide args,
+            // Real's marker width) must stay out of the unbound-port
+            // arms below too — the interp resolves `params` before any
+            // read-as-1/0 fallthrough, so folding such a name as
+            // "unbound" bakes a wrong constant (sysWideModArgPortTest,
+            // sysTwoLevelReal2); unfolded means Ineligible -> interp.
             let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
             for (&pn, pv) in params {
                 if pv.width >= 1 && pv.width <= 64 {
@@ -2463,6 +2469,7 @@ impl Interp {
             }
             for (&pn, &(w, kind)) in &self.mods[module].ports {
                 if port_consts.contains_key(&pn)
+                    || params.contains_key(&pn)
                     || en_slot.contains_key(&pn)
                     || reset_slot.contains_key(&pn)
                     || gates.contains_key(&pn)
