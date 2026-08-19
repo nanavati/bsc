@@ -874,7 +874,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 17;
+pub const AOT_LAYOUT_REV: u64 = 18;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -4778,9 +4778,28 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             if m.kind != trs_ir::MethodKind::ActionValue {
                                 return nope("non-actionvalue avaction method");
                             }
-                            if m.always_enabled {
-                                return nope("always_enabled method (RDY-gated body)");
-                            }
+                            // (* always_enabled *): the body is gated on
+                            // the sibling RDY_<m> method at call time —
+                            // the RESULT still evaluates when the body
+                            // is skipped (the C++ returns the stale
+                            // port value).  No RDY exported = ready.
+                            let rdy_id = if m.always_enabled {
+                                let rdy_name = format!(
+                                    "RDY_{}",
+                                    self.env.d.strings[*method as usize]
+                                );
+                                self.env
+                                    .d
+                                    .strings
+                                    .iter()
+                                    .position(|x| x == &rdy_name)
+                                    .map(|id| id as StrId)
+                                    .filter(|id| {
+                                        cmod.methods.iter().any(|mm| mm.name == *id)
+                                    })
+                            } else {
+                                None
+                            };
                             if args.len() != m.args.len() {
                                 return nope("method arg count mismatch");
                             }
@@ -4835,7 +4854,55 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 .filter_map(|pa| cf.args.get(&pa.name).copied())
                                 .collect();
                             self.rec_meth_call(&cf, child, *method, &rec_argv)?;
-                            self.stmts(&mut cf, func, &body, stop_bb)?;
+                            if let Some(rid) = rdy_id {
+                                // EN and recording landed; only the
+                                // body waits on RDY — the result expr
+                                // below evaluates on both paths.  SSA
+                                // bindings from the gated body must not
+                                // leak past the join (dominance); the
+                                // result re-expands or reads undet-init
+                                // AV slots, the interp's skip semantics
+                                let saved_ssa = cf.ssa.clone();
+                                let r =
+                                    self.value_call(f, 1, *instance, rid, 0, &[])?;
+                                let rz = self.nonzero(r, 1);
+                                let bd_bb =
+                                    self.ctx.append_basic_block(func, "avmrdy");
+                                let rs_bb =
+                                    self.ctx.append_basic_block(func, "avmres");
+                                self.builder
+                                    .build_conditional_branch(rz, bd_bb, rs_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(bd_bb);
+                                self.stmts(&mut cf, func, &body, stop_bb)?;
+                                // escaped-conditional-arm protocol for
+                                // every binding the gated body created:
+                                // mirror it into an undet-init entry
+                                // alloca (store HERE, where the value
+                                // dominates) and mark it dead, so
+                                // post-join reads reload the slot —
+                                // undet when the body was skipped, the
+                                // interp's empty-locals fallback
+                                let newly: Vec<(StrId, IntValue<'ctx>)> = cf
+                                    .ssa
+                                    .iter()
+                                    .filter(|(k, _)| !saved_ssa.contains_key(k))
+                                    .map(|(k, v)| (*k, *v))
+                                    .collect();
+                                for (k, v) in newly {
+                                    let w = v.get_type().get_bit_width();
+                                    let p = self.av_slot(&mut cf, k, w);
+                                    self.builder.build_store(p, v).unwrap();
+                                    cf.dead_defs.insert(k);
+                                }
+                                self.builder
+                                    .build_unconditional_branch(rs_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(rs_bb);
+                                cf.ssa = saved_ssa;
+                            } else {
+                                self.stmts(&mut cf, func, &body, stop_bb)?;
+                            }
                             // the AvAction def is a SYNTHETIC temp — it
                             // is in no def table (def_width fails), so
                             // the binding width is the RESULT's width,
@@ -4863,7 +4930,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             phi.add_incoming(&[(&rv, g_end), (&undet, s_end)]);
                             f.av_widths.insert(*def, wd);
                             f.dead_defs.remove(def);
-                            f.ssa.insert(*def, phi.as_basic_value().into_int_value());
+                            let pv = phi.as_basic_value().into_int_value();
+                            f.ssa.insert(*def, pv);
+                            // join-safe mirror (like the Task arm): an
+                            // always_enabled RDY gate restores the SSA
+                            // map after the gated body, so later reads
+                            // of this binding reload from the slot
+                            let dp = self.av_slot(f, *def, wd);
+                            self.builder.build_store(dp, pv).unwrap();
                             continue;
                         }
                         let wd = self.def_width(f.inst, *def).unwrap_or(1);
