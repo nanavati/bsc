@@ -420,6 +420,13 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
                 argv.push(Arg::Val(Value::from_limbs64(w, limbs), signed));
                 off += words;
             }
+            FArgSpec::Real => {
+                // one word of f64 bits -> the interp's Arg::Real, so
+                // %f/%e/%g formatting is byte-identical
+                let word = *args.add(off);
+                argv.push(Arg::Real(f64::from_bits(word)));
+                off += 1;
+            }
         }
     }
     let fname = interp.s(func).to_string();
@@ -2467,9 +2474,13 @@ impl Interp {
             // "unbound" bakes a wrong constant (sysWideModArgPortTest,
             // sysTwoLevelReal2); unfolded means Ineligible -> interp.
             let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
+            let mut real_consts: HashMap<StrId, u64> = HashMap::new();
             for (&pn, pv) in params {
                 if pv.width >= 1 && pv.width <= 64 {
                     port_consts.insert(pn, (pv.width, pv.as_u64()));
+                } else if let Some(r) = pv.as_real() {
+                    // real params ride as f64 bits (task-arg carrier)
+                    real_consts.insert(pn, r.to_bits());
                 }
             }
             for (&pn, &(w, kind)) in &self.mods[module].ports {
@@ -2508,6 +2519,7 @@ impl Interp {
                     eager_slot,
                     memo_slot,
                     port_consts,
+                    real_consts,
                     region: (region_start, 0),
                 },
             );
@@ -2583,6 +2595,10 @@ impl Interp {
                     e.port_consts.iter().map(|(&k, &(w, v))| (k, w, v)).collect();
                 m11.sort_unstable();
                 m11.hash(&mut h);
+                let mut m12: Vec<_> =
+                    e.real_consts.iter().map(|(&k, &v)| (k, v)).collect();
+                m12.sort_unstable();
+                m12.hash(&mut h);
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e

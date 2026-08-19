@@ -166,6 +166,12 @@ pub struct InstEnv {
     /// have arena slots; string params are marker values).  Part of
     /// the exec dedup signature.
     pub port_consts: HashMap<StrId, (u32, u64)>,
+    /// Real-valued instantiation parameters, as f64 bits: reals reach
+    /// simulation only as task arguments and module parameters, so the
+    /// compiled carrier is an i64 of the double's bits and the foreign
+    /// spec marks the argument Real (decode rebuilds Arg::Real).  Part
+    /// of the exec dedup signature.
+    pub real_consts: HashMap<StrId, u64>,
     /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
     /// instance); reads of other rules' fire signals become slot loads
     pub cfwf_slot: HashMap<StrId, u32>,
@@ -228,12 +234,15 @@ pub struct ForeignSpec {
     pub args: Vec<FArgSpec>,
 }
 
-/// One foreign argument: a string literal (no marshaled words) or a
-/// numeric value of the given width with its signed-display flag.
+/// One foreign argument: a string literal (no marshaled words), a
+/// numeric value of the given width with its signed-display flag, or a
+/// real value (one marshaled word carrying the f64 bits — the decode
+/// rebuilds the interp's Arg::Real so formatting is identical).
 #[derive(Clone)]
 pub enum FArgSpec {
     Str(StrId),
     Num { width: u32, signed: bool },
+    Real,
 }
 
 /// A compiled rule sched function (kept alive by the leaked engine).
@@ -357,6 +366,11 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
                         w(o, *width);
                         w(o, *signed as u32);
                     }
+                    FArgSpec::Real => {
+                        w(o, 2);
+                        w(o, 0);
+                        w(o, 0);
+                    }
                 }
             }
         }
@@ -405,10 +419,10 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
                 let tag = r(b, i)?;
                 let a = r(b, i)?;
                 let sg = r(b, i)?;
-                args.push(if tag == 0 {
-                    FArgSpec::Str(a)
-                } else {
-                    FArgSpec::Num { width: a, signed: sg != 0 }
+                args.push(match tag {
+                    0 => FArgSpec::Str(a),
+                    2 => FArgSpec::Real,
+                    _ => FArgSpec::Num { width: a, signed: sg != 0 },
                 });
             }
             v.push(ForeignSpec { inst, func, ret_width, args });
@@ -758,7 +772,7 @@ impl Drop for AotModeGuard {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 9;
+pub const AOT_LAYOUT_REV: u64 = 10;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -1750,16 +1764,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             },
             Expr::Port(p) => match f.args.get(p) {
                 Some(&(_, w)) => Ok(w),
-                None => Ok(self
-                    .ie(f.inst)?
-                    .port_consts
-                    .get(p)
-                    .map_or(1, |&(w, _)| w)), // reset/EN ports read 1 bit
+                None => {
+                    let ie = self.ie(f.inst)?;
+                    if ie.real_consts.contains_key(p) {
+                        return Ok(64); // f64 bits carrier
+                    }
+                    Ok(ie.port_consts.get(p).map_or(1, |&(w, _)| w)) // reset/EN ports read 1 bit
+                }
             },
-            Expr::Param(p) => match self.ie(f.inst)?.port_consts.get(p) {
-                Some(&(w, _)) => Ok(w),
-                None => nope("parameter not constant-lowerable"),
-            },
+            Expr::Param(p) => {
+                let ie = self.ie(f.inst)?;
+                if ie.real_consts.contains_key(p) {
+                    return Ok(64); // f64 bits carrier
+                }
+                match ie.port_consts.get(p) {
+                    Some(&(w, _)) => Ok(w),
+                    None => nope("parameter not constant-lowerable"),
+                }
+            }
+            Expr::Real(_) => Ok(64), // f64 bits carrier
             Expr::Const { width, .. }
             | Expr::MethCall { width, .. }
             | Expr::MethValue { width, .. }
@@ -2005,16 +2028,28 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if let Some(&(w, v)) = ie.port_consts.get(p) {
                     return Ok(self.cval(w, &[v as u32, (v >> 32) as u32]));
                 }
+                if let Some(&bits) = ie.real_consts.get(p) {
+                    return Ok(self.ctx.i64_type().const_int(bits, false));
+                }
                 nope("port read outside args/reset/EN/consts")
             }
             Expr::Param(p) => {
                 let ie = self.ie(f.inst)?;
+                if let Some(&bits) = ie.real_consts.get(p) {
+                    return Ok(self.ctx.i64_type().const_int(bits, false));
+                }
                 match ie.port_consts.get(p) {
                     Some(&(w, v)) => {
                         Ok(self.cval(w, &[v as u32, (v >> 32) as u32]))
                     }
                     None => nope("parameter not constant-lowerable"),
                 }
+            }
+            Expr::Real(r) => {
+                // reals ride as i64 f64-bits; only Real-marked foreign
+                // args (and real params) consume them, so the bits never
+                // mix into integer arithmetic
+                Ok(self.ctx.i64_type().const_int(r.to_bits(), false))
             }
             Expr::MethCall { width, instance, method, port, args } => {
                 self.value_call(f, *width, *instance, *method, *port, args)
@@ -3842,6 +3877,36 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Marshal a foreign call site: numeric args as word runs (strings
     /// ride the spec table), call, optionally read back result words.
     /// Returns the result value for tasks (ret_width > 0).
+    /// Statically real-typed expressions: the shapes whose interp
+    /// evaluation yields a REAL_MARKER Value (val_arg -> Arg::Real).
+    /// Reals reach simulation only as literals, parameters, and muxes/
+    /// defs over those, so the classification is decidable at lowering.
+    fn expr_is_real(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        match e {
+            Expr::Real(_) => true,
+            Expr::Param(p) | Expr::Port(p) => self
+                .ie(f.inst)
+                .map(|ie| ie.real_consts.contains_key(p))
+                .unwrap_or(false),
+            Expr::If { then_, else_, .. } => {
+                self.expr_is_real(f, then_) || self.expr_is_real(f, else_)
+            }
+            Expr::Case { arms, default, .. } => {
+                arms.iter().any(|(_, a)| self.expr_is_real(f, a))
+                    || self.expr_is_real(f, default)
+            }
+            Expr::Def(n) => {
+                let Ok(ie) = self.ie(f.inst) else { return false };
+                let m = &self.env.d.modules[ie.mir];
+                m.defs
+                    .iter()
+                    .find(|d| d.name == *n)
+                    .is_some_and(|d| self.expr_is_real(f, &d.expr))
+            }
+            _ => false,
+        }
+    }
+
     fn emit_foreign(
         &mut self,
         f: &mut Frame<'ctx>,
@@ -3860,6 +3925,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         for (i, a) in args.iter().enumerate() {
             if let Expr::Str(sid) = a {
                 spec_args.push(FArgSpec::Str(*sid));
+                continue;
+            }
+            if self.expr_is_real(f, a) {
+                // i64 f64-bits value, one marshaled word; the spec's
+                // Real tag makes the decode rebuild Arg::Real
+                let v = self.expr(f, a)?;
+                spec_args.push(FArgSpec::Real);
+                vals.push((v, 64));
                 continue;
             }
             let wa = self.expr_width(f, a)?;
