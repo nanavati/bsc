@@ -3531,6 +3531,14 @@ impl Interp {
             // exactly like a cold exec cell — so they are SKIPPED here
             // (kept out of rule_ord and the node stream), not refused.
             // The central fast loop already bails on early comps.
+            // dynamic-scheduling alternatives select the interleaving
+            // per edge; compiled dispatch bakes one order (v1: interp)
+            if !rc.alts.is_empty() {
+                if trace {
+                    eprintln!("trs jit: off (dynamic schedule)");
+                }
+                return None;
+            }
             // eager defs owned by entries already walked in THIS comp,
             // per instance: later rules of the same instance may load
             // their slots instead of re-expanding the cone
