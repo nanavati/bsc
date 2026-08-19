@@ -852,7 +852,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 15;
+pub const AOT_LAYOUT_REV: u64 = 16;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -2154,7 +2154,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // values get schedule-time slots (mcd_Rand measured a
                 // cross-domain divergence with live re-expansion)
                 if let Some((owner, g)) = ie.gates.get(p) {
-                    if !gate_static(g) {
+                    // eligible dynamic cones: prim Gate chases are LIVE
+                    // reads on both engines, and a Port link recurses
+                    // through this same checked resolution in the owner
+                    // (terminating at a const, a further chase, or nope)
+                    if !gate_static(g)
+                        && !matches!(g, Expr::Gate { .. } | Expr::Port(_))
+                    {
                         return nope("dynamic input gate (latch semantics)");
                     }
                     let (owner, g) = (*owner, g.clone());
@@ -2693,7 +2699,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             return match mname.as_str() {
                 "first" if fw == width => {
                     let fst = load(2);
-                    Ok(self.load_val_dyn(f, base + 6, fst, fw))
+                    Ok(self.load_val_dyn(f, base + 7, fst, fw))
                 }
                 "notFull" if width == 1 => {
                     Ok(cmp_w1(self, IntPredicate::ULT, load(0), i64t.const_int(_size as u64, false)))
@@ -5286,6 +5292,19 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         } else {
                             bad
                         };
+                        // in-reset suppress (post-clear, until deassert):
+                        // bounce to the boxed prim, whose action_method
+                        // no-ops — the fast path must not stamp or write
+                        let sup = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                self.load_word(f, base + 6),
+                                i64t.const_zero(),
+                                "fsp",
+                            )
+                            .unwrap();
+                        let warn = self.builder.build_or(warn, sup, "fws").unwrap();
                         self.builder
                             .build_conditional_branch(warn, warn_bb, fast_bb)
                             .unwrap();
@@ -5338,7 +5357,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 Some(v) => v,
                                 None => self.ity(1).const_zero(),
                             };
-                            self.store_val_dyn(f, base + 6, idx, fw.max(1), dv);
+                            self.store_val_dyn(f, base + 7, idx, fw.max(1), dv);
                             let e2 = self
                                 .builder
                                 .build_int_add(elems, i64t.const_int(1, false), "fe2")

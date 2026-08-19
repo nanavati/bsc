@@ -2437,7 +2437,7 @@ impl Interp {
                     }
                     Some(ArenaKind::Fifo { width, size, guard }) => {
                         let words = width.max(1).div_ceil(64);
-                        let base = alloc(&mut nslots, 6 + size * words);
+                        let base = alloc(&mut nslots, 7 + size * words);
                         fifo_slot.insert(name, (base, width, size, guard));
                         attach.push((ci, base));
                     }

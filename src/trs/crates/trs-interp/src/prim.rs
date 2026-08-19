@@ -2556,30 +2556,34 @@ impl Fifo {
     /// Mirror the header (elems/saved/fst/instants) into the arena.
     fn mirror_header(&self) {
         let Some(slot) = self.slot else { return };
-        let h = unsafe { std::slice::from_raw_parts_mut(slot, 6) };
+        let h = unsafe { std::slice::from_raw_parts_mut(slot, 7) };
         h[0] = self.elems as u64;
         h[1] = self.saved_elems as u64;
         h[2] = self.fst as u64;
         h[3] = self.enq_at;
         h[4] = self.deq_at;
         h[5] = self.clear_at;
+        h[6] = self.suppress as u64;
     }
     /// Arena-authoritative refresh: compiled INLINE enq/deq update the
     /// slots directly; boxed ops re-read them first.
     fn refresh(&mut self) {
         let Some(slot) = self.slot else { return };
         let w = self.arena_words();
-        let h = unsafe { std::slice::from_raw_parts(slot, 6 + self.size * w) };
+        let h = unsafe { std::slice::from_raw_parts(slot, 7 + self.size * w) };
         self.elems = h[0] as usize;
         self.saved_elems = h[1] as usize;
         self.fst = h[2] as usize;
         self.enq_at = h[3];
         self.deq_at = h[4];
         self.clear_at = h[5];
+        // h[6] (suppress) is a one-way mirror: the boxed field is
+        // authoritative, compiled fast paths only read it to bounce
+        // suppressed ops to the boxed prim
         let width = self.width.max(1);
         for i in 0..self.size {
             self.data[i] =
-                Value::from_limbs64(width, h[6 + i * w..6 + (i + 1) * w].to_vec());
+                Value::from_limbs64(width, h[7 + i * w..7 + (i + 1) * w].to_vec());
         }
     }
 
@@ -2588,7 +2592,7 @@ impl Fifo {
         let Some(slot) = self.slot else { return };
         let w = self.arena_words();
         let dst =
-            unsafe { std::slice::from_raw_parts_mut(slot.add(6 + idx * w), w) };
+            unsafe { std::slice::from_raw_parts_mut(slot.add(7 + idx * w), w) };
         for (i, d) in dst.iter_mut().enumerate() {
             *d = self.data[idx].limbs64().get(i).copied().unwrap_or(0);
         }
@@ -2947,6 +2951,11 @@ impl Prim for Fifo {
         self.in_reset = asserted;
         if !asserted {
             self.suppress = false;
+            // suppress alone: a blanket mirror_header here would push
+            // boxed fields over arena state the compiled ops own
+            if let Some(slot) = self.slot {
+                unsafe { *slot.add(6) = 0 };
+            }
         }
     }
 
