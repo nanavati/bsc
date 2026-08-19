@@ -1134,6 +1134,11 @@ fn aot_emit(
 /// the callback pointer-globals, and resolve every rule's sched/exec
 /// function.  Any failure falls back to in-process compilation.
 #[allow(clippy::type_complexity)]
+/// aot_load's marker error for an artifact compiled for the opposite
+/// trace mode: current, not stale — the fallback recompile is silent.
+const TRACE_MODE_MISMATCH: &str =
+    "artifact trace mode differs from this run; compiling in-process";
+
 fn aot_load(
     so: &std::path::Path,
     bir_hash: u64,
@@ -1151,6 +1156,12 @@ fn aot_load(
         let h: libloading::Symbol<*const u64> =
             lib.get(b"trs_bir_hash").map_err(|e| e.to_string())?;
         if **h != bir_hash {
+            // the OTHER trace mode's salt matching means the artifact is
+            // current but compiled for the opposite dumping mode — an
+            // expected, by-design in-process recompile, not staleness
+            if **h == bir_hash ^ 0x5452_4143_4544 {
+                return Err(TRACE_MODE_MISMATCH.into());
+            }
             return Err("BIR fingerprint mismatch (stale artifact)".into());
         }
         let r: libloading::Symbol<*const u64> =
@@ -3349,10 +3360,15 @@ impl Interp {
                     wire_ticks_flag = wt;
                 }
                 Err(e) => {
-                    eprintln!(
-                        "trs: artifact {}: {e}; compiling in-process instead",
-                        so.display()
-                    );
+                    // mode-mismatch fallbacks are by design (an untraced
+                    // artifact run under -V, or vice versa): keep the
+                    // note out of captured test output
+                    if e != TRACE_MODE_MISMATCH || trace {
+                        eprintln!(
+                            "trs: artifact {}: {e}; compiling in-process instead",
+                            so.display()
+                        );
+                    }
                 }
             }
         }
