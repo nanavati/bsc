@@ -444,11 +444,16 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
                 let tag = r(b, i)?;
                 let a = r(b, i)?;
                 let sg = r(b, i)?;
+                // exact tags only: an unknown tag is a corrupted or
+                // future-format artifact — fail CLOSED, or the callback
+                // buffer walk desynchronizes on a garbage width
+                // (review finding: unknown tags fell open as Num)
                 args.push(match tag {
                     0 => FArgSpec::Str(a),
+                    1 => FArgSpec::Num { width: a, signed: sg != 0 },
                     2 => FArgSpec::Real,
                     3 => FArgSpec::StrDyn,
-                    _ => FArgSpec::Num { width: a, signed: sg != 0 },
+                    _ => return None,
                 });
             }
             v.push(ForeignSpec { inst, func, ret_width, args });
@@ -829,7 +834,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 12;
+pub const AOT_LAYOUT_REV: u64 = 13;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -1884,8 +1889,13 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
     }
 
-    /// i1 truthiness of a width-w value.
+    /// i1 truthiness of a width-w value.  A zero-width value is the
+    /// empty bit-vector — constant false, whatever bit its i1 carrier
+    /// happens to hold.
     fn nonzero(&self, v: IntValue<'ctx>, w: u32) -> IntValue<'ctx> {
+        if w == 0 {
+            return self.ctx.bool_type().const_zero();
+        }
         self.builder
             .build_int_compare(IntPredicate::NE, v, self.ity(w).const_zero(), "nz")
             .unwrap()
@@ -2098,6 +2108,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return Ok(self.to_w(word, 64, 1, false));
                 }
                 if let Some(&(w, v)) = ie.port_consts.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero()); // empty bit-vector
+                    }
                     return Ok(self.cval(w, &[v as u32, (v >> 32) as u32]));
                 }
                 if let Some(&bits) = ie.real_consts.get(p) {
@@ -2135,6 +2148,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return Ok(self.cval(w, &limbs));
                 }
                 match ie.port_consts.get(p) {
+                    Some(&(0, _)) => Ok(self.ity(0).const_zero()),
                     Some(&(w, v)) => {
                         Ok(self.cval(w, &[v as u32, (v >> 32) as u32]))
                     }
@@ -2914,8 +2928,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             arg_widths.push(wa);
             vals.push((v, wa));
         }
+        // physical layout is w.max(1) words per argument, matching the
+        // callback decode exactly — a zero-width argument occupies one
+        // stored zero word (review finding: a 0-word argument
+        // desynchronized the buffer walk into an out-of-bounds read)
         let total_words: u32 =
-            arg_widths.iter().map(|&w| words_for(w)).sum::<u32>().max(1);
+            arg_widths.iter().map(|&w| words_for(w.max(1))).sum::<u32>().max(1);
         let out_words = words_for(ret_width.max(1));
         let i64t = self.ctx.i64_type();
         let abuf = self
@@ -2928,9 +2946,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .unwrap();
         let mut off = 0u32;
         for (v, wa) in vals {
-            let words = words_for(wa);
-            let t = self.ity(wa.max(64 * words.min(1)).max(wa));
-            let _ = t;
+            let words = words_for(wa.max(1));
             for k in 0..words {
                 let sh = self.ity(wa).const_int((64 * k) as u64, false);
                 let piece = if k == 0 {
@@ -3489,6 +3505,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         width: u32,
         args: &[Expr],
     ) -> Result<IntValue<'ctx>, Ineligible> {
+        // a zero-width result is the empty bit-vector, always 0: the
+        // interp masks every op back to zero at width 0.  A central
+        // early return keeps the invariant where per-op lowering would
+        // break it (Not of i1 0 is i1 1; Sra computes width-1, which
+        // underflows) — prim exprs are pure, so skipping the args is
+        // safe (review finding)
+        if width == 0 {
+            return Ok(self.ity(0).const_zero());
+        }
         // string equality: the interp compares marker limbs, i.e. the
         // ids — an i64 id compare is the exact mirror (both engines
         // treat distinct ids as unequal regardless of text)
@@ -4107,6 +4132,42 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
     }
 
+    /// Does a string expression contain a StringConcat anywhere —
+    /// including through Def table expansion?  Concat interns per
+    /// evaluation, so it must never run on an unselected mux arm.
+    fn contains_concat(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        match e {
+            Expr::Prim { op: PrimOp::StringConcat, .. } => true,
+            Expr::Prim { args, .. } => {
+                args.iter().any(|a| self.contains_concat(f, a))
+            }
+            Expr::If { cond, then_, else_, .. } => {
+                self.contains_concat(f, cond)
+                    || self.contains_concat(f, then_)
+                    || self.contains_concat(f, else_)
+            }
+            Expr::Case { scrutinee, arms, default, .. } => {
+                self.contains_concat(f, scrutinee)
+                    || arms.iter().any(|(_, a)| self.contains_concat(f, a))
+                    || self.contains_concat(f, default)
+            }
+            Expr::Def(n) => {
+                // a positioned binding is already a pure id; only an
+                // unbound def's table expansion could re-run a concat
+                if f.ssa.contains_key(n) {
+                    return false;
+                }
+                let Ok(ie) = self.ie(f.inst) else { return false };
+                let m = &self.env.d.modules[ie.mir];
+                m.defs
+                    .iter()
+                    .find(|d| d.name == *n)
+                    .is_some_and(|d| self.contains_concat(f, &d.expr))
+            }
+            _ => false,
+        }
+    }
+
     /// Lower a string-typed expression to its i64 string id (the
     /// compiled carrier for the interp's str_ref marker Value).
     fn str_expr(
@@ -4125,11 +4186,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
             }
             Expr::If { cond, then_, else_, .. } => {
+                // arms evaluate eagerly (select), which is only sound
+                // for PURE ids — a StringConcat in an arm would intern
+                // on the unselected path too, diverging from the
+                // interp's selected-arm-only evaluation (review
+                // finding); such shapes stay ineligible until arms get
+                // real control flow
+                if self.contains_concat(f, then_) || self.contains_concat(f, else_) {
+                    return nope("string concat under a mux arm");
+                }
                 let wc = self.expr_width(f, cond)?;
                 let c = self.expr(f, cond)?;
                 let cz = self.nonzero(c, wc);
-                // string values are pure ids — both arms evaluate
-                // eagerly (no effects), select picks one
                 let tv = self.str_expr(f, then_, stop_bb)?;
                 let ev = self.str_expr(f, else_, stop_bb)?;
                 Ok(self
@@ -4139,6 +4207,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .into_int_value())
             }
             Expr::Case { scrutinee, arms, default, .. } => {
+                if arms.iter().any(|(_, a)| self.contains_concat(f, a))
+                    || self.contains_concat(f, default)
+                {
+                    return nope("string concat under a mux arm");
+                }
                 let ws = self.expr_width(f, scrutinee)?;
                 let sv = self.expr(f, scrutinee)?;
                 let mut acc = self.str_expr(f, default, stop_bb)?;
@@ -4158,13 +4231,40 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 Ok(acc)
             }
             Expr::Def(n) => {
+                // same resolution order as numeric def(): the POSITIONED
+                // ssa binding wins (a Stmt::Def bound the id at its
+                // statement position — table re-expansion would observe
+                // later state mutations and re-run concat effects), then
+                // dead-def refusal, then table expansion (review finding)
+                if let Some(v) = f.ssa.get(n) {
+                    return Ok(*v);
+                }
+                if f.dead_defs.contains(n) {
+                    if let Some(&(p, w)) = f.av_slots.get(n) {
+                        let out = self
+                            .builder
+                            .build_load(self.ity(w), p, "savesc")
+                            .unwrap()
+                            .into_int_value();
+                        return Ok(out);
+                    }
+                    return nope("string def escaped conditional arm");
+                }
                 let ie = self.ie(f.inst)?;
                 let m = &self.env.d.modules[ie.mir];
                 let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
                     return nope("unknown string def");
                 };
+                if f.expanding.contains(n) {
+                    return nope("string def cycle");
+                }
                 let dex = d.expr.clone();
-                self.str_expr(f, &dex, stop_bb)
+                f.expanding.push(*n);
+                let r = self.str_expr(f, &dex, stop_bb);
+                f.expanding.pop();
+                let v = r?;
+                f.ssa.insert(*n, v);
+                Ok(v)
             }
             Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
                 // marker passthrough: width adjustments of string
@@ -4618,6 +4718,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
     ) -> Result<IntValue<'ctx>, Ineligible> {
         let w = width.max(1);
+        // join-safe slots FIRST (undet-initialized at entry): the
+        // interp binds nothing on a false condition, so a later read
+        // sees undet (or a previous execution's value) — the stores
+        // happen only on the TAKEN path (review finding: the old
+        // unconditional store of the phi wrote 0 over undet on skip)
+        let ck = 0x8000_0000u32 | cookie;
+        let cp = self.av_slot(f, ck, w);
+        let tp = temp.map(|t| self.av_slot(f, t, w));
         let wc = self.expr_width(f, cond)?;
         let c = self.expr(f, cond)?;
         let cz = self.nonzero(c, wc);
@@ -4629,28 +4737,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let v = self
             .emit_foreign(f, tf, args, signed, w, stop_bb)?
             .expect("task returns");
-        let g_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_store(cp, v).unwrap();
+        if let Some(tp) = tp {
+            self.builder.build_store(tp, v).unwrap();
+        }
         self.builder.build_unconditional_branch(jn_bb).unwrap();
         self.builder.position_at_end(sk_bb);
-        let z = self.ity(w).const_zero();
-        let s_end = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(jn_bb).unwrap();
         self.builder.position_at_end(jn_bb);
-        let phi = self.builder.build_phi(self.ity(w), "tphi").unwrap();
-        phi.add_incoming(&[(&v, g_end), (&z, s_end)]);
-        let out = phi.as_basic_value().into_int_value();
+        // the slot is the single source of truth at the join: executed
+        // value, or the preserved previous/undet contents on skip —
+        // exactly the interp's locals-then-latched-then-undet order
+        let out = self
+            .builder
+            .build_load(self.ity(w), cp, "tval")
+            .unwrap()
+            .into_int_value();
         f.tasks.insert(cookie, (out, w));
-        // join-safe mirror of the interp's body-wide ctx.locals: store
-        // the result under the cookie's synthetic key (interp
-        // cookie_key) and the temp so references after an enclosing
-        // Cond join load the executed value instead of going Ineligible
-        let ck = 0x8000_0000u32 | cookie;
-        let cp = self.av_slot(f, ck, w);
-        self.builder.build_store(cp, out).unwrap();
         if let Some(t) = temp {
             f.ssa.insert(t, out);
-            let tp = self.av_slot(f, t, w);
-            self.builder.build_store(tp, out).unwrap();
         }
         Ok(out)
     }
@@ -5222,5 +5327,44 @@ mod tests {
     #[test]
     fn jit_round_trip() {
         assert_eq!(super::llvm_smoke_test().unwrap(), 42);
+    }
+
+    #[test]
+    fn proto_tags_round_trip_and_fail_closed() {
+        use super::{decode_protos, encode_protos, FArgSpec, FnProtos, ForeignSpec};
+        let protos = vec![FnProtos {
+            sched_foreign: vec![ForeignSpec {
+                inst: 3,
+                func: 7,
+                ret_width: 64,
+                args: vec![
+                    FArgSpec::Str(11),
+                    FArgSpec::Num { width: 0, signed: false },
+                    FArgSpec::Num { width: 65, signed: true },
+                    FArgSpec::Real,
+                    FArgSpec::StrDyn,
+                ],
+            }],
+            sched_prims: vec![],
+            exec_foreign: vec![],
+            exec_prims: vec![],
+        }];
+        let bytes = encode_protos(&protos);
+        let back = decode_protos(&bytes).expect("round trip");
+        assert_eq!(back.len(), 1);
+        let args = &back[0].sched_foreign[0].args;
+        assert!(matches!(args[0], FArgSpec::Str(11)));
+        assert!(matches!(args[1], FArgSpec::Num { width: 0, signed: false }));
+        assert!(matches!(args[2], FArgSpec::Num { width: 65, signed: true }));
+        assert!(matches!(args[3], FArgSpec::Real));
+        assert!(matches!(args[4], FArgSpec::StrDyn));
+        // an unknown tag is a corrupted or future-format artifact:
+        // decode must fail CLOSED, never fall open as Num
+        let mut bad = encode_protos(&protos);
+        // first arg record's tag word: protos_count(4) foreign_count(4)
+        // inst(4) func(4) ret(4) argc(4) -> tag at byte offset 24
+        let tag_off = 4 + 4 + 4 + 4 + 4 + 4;
+        bad[tag_off] = 9;
+        assert!(super::decode_protos(&bad).is_none());
     }
 }

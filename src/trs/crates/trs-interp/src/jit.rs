@@ -102,11 +102,14 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     let mut argv = Vec::with_capacity(arg_widths.len());
     let mut off = 0usize;
     for &w in &arg_widths {
-        let words = ((w as usize) + 63) / 64;
-        let limbs =
-            std::slice::from_raw_parts(args.add(off), words.max(1)).to_vec();
-        // TRUE width: a zero-width prim arg must reach the prim as the
-        // interp's width-0 Value (from_limbs64 masks the over-read word)
+        // physical layout is w.max(1) words per argument on BOTH sides
+        // of the ABI — a zero-width argument still occupies one (zero)
+        // word (review finding: reading words.max(1) while advancing by
+        // the logical count walked past the allocation)
+        let words = ((w.max(1) as usize) + 63) / 64;
+        let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
+        // TRUE logical width: a zero-width prim arg must reach the prim
+        // as the interp's width-0 Value (from_limbs64 masks the word)
         argv.push(Value::from_limbs64(w, limbs));
         off += words;
     }
@@ -2546,11 +2549,15 @@ impl Interp {
                 }
                 match kind {
                     trs_ir::PortKind::MethodArg => {
-                        port_consts.insert(pn, (w.max(1), 0));
+                        // LOGICAL width, zero included: the interp's
+                        // fallback masks from_u64(0, _) to the empty
+                        // vector, so a zero-width port must not become
+                        // a width-1 value (review finding)
+                        port_consts.insert(pn, (w, 0));
                     }
                     trs_ir::PortKind::MethodEnable => {}
                     _ => {
-                        port_consts.insert(pn, (w.max(1), 1));
+                        port_consts.insert(pn, (w, if w == 0 { 0 } else { 1 }));
                     }
                 }
             }

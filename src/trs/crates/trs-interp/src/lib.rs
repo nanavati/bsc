@@ -1046,6 +1046,29 @@ impl Interp {
         }
     }
 
+    /// A latched def, or its arena-slot value when the def is kept
+    /// current by compiled scheds (fire signals / schedule-position
+    /// defs).  Inhibitor lookups must see compiled rules' CFs.
+    fn latched_or_arena(&self, inst: usize, name: StrId) -> Option<Value> {
+        if let Some(v) = self.latched(inst, name) {
+            return Some(v);
+        }
+        if !self.jit_arena_ptr.is_null() {
+            if let Some(&(base, w)) = self.jit_eager_slots.get(&(inst, name)) {
+                let words = ((w.max(1) as usize) + 63) / 64;
+                let limbs = unsafe {
+                    std::slice::from_raw_parts(
+                        self.jit_arena_ptr.add(base as usize),
+                        words,
+                    )
+                }
+                .to_vec();
+                return Some(Value::from_limbs64(w.max(1), limbs));
+            }
+        }
+        None
+    }
+
     /// Evaluate an expression in an instance context.  Body-local defs and
     /// per-cycle latched defs win over recomputation; in memo contexts,
     /// on-demand def values are cached.
@@ -2919,11 +2942,16 @@ impl Interp {
         let mut ctx = Ctx { memo: true, ..Default::default() };
 
         let mut cf = self.eval(inst, &mut ctx, &Expr::Def(r.can_fire));
-        // intra-module ME inhibitors (earlier disjoint rules' CFs)
+        // intra-module ME inhibitors (earlier disjoint rules' CFs).
+        // A compiled rule's CF lives in its arena slot, not in latched
+        // (the native scheds keep it current) — an early rule inhibited
+        // by a compiled rule must read the slot when no interpreter
+        // latch exists (review finding: latched-only lookup missed
+        // every compiled inhibitor)
         for other in &r.me_inhibits {
             let other_ri = self.mods[module].rules[other];
             let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
-            if let Some(v) = self.latched(inst, other_cf) {
+            if let Some(v) = self.latched_or_arena(inst, other_cf) {
                 if v.as_bool() {
                     cf = Value::zero(1);
                 }
@@ -2931,7 +2959,7 @@ impl Interp {
         }
         // cross-module inhibitors targeting this rule
         for (other_inst, other_cf) in cross_inh {
-            if let Some(v) = self.latched(*other_inst, *other_cf) {
+            if let Some(v) = self.latched_or_arena(*other_inst, *other_cf) {
                 if v.as_bool() {
                     cf = Value::zero(1);
                 }
@@ -4022,19 +4050,24 @@ impl Interp {
                             // ConfigReg reads compare written_at to now
                             unsafe { *ap.add(j.now_slot as usize) = t };
                             let warming = j.lazy.any_cold();
-                            if warming {
-                                // interpreted fallback bodies latch state
-                                // as they run; clear per edge or stale
-                                // latched defs would shadow the arena
-                                // fall-through (latched() wins in eval)
-                                for i in 0..self.insts.len() {
-                                    if let InstKind::User { latched, .. } =
-                                        &mut self.insts[i].kind
-                                    {
-                                        latched.clear();
-                                    }
+                            // latch space clears per edge UNCONDITIONALLY,
+                            // exactly like the interpreted path: warming
+                            // fallback bodies latch state as they run, and
+                            // the PG_FINAL early-rule pass latches CF/WF —
+                            // a surviving latch would shadow both the arena
+                            // fall-through and recomputation on the NEXT
+                            // timeslice (latched() wins in eval), freezing
+                            // an early rule's first fire decision forever
+                            // (review finding: fully-compiled/AOT mode
+                            // never cleared)
+                            for i in 0..self.insts.len() {
+                                if let InstKind::User { latched, .. } =
+                                    &mut self.insts[i].kind
+                                {
+                                    latched.clear();
                                 }
                             }
+                            let _ = warming;
                             // the C++ schedule zeroes every enable at the
                             // top of the pass; compiled call sites set them
                             for &s in &j.en_slots {
