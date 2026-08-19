@@ -380,12 +380,13 @@ encComposition instToMod msis topGates ss = do
         -- the segment's internal order already agrees.
         schedPosQ = M.fromList [ (qualPath i, p)
                                | (Sched i, p) <- zip order [(0 :: Int) ..] ]
-        mePairs = nub ([ (r, d)
-                       | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-                       , d <- S.toList ds ]
-                       ++ [ (d, r)
-                          | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
-                          , d <- S.toList ds ])
+        -- The disjointness map holds both orientations of every pair
+        -- (`combineSchedDRDB`: "the disjoint map should be the same in
+        -- both directions"), so one pass over it sees each ordered pair
+        -- exactly once.
+        mePairs = [ (r, d)
+                  | (r, ds) <- M.toList (ss_disjoint_rules_db ss)
+                  , d <- S.toList ds ]
         meEdges = S.fromList
             [ (su, eu)
             | (r, d) <- mePairs
