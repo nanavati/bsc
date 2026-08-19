@@ -852,7 +852,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 14;
+pub const AOT_LAYOUT_REV: u64 = 15;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -2383,7 +2383,24 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let Some(ff) = self.bdpi_import(func) else {
             return nope("foreign value call without BDPI import");
         };
-        self.bdpi_emit(f, width, &ff, args)
+        if Self::bdpi_lits_ok(&ff, args) {
+            return self.bdpi_emit(f, width, &ff, args);
+        }
+        // dynamic CString arg: boxed trampoline call — the interp's
+        // foreign_value falls through to bdpi_call, which marshals
+        // Arg::Str for CString params
+        match self.emit_foreign(f, func, args, &[], width, None)? {
+            Some(v) => Ok(v),
+            None => nope("BDPI value call returned no value"),
+        }
+    }
+
+    /// Every FT::CString parameter is bound to a literal Expr::Str —
+    /// the precondition for the direct bdpi_emit fast path.
+    fn bdpi_lits_ok(ff: &trs_ir::ForeignFunc, args: &[Expr]) -> bool {
+        ff.args.iter().zip(args).all(|(t, a)| {
+            !matches!(t, trs_ir::ForeignType::CString) || matches!(a, Expr::Str(_))
+        })
     }
 
     /// The design's BDPI import for `func`, if any (system tasks and
@@ -4436,18 +4453,16 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             Expr::Prim { op: PrimOp::StringConcat, args, .. } => {
                 // per-evaluation intern through the callback, exactly
-                // the interp's intern_dyn; needs a stop block (task
-                // context) — pure value cones (e.g. string Eq) nope
-                let Some(sb) = stop_bb else {
-                    return nope("string concat outside task context");
-                };
+                // the interp's intern_dyn; pure value cones (e.g.
+                // string Eq) have no stop block, and the concat
+                // callback never requests a stop
                 match self.emit_foreign(
                     f,
                     STRING_CONCAT_FUNC,
                     args,
                     &[],
                     64,
-                    sb,
+                    stop_bb,
                 )? {
                     Some(v) => Ok(v),
                     None => nope("string concat returned no value"),
@@ -4464,7 +4479,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         args: &[Expr],
         signed: &[bool],
         ret_width: u32,
-        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        stop_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
     ) -> Result<Option<IntValue<'ctx>>, Ineligible> {
         let Some(envp) = f.envp else {
             return nope("foreign call without env pointer");
@@ -4488,7 +4503,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             if self.expr_is_str(f, a) {
                 // i64 string id, one marshaled word; the spec's StrDyn
                 // tag makes the decode resolve it to Arg::Str
-                let v = self.str_expr(f, a, Some(stop_bb))?;
+                let v = self.str_expr(f, a, stop_bb)?;
                 spec_args.push(FArgSpec::StrDyn);
                 vals.push((v, 64));
                 continue;
@@ -4565,19 +4580,25 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let inkwell::values::ValueKind::Basic(rv) = call.try_as_basic_value() else {
             return nope("callback returned void");
         };
-        let stop = self
-            .builder
-            .build_int_compare(
-                IntPredicate::NE,
-                rv.into_int_value(),
-                self.ctx.i32_type().const_int(0, false),
-                "fst",
-            )
-            .unwrap();
-        let func = self.builder.get_insert_block().unwrap().get_parent().unwrap();
-        let cont_bb = self.ctx.append_basic_block(func, "fcont");
-        self.builder.build_conditional_branch(stop, stop_bb, cont_bb).unwrap();
-        self.builder.position_at_end(cont_bb);
+        // outside a task context there is no abort target; the callback
+        // contract reserves the nonzero return for genuine aborts and
+        // nothing requests one today, so the result is ignored there
+        if let Some(sb) = stop_bb {
+            let stop = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    rv.into_int_value(),
+                    self.ctx.i32_type().const_int(0, false),
+                    "fst",
+                )
+                .unwrap();
+            let func =
+                self.builder.get_insert_block().unwrap().get_parent().unwrap();
+            let cont_bb = self.ctx.append_basic_block(func, "fcont");
+            self.builder.build_conditional_branch(stop, sb, cont_bb).unwrap();
+            self.builder.position_at_end(cont_bb);
+        }
         if ret_width == 0 {
             return Ok(None);
         }
@@ -4924,7 +4945,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
         self.builder.position_at_end(go_bb);
         let v = self
-            .emit_foreign(f, tf, args, signed, w, stop_bb)?
+            .emit_foreign(f, tf, args, signed, w, Some(stop_bb))?
             .expect("task returns");
         self.builder.build_store(cp, v).unwrap();
         if let Some(tp) = tp {
@@ -5415,12 +5436,33 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 else {
                     return nope("unknown action method on child");
                 };
-                if m.kind != trs_ir::MethodKind::Action {
-                    return nope("actionvalue method call");
+                // a plain Action call may target an ActionValue method
+                // with its result discarded — the interp's call_action
+                // executes the body either way
+                if !matches!(
+                    m.kind,
+                    trs_ir::MethodKind::Action | trs_ir::MethodKind::ActionValue
+                ) {
+                    return nope("value method as action");
                 }
-                if m.always_enabled {
-                    return nope("always_enabled method (RDY-gated body)");
-                }
+                // (* always_enabled *): the caller-side RDY was dropped,
+                // so the body is gated on the sibling RDY_<m> value
+                // method at call time (the C++ check_rdy wrapper); EN
+                // still lands when the caller fires. No RDY method
+                // exported = constant ready.
+                let rdy_id = if m.always_enabled {
+                    let rdy_name =
+                        format!("RDY_{}", self.env.d.strings[*method as usize]);
+                    self.env
+                        .d
+                        .strings
+                        .iter()
+                        .position(|x| x == &rdy_name)
+                        .map(|id| id as StrId)
+                        .filter(|id| cmod.methods.iter().any(|mm| mm.name == *id))
+                } else {
+                    None
+                };
                 if args.len() != m.args.len() {
                     return nope("method arg count mismatch");
                 }
@@ -5450,6 +5492,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let one = self.ctx.i64_type().const_int(1, false);
                     self.store_word(&cf, slot, one);
                 }
+                if let Some(rid) = rdy_id {
+                    // EN is already latched; only the body waits on RDY
+                    let r = self.value_call(f, 1, *instance, rid, 0, &[])?;
+                    let rz = self.nonzero(r, 1);
+                    let bd_bb = self.ctx.append_basic_block(func, "mrdy");
+                    self.builder.build_conditional_branch(rz, bd_bb, sk_bb).unwrap();
+                    self.builder.position_at_end(bd_bb);
+                }
                 // the inlined body executes inside a conditional block:
                 // caller-frame defs expanded here must not leak either —
                 // cf is fresh, so only its own scope is at stake
@@ -5466,11 +5516,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let sk_bb = self.ctx.append_basic_block(func, "fsk");
                 self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
                 self.builder.position_at_end(go_bb);
-                if let Some(imp) = self.bdpi_import(*ff) {
-                    // user BDPI action: direct call (task #22)
-                    self.bdpi_emit(f, 1, &imp, args)?;
-                } else {
-                    self.emit_foreign(f, *ff, args, signed, 0, stop_bb)?;
+                match self.bdpi_import(*ff) {
+                    // user BDPI action: direct call (task #22); dynamic
+                    // CString args take the boxed trampoline instead
+                    Some(imp) if Self::bdpi_lits_ok(&imp, args) => {
+                        self.bdpi_emit(f, 1, &imp, args)?;
+                    }
+                    _ => {
+                        self.emit_foreign(f, *ff, args, signed, 0, Some(stop_bb))?;
+                    }
                 }
                 self.builder.build_unconditional_branch(sk_bb).unwrap();
                 self.builder.position_at_end(sk_bb);
