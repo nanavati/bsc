@@ -494,8 +494,10 @@ encComposition instToMod msis topGates ss = do
         stepME (seen, acc) (i, Sched n) =
             let q = qp i (getIdBaseString n)
                 inh = S.intersection (M.findWithDefault S.empty q disjQ) seen
-            in  (seen, acc ++ [ (d, q) | d <- S.toList inh ])
-        crossPairs = snd (foldl' stepME (S.empty, []) composedNodes)
+            -- Chunk-accumulate and concat once, so the fold stays linear
+            -- in the number of emitted pairs.
+            in  (seen, [ (d, q) | d <- S.toList inh ] : acc)
+        crossPairs = concat (reverse (snd (foldl' stepME (S.empty, []) composedNodes)))
 
         -- direction-filter the primitive ticks against the primMap tick
         -- specs (doTickCall): a posedge schedule also produces a
