@@ -440,7 +440,33 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
                 argv.push(Arg::Real(f64::from_bits(word)));
                 off += 1;
             }
+            FArgSpec::StrDyn => {
+                // one word of string id (static or runtime-interned)
+                // -> the interp's Arg::Str
+                let word = *args.add(off);
+                argv.push(Arg::Str(interp.s(word as u32).to_string()));
+                off += 1;
+            }
         }
+    }
+    if func == trs_codegen::lower::STRING_CONCAT_FUNC {
+        // compiled PrimOp::StringConcat: concatenate the resolved
+        // texts and intern per evaluation, the interp's exact behavior
+        // (func is a sentinel, not a string id — resolve nothing)
+        let mut text = String::new();
+        for a in &argv {
+            if let Arg::Str(s) = a {
+                text.push_str(s);
+            }
+        }
+        let id = interp.intern_dyn(text);
+        *out = id as u64;
+        if let Some(t0) = _t0 {
+            prof::add(&prof::FOREIGN_NS, t0);
+            prof::FOREIGN_CALLS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        return 0;
     }
     let fname = interp.s(func).to_string();
     let loc = interp.loc_of(inst);
@@ -2537,6 +2563,7 @@ impl Interp {
                     port_consts,
                     real_consts,
                     gates: gates.clone(),
+                    str_consts: str_params.clone(),
                     region: (region_start, 0),
                 },
             );
@@ -2626,6 +2653,10 @@ impl Interp {
                     .collect();
                 m13.sort_unstable();
                 m13.hash(&mut h);
+                let mut m14: Vec<_> =
+                    e.str_consts.iter().map(|(&k, &v)| (k, v)).collect();
+                m14.sort_unstable();
+                m14.hash(&mut h);
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e

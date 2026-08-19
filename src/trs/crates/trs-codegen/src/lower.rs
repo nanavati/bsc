@@ -178,6 +178,12 @@ pub struct InstEnv {
     /// evaluation.  Part of the exec dedup signature (owner slots are
     /// absolute in deduped bodies, so gate wiring must pin the sig).
     pub gates: HashMap<StrId, (usize, Expr)>,
+    /// String-valued instantiation parameters: name -> string id.  The
+    /// compiled carrier for strings is an i64 of the id (the interp's
+    /// str_ref marker value), consumed by StrDyn foreign args, string
+    /// Eq, and the StringConcat intern callback.  Part of the exec
+    /// dedup signature.
+    pub str_consts: HashMap<StrId, StrId>,
     /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
     /// instance); reads of other rules' fire signals become slot loads
     pub cfwf_slot: HashMap<StrId, u32>,
@@ -249,6 +255,10 @@ pub enum FArgSpec {
     Str(StrId),
     Num { width: u32, signed: bool },
     Real,
+    /// A dynamically-selected string: one marshaled word carrying the
+    /// string id (static table or runtime-interned) — the decode
+    /// resolves it to the interp's Arg::Str.
+    StrDyn,
 }
 
 /// A compiled rule sched function (kept alive by the leaked engine).
@@ -377,6 +387,11 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
                         w(o, 0);
                         w(o, 0);
                     }
+                    FArgSpec::StrDyn => {
+                        w(o, 3);
+                        w(o, 0);
+                        w(o, 0);
+                    }
                 }
             }
         }
@@ -428,6 +443,7 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
                 args.push(match tag {
                     0 => FArgSpec::Str(a),
                     2 => FArgSpec::Real,
+                    3 => FArgSpec::StrDyn,
                     _ => FArgSpec::Num { width: a, signed: sg != 0 },
                 });
             }
@@ -779,6 +795,12 @@ impl Drop for AotModeGuard {
 /// trampoline answers the prim's gate_out() (compiled Expr::Gate).
 pub const GATE_OUT_METHOD: StrId = u32::MAX;
 
+/// Sentinel func id in a ForeignSpec: not a foreign function — the
+/// callback concatenates its (StrDyn) arguments' texts and interns the
+/// result, returning the new string id (compiled PrimOp::StringConcat,
+/// mirroring the interp's per-evaluation intern_dyn).
+pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
+
 /// A gate expression a compiled read may re-expand: static cones only
 /// (constants, parameters, and pure combinationals over them).  Defs
 /// are excluded because the interp's gate eval prefers their LATCHED
@@ -803,7 +825,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 11;
+pub const AOT_LAYOUT_REV: u64 = 12;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -2033,6 +2055,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
 
     /// Lower an expression to an iN value of its BSV width.
     fn expr(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<IntValue<'ctx>, Ineligible> {
+        // string-typed expressions lower uniformly as i64 ids wherever
+        // they appear (def bindings, cones, muxes) — the consumers
+        // (StrDyn foreign args, string Eq, concat) understand the
+        // carrier; concat inside a pure value cone stays ineligible
+        // (no task context)
+        if self.expr_is_str(f, e) {
+            return self.str_expr(f, e, None);
+        }
         match e {
             Expr::Const { width, limbs } => {
                 if *width == 0 {
@@ -3435,6 +3465,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         width: u32,
         args: &[Expr],
     ) -> Result<IntValue<'ctx>, Ineligible> {
+        // string equality: the interp compares marker limbs, i.e. the
+        // ids — an i64 id compare is the exact mirror (both engines
+        // treat distinct ids as unequal regardless of text)
+        if op == PrimOp::Eq
+            && args.len() == 2
+            && self.expr_is_str(f, &args[0])
+        {
+            let a = self.str_expr(f, &args[0], None)?;
+            let b = self.str_expr(f, &args[1], None)?;
+            return Ok(self
+                .builder
+                .build_int_compare(IntPredicate::EQ, a, b, "seq")
+                .unwrap());
+        }
         match op {
             PrimOp::And | PrimOp::Or | PrimOp::Xor | PrimOp::Add | PrimOp::Sub | PrimOp::Mul => {
                 let mut it = args.iter();
@@ -4005,6 +4049,127 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
     }
 
+    /// Statically string-typed expressions: the shapes whose interp
+    /// evaluation yields a STR_MARKER Value (val_arg -> Arg::Str).
+    /// Strings are literals, string params, muxes/defs over those,
+    /// marker-passthrough width adjustments, and StringConcat results.
+    fn expr_is_str(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        match e {
+            Expr::Str(_) => true,
+            Expr::Param(p) | Expr::Port(p) => self
+                .ie(f.inst)
+                .map(|ie| ie.str_consts.contains_key(p))
+                .unwrap_or(false),
+            Expr::If { then_, else_, .. } => {
+                self.expr_is_str(f, then_) || self.expr_is_str(f, else_)
+            }
+            Expr::Case { arms, default, .. } => {
+                arms.iter().any(|(_, a)| self.expr_is_str(f, a))
+                    || self.expr_is_str(f, default)
+            }
+            Expr::Def(n) => {
+                let Ok(ie) = self.ie(f.inst) else { return false };
+                let m = &self.env.d.modules[ie.mir];
+                m.defs
+                    .iter()
+                    .find(|d| d.name == *n)
+                    .is_some_and(|d| self.expr_is_str(f, &d.expr))
+            }
+            Expr::Prim { op: PrimOp::StringConcat, .. } => true,
+            Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
+                args.first().is_some_and(|a| self.expr_is_str(f, a))
+            }
+            _ => false,
+        }
+    }
+
+    /// Lower a string-typed expression to its i64 string id (the
+    /// compiled carrier for the interp's str_ref marker Value).
+    fn str_expr(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        e: &Expr,
+        stop_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let i64t = self.ctx.i64_type();
+        match e {
+            Expr::Str(sid) => Ok(i64t.const_int(*sid as u64, false)),
+            Expr::Param(p) | Expr::Port(p) => {
+                match self.ie(f.inst)?.str_consts.get(p) {
+                    Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
+                    None => nope("non-string port in string context"),
+                }
+            }
+            Expr::If { cond, then_, else_, .. } => {
+                let wc = self.expr_width(f, cond)?;
+                let c = self.expr(f, cond)?;
+                let cz = self.nonzero(c, wc);
+                // string values are pure ids — both arms evaluate
+                // eagerly (no effects), select picks one
+                let tv = self.str_expr(f, then_, stop_bb)?;
+                let ev = self.str_expr(f, else_, stop_bb)?;
+                Ok(self
+                    .builder
+                    .build_select(cz, tv, ev, "ssel")
+                    .unwrap()
+                    .into_int_value())
+            }
+            Expr::Case { scrutinee, arms, default, .. } => {
+                let ws = self.expr_width(f, scrutinee)?;
+                let sv = self.expr(f, scrutinee)?;
+                let mut acc = self.str_expr(f, default, stop_bb)?;
+                for (k, a) in arms {
+                    let kv = self.ity(ws).const_int(*k, false);
+                    let hit = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, sv, kv, "scse")
+                        .unwrap();
+                    let av = self.str_expr(f, a, stop_bb)?;
+                    acc = self
+                        .builder
+                        .build_select(hit, av, acc, "scsl")
+                        .unwrap()
+                        .into_int_value();
+                }
+                Ok(acc)
+            }
+            Expr::Def(n) => {
+                let ie = self.ie(f.inst)?;
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return nope("unknown string def");
+                };
+                let dex = d.expr.clone();
+                self.str_expr(f, &dex, stop_bb)
+            }
+            Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
+                // marker passthrough: width adjustments of string
+                // values are identity in the interp
+                self.str_expr(f, &args[0], stop_bb)
+            }
+            Expr::Prim { op: PrimOp::StringConcat, args, .. } => {
+                // per-evaluation intern through the callback, exactly
+                // the interp's intern_dyn; needs a stop block (task
+                // context) — pure value cones (e.g. string Eq) nope
+                let Some(sb) = stop_bb else {
+                    return nope("string concat outside task context");
+                };
+                match self.emit_foreign(
+                    f,
+                    STRING_CONCAT_FUNC,
+                    args,
+                    &[],
+                    64,
+                    sb,
+                )? {
+                    Some(v) => Ok(v),
+                    None => nope("string concat returned no value"),
+                }
+            }
+            _ => nope("expression not string-lowerable"),
+        }
+    }
+
     fn emit_foreign(
         &mut self,
         f: &mut Frame<'ctx>,
@@ -4030,6 +4195,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // Real tag makes the decode rebuild Arg::Real
                 let v = self.expr(f, a)?;
                 spec_args.push(FArgSpec::Real);
+                vals.push((v, 64));
+                continue;
+            }
+            if self.expr_is_str(f, a) {
+                // i64 string id, one marshaled word; the spec's StrDyn
+                // tag makes the decode resolve it to Arg::Str
+                let v = self.str_expr(f, a, Some(stop_bb))?;
+                spec_args.push(FArgSpec::StrDyn);
                 vals.push((v, 64));
                 continue;
             }

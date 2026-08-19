@@ -658,7 +658,7 @@ impl Interp {
     }
 
     /// Intern a runtime-created string (StringConcat) into the arena.
-    fn intern_dyn(&mut self, text: String) -> StrId {
+    pub(crate) fn intern_dyn(&mut self, text: String) -> StrId {
         self.dyn_strs.push(text);
         (self.d.strings.len() + self.dyn_strs.len() - 1) as StrId
     }
