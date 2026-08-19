@@ -151,6 +151,10 @@ check_vcd() { # name top
     echo "PASS $name"
 }
 check_vcd FifoVcd sysFifoVcd
+# wide (>64-bit) module arguments in compiled bodies: multi-limb
+# port_consts (a single-u64 store once folded them to 0/1 and the run
+# went silently empty)
+check WideArgConst sysWideArgConst
 # ---- top-level restriction lifts (-trs only; no reference Bluesim
 # executable exists for these BY DESIGN — classic Bluesim refuses the
 # design class, so stdout gates against stored hand-derived goldens
