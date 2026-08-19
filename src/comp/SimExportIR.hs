@@ -378,8 +378,21 @@ encComposition instToMod msis topGates ss = do
         -- rules singleton per-node segments so the endpoints are
         -- independently placeable).  A same-unit pair is only legal if
         -- the segment's internal order already agrees.
-        schedPosQ = M.fromList [ (qualPath i, p)
+        -- Keyed by Id: comparison is an interned-index compare, where a
+        -- qualified-path String would be rebuilt and compared character by
+        -- character on every probe.  Probed only, never traversed, so the
+        -- interning-order traversal never reaches the output.
+        schedPosQ = M.fromList [ (i, p)
                                | (Sched i, p) <- zip order [(0 :: Int) ..] ]
+        execPosI  = M.fromList [ (i, p)
+                               | (Exec i, p) <- zip order [(0 :: Int) ..] ]
+        -- `resolveFull` is a pure function of the node and there are
+        -- |order| nodes against O(rules^2) disjoint pairs, so resolve each
+        -- node once here and probe by Id below.
+        resolvedS = M.fromList [ (i, v)
+                               | n@(Sched i) <- order, Just v <- [resolveFull n] ]
+        resolvedE = M.fromList [ (i, v)
+                               | n@(Exec i) <- order, Just v <- [resolveFull n] ]
         -- The disjointness map holds both orientations of every pair
         -- (`combineSchedDRDB`: "the disjoint map should be the same in
         -- both directions"), so one pass over it sees each ordered pair
@@ -390,11 +403,11 @@ encComposition instToMod msis topGates ss = do
         meEdges = S.fromList
             [ (su, eu)
             | (r, d) <- mePairs
-            , Just ps <- [M.lookup (qualPath r) schedPosQ]
-            , Just pe <- [M.lookup (qualPath d) execPos]
+            , Just ps <- [M.lookup r schedPosQ]
+            , Just pe <- [M.lookup d execPosI]
             , ps < pe
-            , Just (su, sj) <- [resolveFull (Sched r)]
-            , Just (eu, ej) <- [resolveFull (Exec d)]
+            , Just (su, sj) <- [M.lookup r resolvedS]
+            , Just (eu, ej) <- [M.lookup d resolvedE]
             , if su == eu
               then if sj < ej
                    then False  -- ordered inside the segment already
