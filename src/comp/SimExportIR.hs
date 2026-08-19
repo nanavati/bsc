@@ -449,7 +449,10 @@ encComposition instToMod msis topGates ss = do
 
         -- Kahn's algorithm; ties broken by first appearance in the flat
         -- order so the output tracks bsc's own choice.
-        succsOf u = [ b | (a, b) <- S.toList unitEdges, a == u ]
+        -- Successors indexed once: Kahn's asks for them per node, and the
+        -- edge set grows with both instance count and hierarchy depth.
+        succMap = M.fromListWith (++) [ (a, [b]) | (a, b) <- S.toList unitEdges ]
+        succsOf u = M.findWithDefault [] u succMap
         indeg0 = M.fromListWith (+)
                    ([ (u, 0 :: Int) | u <- units ]
                     ++ [ (b, 1) | (_, b) <- S.toList unitEdges ])
