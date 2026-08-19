@@ -195,6 +195,28 @@ pub struct InstEnv {
     /// the sched fn that owns the def, reloaded by exec bodies (the C++
     /// `DEF_x = DEF_x;` reuse semantics)
     pub eager_slot: HashMap<StrId, (u32, u32)>,
+    /// TRACED artifacts only (empty otherwise): VCD-declared member
+    /// def -> (recording slot base, width).  Def bindings store their
+    /// value here so the VCD writer sees the interp's last-evaluated
+    /// semantics.  Part of the exec dedup signature.
+    pub rec_defs: HashMap<StrId, (u32, u32)>,
+    /// TRACED artifacts only: method name -> recording slots for its
+    /// VCD ports (EN time / args / result), stored by inlined call
+    /// sites.  Part of the exec dedup signature.
+    pub rec_meths: HashMap<StrId, RecMeth>,
+}
+
+/// Arena recording slots for one user-module method's VCD ports
+/// (traced artifacts).
+#[derive(Clone)]
+pub struct RecMeth {
+    /// last-call time slot (init u64::MAX; the writer's EN test is
+    /// time == the clock's last posedge)
+    pub t: u32,
+    /// per-argument (base, port width), in method arg order (init 0)
+    pub args: Vec<(u32, u32)>,
+    /// result (base, width) for value/AV methods (init 0)
+    pub res: Option<(u32, u32)>,
 }
 
 /// Design-wide plan: one InstEnv per user instance the compiled code
@@ -852,7 +874,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 16;
+pub const AOT_LAYOUT_REV: u64 = 17;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -2861,7 +2883,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let rw = self.expr_width(&cf, &res)?;
         let v = self.expr(&mut cf, &res)?;
         // call_value zero-extends the result to the caller's width
-        Ok(self.to_w(v, rw, width, false))
+        let out = self.to_w(v, rw, width, false);
+        self.rec_meth_result(&cf, child, method, out)?;
+        Ok(out)
     }
 
     /// Branch-based mux: evaluate exactly one arm (interpreter If
@@ -3370,7 +3394,65 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .unwrap()
             .into_int_value();
         f.ssa.insert(n, out);
+        self.rec_def(f, n, out);
         Ok(out)
+    }
+
+    /// TRACED artifacts: mirror a def's computed value into its VCD
+    /// recording slot (the interp's vcd_def_vals recording).  A no-op
+    /// unless the instance declares the def (rec tables are empty in
+    /// untraced artifacts — zero cost).
+    fn rec_def(&mut self, f: &Frame<'ctx>, n: StrId, v: IntValue<'ctx>) {
+        let Ok(ie) = self.ie(f.inst) else { return };
+        let Some(&(base, w)) = ie.rec_defs.get(&n) else { return };
+        let vw = v.get_type().get_bit_width();
+        let vv = self.to_w(v, vw, w.max(1), false);
+        self.store_val(f, base, w.max(1), vv);
+    }
+
+    /// TRACED artifacts: mirror an inlined user-child method call into
+    /// its VCD recording slots (call time + argument ports), the
+    /// interp's vcd_meth_calls.  Emit inside the taken branch only.
+    fn rec_meth_call(
+        &mut self,
+        cf: &Frame<'ctx>,
+        child: usize,
+        method: StrId,
+        argv: &[(IntValue<'ctx>, u32)],
+    ) -> Result<(), Ineligible> {
+        let rm = match self.ie(child)?.rec_meths.get(&method) {
+            Some(rm) => rm.clone(),
+            None => return Ok(()),
+        };
+        let now = self.load_word(cf, self.env.now_slot);
+        self.store_word(cf, rm.t, now);
+        for ((v, _), &(base, w)) in argv.iter().zip(&rm.args) {
+            let vw = v.get_type().get_bit_width();
+            let vv = self.to_w(*v, vw, w.max(1), false);
+            self.store_val(cf, base, w.max(1), vv);
+        }
+        Ok(())
+    }
+
+    /// TRACED artifacts: record a value/AV method's returned value
+    /// (the interp's vcd_meth_results).
+    fn rec_meth_result(
+        &mut self,
+        cf: &Frame<'ctx>,
+        child: usize,
+        method: StrId,
+        v: IntValue<'ctx>,
+    ) -> Result<(), Ineligible> {
+        let res = match self.ie(child)?.rec_meths.get(&method) {
+            Some(rm) => rm.res,
+            None => return Ok(()),
+        };
+        if let Some((base, w)) = res {
+            let vw = v.get_type().get_bit_width();
+            let vv = self.to_w(v, vw, w.max(1), false);
+            self.store_val(cf, base, w.max(1), vv);
+        }
+        Ok(())
     }
 
     /// Join-safe slot for an ActionValue task binding: an entry alloca
@@ -3556,6 +3638,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 };
                 let v = rv.into_int_value();
                 f.ssa.insert(n, v);
+                self.rec_def(f, n, v);
                 return Ok(v);
                 }
             }
@@ -3590,6 +3673,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let v = self.expr(f, &dex)?;
         f.expanding.pop();
         f.ssa.insert(n, v);
+        self.rec_def(f, n, v);
         // schedule-position defs are visible to exec bodies via the
         // arena — stored only by the OWNING rule's sched fn (an inlined
         // frame writing call-time values would corrupt them)
@@ -4642,6 +4726,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let v = self.expr(f, expr)?;
                     f.dead_defs.remove(name);
                     f.ssa.insert(*name, v);
+                    self.rec_def(f, *name, v);
                 }
                 Stmt::Action(a) => self.action(f, func, a, stop_bb)?,
                 Stmt::AvAction { def, action } => match action {
@@ -4653,6 +4738,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         f.av_widths.insert(*def, (*width).max(1));
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, v);
+                        self.rec_def(f, *def, v);
                         // join-safe binding for the AvAction def itself
                         let dp = self.av_slot(f, *def, (*width).max(1));
                         self.builder.build_store(dp, v).unwrap();
@@ -4744,6 +4830,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 let one = self.ctx.i64_type().const_int(1, false);
                                 self.store_word(&cf, slot, one);
                             }
+                            let rec_argv: Vec<_> = margs
+                                .iter()
+                                .filter_map(|pa| cf.args.get(&pa.name).copied())
+                                .collect();
+                            self.rec_meth_call(&cf, child, *method, &rec_argv)?;
                             self.stmts(&mut cf, func, &body, stop_bb)?;
                             // the AvAction def is a SYNTHETIC temp — it
                             // is in no def table (def_width fails), so
@@ -4751,6 +4842,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             // like the interpreter ("the callee's result
                             // already has the declared width")
                             let rv = self.expr(&mut cf, &result)?;
+                            self.rec_meth_result(&cf, child, *method, rv)?;
+                            // the interp records the def only on the
+                            // executed path (skip leaves prior value)
+                            self.rec_def(f, *def, rv);
                             let wd = rv.get_type().get_bit_width();
                             let g_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(jn_bb).unwrap();
@@ -5511,6 +5606,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     let one = self.ctx.i64_type().const_int(1, false);
                     self.store_word(&cf, slot, one);
                 }
+                let rec_argv: Vec<_> = margs
+                    .iter()
+                    .filter_map(|pa| cf.args.get(&pa.name).copied())
+                    .collect();
+                self.rec_meth_call(&cf, child, *method, &rec_argv)?;
                 if let Some(rid) = rdy_id {
                     // EN is already latched; only the body waits on RDY
                     let r = self.value_call(f, 1, *instance, rid, 0, &[])?;
