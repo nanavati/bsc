@@ -105,7 +105,9 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         let words = ((w as usize) + 63) / 64;
         let limbs =
             std::slice::from_raw_parts(args.add(off), words.max(1)).to_vec();
-        argv.push(Value::from_limbs64(w.max(1), limbs));
+        // TRUE width: a zero-width prim arg must reach the prim as the
+        // interp's width-0 Value (from_limbs64 masks the over-read word)
+        argv.push(Value::from_limbs64(w, limbs));
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
@@ -412,7 +414,10 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
                 let w = width;
                 let words = ((w.max(1) as usize) + 63) / 64;
                 let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
-                argv.push(Arg::Val(Value::from_limbs64(w.max(1), limbs), signed));
+                // the TRUE width, zero included: the formatter must see
+                // the interp's width-0 Value for zero-width args, not a
+                // width-1 impostor (from_limbs64 masks the buffer word)
+                argv.push(Arg::Val(Value::from_limbs64(w, limbs), signed));
                 off += words;
             }
         }

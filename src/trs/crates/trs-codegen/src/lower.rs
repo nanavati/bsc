@@ -758,7 +758,7 @@ impl Drop for AotModeGuard {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 8;
+pub const AOT_LAYOUT_REV: u64 = 9;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -1734,7 +1734,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         let m = &self.env.d.modules[ie.mir];
         match m.defs.iter().find(|d| d.name == name) {
             Some(d) if d.width >= 1 => Ok(d.width),
-            Some(_) => nope("zero-width def"),
+            Some(_) => Ok(0), // zero-width def: the empty bit-vector
             None => Err(Ineligible(format!(
                 "unknown def (width): {}",
                 self.env.d.strings[name as usize]
@@ -1767,13 +1767,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             | Expr::ForeignCall { width, .. }
             | Expr::Prim { width, .. }
             | Expr::If { width, .. }
-            | Expr::Case { width, .. } => {
-                if *width >= 1 {
-                    Ok(*width)
-                } else {
-                    nope("zero-width expression")
-                }
-            }
+            | Expr::Case { width, .. } => Ok(*width), // 0 = empty bit-vector
             _ => nope(format!(
                 "expression kind not compilable: {}",
                 expr_kind(e)
@@ -1784,6 +1778,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Resize `v` (of width `from`) to width `to`.
     fn to_w(&self, v: IntValue<'ctx>, from: u32, to: u32, signed: bool) -> IntValue<'ctx> {
         use std::cmp::Ordering::*;
+        // zero-width values are the constant empty bit-vector: any
+        // resize of one is 0, and a resize TO width 0 is the i1-carried
+        // zero (ity(0) = i1).  from.max(1) is v's actual LLVM type.
+        if from == 0 || to == 0 {
+            return self.ity(to).const_zero();
+        }
         match from.cmp(&to) {
             Equal => v,
             Greater => self.builder.build_int_truncate(v, self.ity(to), "tr").unwrap(),
@@ -1981,7 +1981,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         match e {
             Expr::Const { width, limbs } => {
                 if *width == 0 {
-                    return nope("zero-width constant");
+                    // the empty bit-vector: value is always 0, carried
+                    // as i1 (ity(0)); the interp's Value width-0 masks
+                    // every op to 0 identically
+                    return Ok(self.ity(0).const_zero());
                 }
                 Ok(self.cval(*width, limbs))
             }
@@ -3867,8 +3870,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             });
             vals.push((v, wa));
         }
+        // the foreign decode reads w.max(1) words per numeric arg, so a
+        // zero-width arg still occupies ONE (zero) word in the buffer —
+        // its spec width stays 0 so the formatter sees the interp's
+        // width-0 Value
         let total_words: u32 =
-            vals.iter().map(|&(_, w)| words_for(w)).sum::<u32>().max(1);
+            vals.iter().map(|&(_, w)| words_for(w.max(1))).sum::<u32>().max(1);
         let out_words = words_for(ret_width.max(1));
         let abuf = self
             .builder
@@ -3880,7 +3887,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             .unwrap();
         let mut off = 0u32;
         for (v, wa) in vals {
-            for k in 0..words_for(wa) {
+            for k in 0..words_for(wa.max(1)) {
                 let sh = self.ity(wa).const_int((64 * k) as u64, false);
                 let piece = if k == 0 {
                     v
@@ -3893,7 +3900,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     unsafe { self.builder.build_gep(i64t, abuf, &[idx], "fap").unwrap() };
                 self.builder.build_store(p, word).unwrap();
             }
-            off += words_for(wa);
+            off += words_for(wa.max(1));
         }
         let token =
             self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
