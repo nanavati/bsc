@@ -3805,10 +3805,29 @@ impl Interp {
         }
         self.flush_reset_pending();
 
+        // capture BEFORE planning: jit_plan takes the request and the
+        // field resets to the default (Run)
+        #[cfg(feature = "jit")]
+        let was_emit = matches!(self.jit_request, jit::JitRequest::Emit { .. });
         #[cfg(feature = "jit")]
         let jit = self.jit_plan(&rcomps);
         #[cfg(not(feature = "jit"))]
         let jit = None;
+
+        // TRS_REQUIRE_AOT: strict-execution contract for validation
+        // runs — a design about to RUN interpreted is a hard failure,
+        // never a silent degrade.  Emit requests are exempt (the link
+        // caller enforces its own strictness on the emit result).
+        #[cfg(feature = "jit")]
+        if jit.is_none()
+            && !was_emit
+            && std::env::var_os("TRS_REQUIRE_AOT").is_some()
+        {
+            eprintln!(
+                "trs: TRS_REQUIRE_AOT is set but this design would run                  interpreted (TRS_JIT_TRACE=1 shows why); refusing"
+            );
+            std::process::exit(86);
+        }
 
         self.stepper = Some(Stepper {
             clocks,
