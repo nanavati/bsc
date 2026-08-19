@@ -184,6 +184,10 @@ pub struct InstEnv {
     /// Eq, and the StringConcat intern callback.  Part of the exec
     /// dedup signature.
     pub str_consts: HashMap<StrId, StrId>,
+    /// Instantiation values wider than 64 bits: name -> (width, LE
+    /// 32-bit limbs), lowered as wide constants (cval).  Part of the
+    /// exec dedup signature.
+    pub wide_consts: HashMap<StrId, (u32, Vec<u32>)>,
     /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
     /// instance); reads of other rules' fire signals become slot loads
     pub cfwf_slot: HashMap<StrId, u32>,
@@ -1822,6 +1826,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     if ie.real_consts.contains_key(p) {
                         return Ok(64); // f64 bits carrier
                     }
+                    if let Some(&(w, _)) = ie.wide_consts.get(p) {
+                        return Ok(w);
+                    }
                     Ok(ie.port_consts.get(p).map_or(1, |&(w, _)| w)) // reset/EN ports read 1 bit
                 }
             },
@@ -1829,6 +1836,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let ie = self.ie(f.inst)?;
                 if ie.real_consts.contains_key(p) {
                     return Ok(64); // f64 bits carrier
+                }
+                if let Some(&(w, _)) = ie.wide_consts.get(p) {
+                    return Ok(w);
                 }
                 match ie.port_consts.get(p) {
                     Some(&(w, _)) => Ok(w),
@@ -2093,6 +2103,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if let Some(&bits) = ie.real_consts.get(p) {
                     return Ok(self.ctx.i64_type().const_int(bits, false));
                 }
+                if let Some((w, limbs)) = ie.wide_consts.get(p) {
+                    let (w, limbs) = (*w, limbs.clone());
+                    return Ok(self.cval(w, &limbs));
+                }
                 // input clock-gate port bound at instantiation: the
                 // interp evaluates the recorded gate expr in the OWNER
                 // instance's context, where LATCHED defs win over
@@ -2115,6 +2129,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let ie = self.ie(f.inst)?;
                 if let Some(&bits) = ie.real_consts.get(p) {
                     return Ok(self.ctx.i64_type().const_int(bits, false));
+                }
+                if let Some((w, limbs)) = ie.wide_consts.get(p) {
+                    let (w, limbs) = (*w, limbs.clone());
+                    return Ok(self.cval(w, &limbs));
                 }
                 match ie.port_consts.get(p) {
                     Some(&(w, v)) => {
@@ -2181,6 +2199,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             }
             Expr::MethCall { width, instance, method, port, args } => {
                 self.value_call(f, *width, *instance, *method, *port, args)
+            }
+            Expr::MethValue { width, instance, method } => {
+                // the returned value of an ActionValue method: the
+                // interp calls call_value with no args — identical to a
+                // no-arg value method read (port 0)
+                self.value_call(f, *width, *instance, *method, 0, &[])
             }
             Expr::If { width, cond, then_, else_ } => {
                 let wc = self.expr_width(f, cond)?;

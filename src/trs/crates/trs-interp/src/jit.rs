@@ -2517,12 +2517,21 @@ impl Interp {
             // sysTwoLevelReal2); unfolded means Ineligible -> interp.
             let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
             let mut real_consts: HashMap<StrId, u64> = HashMap::new();
+            let mut wide_consts: HashMap<StrId, (u32, Vec<u32>)> = HashMap::new();
             for (&pn, pv) in params {
                 if pv.width >= 1 && pv.width <= 64 {
                     port_consts.insert(pn, (pv.width, pv.as_u64()));
                 } else if let Some(r) = pv.as_real() {
                     // real params ride as f64 bits (task-arg carrier)
                     real_consts.insert(pn, r.to_bits());
+                } else if pv.width > 64 && pv.width < u32::MAX - 1 {
+                    // wide instantiation values as LE 32-bit limbs
+                    let mut limbs = Vec::new();
+                    for &l in pv.limbs64() {
+                        limbs.push(l as u32);
+                        limbs.push((l >> 32) as u32);
+                    }
+                    wide_consts.insert(pn, (pv.width, limbs));
                 }
             }
             for (&pn, &(w, kind)) in &self.mods[module].ports {
@@ -2564,6 +2573,7 @@ impl Interp {
                     real_consts,
                     gates: gates.clone(),
                     str_consts: str_params.clone(),
+                    wide_consts,
                     region: (region_start, 0),
                 },
             );
@@ -2657,6 +2667,13 @@ impl Interp {
                     e.str_consts.iter().map(|(&k, &v)| (k, v)).collect();
                 m14.sort_unstable();
                 m14.hash(&mut h);
+                let mut m15: Vec<_> = e
+                    .wide_consts
+                    .iter()
+                    .map(|(&k, (w, l))| (k, *w, l.clone()))
+                    .collect();
+                m15.sort_unstable();
+                m15.hash(&mut h);
                 // the sig must cover every input the exec lowering
                 // reads (handoff rule): regfile regions included
                 let mut m10: Vec<_> = e
