@@ -1422,6 +1422,7 @@ fn lower_edge_ssa<'ctx>(
                     av_widths: HashMap::new(),
             dead_defs: Default::default(),
                     tasks: HashMap::new(),
+                    av_slots: HashMap::new(),
                     is_exec: true,
                     depth: 0,
                 };
@@ -1440,6 +1441,7 @@ fn lower_edge_ssa<'ctx>(
                 av_widths: HashMap::new(),
             dead_defs: Default::default(),
                 tasks: HashMap::new(),
+                av_slots: HashMap::new(),
                 is_exec,
                 depth: 0,
             };
@@ -1667,6 +1669,13 @@ struct Frame<'ctx> {
     /// ActionValue task results by cookie (Expr::TaskValue reads):
     /// (value, width)
     tasks: HashMap<u32, (IntValue<'ctx>, u32)>,
+    /// join-safe ActionValue task results (value alloca, width), keyed
+    /// by the bound def/temp name and by the cookie's synthetic key:
+    /// the interp's ctx.locals persists past a Cond join, so a task
+    /// executed inside an arm is readable after it — the alloca
+    /// initializes to the undet pattern (what a never-run arm's read
+    /// yields) and stores at task execution
+    av_slots: HashMap<StrId, (PointerValue<'ctx>, u32)>,
     /// effectful-eval def memos (value alloca, valid-flag alloca):
     /// evaluate at FIRST dynamic reference this invocation, reuse
     /// after — even across Cond joins where the ssa binding dies
@@ -1753,6 +1762,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             },
             Expr::Const { width, .. }
             | Expr::MethCall { width, .. }
+            | Expr::MethValue { width, .. }
+            | Expr::TaskValue { width, .. }
+            | Expr::ForeignCall { width, .. }
             | Expr::Prim { width, .. }
             | Expr::If { width, .. }
             | Expr::Case { width, .. } => {
@@ -2084,10 +2096,23 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 Ok(phi.as_basic_value().into_int_value())
             }
-            Expr::TaskValue { width, cookie } => match f.tasks.get(cookie) {
-                Some(&(v, vw)) => Ok(self.to_w(v, vw, (*width).max(1), false)),
-                None => nope("task value before its task"),
-            },
+            Expr::TaskValue { width, cookie } => {
+                // load the join-safe slot when the task has one — valid
+                // from any block, unlike the tphi value, which only
+                // dominates its own arm
+                if let Some(&(p, vw)) = f.av_slots.get(&(0x8000_0000u32 | *cookie)) {
+                    let v = self
+                        .builder
+                        .build_load(self.ity(vw), p, "tval")
+                        .unwrap()
+                        .into_int_value();
+                    return Ok(self.to_w(v, vw, (*width).max(1), false));
+                }
+                match f.tasks.get(cookie) {
+                    Some(&(v, vw)) => Ok(self.to_w(v, vw, (*width).max(1), false)),
+                    None => nope("task value before its task"),
+                }
+            }
             Expr::Prim { op, width, args } => self.prim(f, *op, *width, args),
             Expr::ForeignCall { width, func, args } => {
                 self.bdpi_value_call(f, (*width).max(1), *func, args)
@@ -2806,6 +2831,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
             is_exec: f.is_exec,
             depth: f.depth + 1,
         })
@@ -3046,11 +3072,62 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         Ok(out)
     }
 
+    /// Join-safe slot for an ActionValue task binding: an entry alloca
+    /// initialized to the undet pattern (Value::undet — what the interp
+    /// yields when the binding arm never ran), stored at task execution.
+    /// Post-join references load it, mirroring the interp's body-wide
+    /// ctx.locals.
+    fn av_slot(&mut self, f: &mut Frame<'ctx>, n: StrId, w: u32) -> PointerValue<'ctx> {
+        if let Some(&(p, _)) = f.av_slots.get(&n) {
+            return p;
+        }
+        let ty = self.ity(w);
+        let p = self.entry_alloca(ty, 1, "avsl");
+        // undet init must dominate every reference site (same
+        // discipline as the thunk valid-flag init)
+        let mut words = vec![0xAAAA_AAAA_AAAA_AAAAu64; words_for(w) as usize];
+        let rem = w % 64;
+        if rem != 0 {
+            let last = words.len() - 1;
+            words[last] &= (1u64 << rem) - 1;
+        }
+        let undet = ty.const_int_arbitrary_precision(&words);
+        let b = self.ctx.create_builder();
+        match p.as_instruction().and_then(|i| i.get_next_instruction()) {
+            Some(next) => b.position_before(&next),
+            None => {
+                let entry = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap()
+                    .get_first_basic_block()
+                    .unwrap();
+                b.position_at_end(entry);
+            }
+        }
+        b.build_store(p, undet).unwrap();
+        f.av_slots.insert(n, (p, w));
+        p
+    }
+
     fn def(&mut self, f: &mut Frame<'ctx>, n: StrId) -> Result<IntValue<'ctx>, Ineligible> {
         if let Some(v) = f.ssa.get(&n) {
             return Ok(*v);
         }
         if f.dead_defs.contains(&n) {
+            // an ActionValue task binding survives the join through its
+            // slot (interp parity: ctx.locals is body-wide; undet when
+            // the arm never ran)
+            if let Some(&(p, w)) = f.av_slots.get(&n) {
+                let out = self
+                    .builder
+                    .build_load(self.ity(w), p, "avesc")
+                    .unwrap()
+                    .into_int_value();
+                return Ok(out);
+            }
             return Err(Ineligible(format!(
                 "def escaped conditional arm: {}",
                 self.env.d.strings[n as usize]
@@ -3502,6 +3579,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
             is_exec: false,
             depth: 0,
         };
@@ -3617,6 +3695,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
             is_exec: true,
             depth: 0,
         };
@@ -3722,6 +3801,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             av_widths: HashMap::new(),
             dead_defs: Default::default(),
             tasks: HashMap::new(),
+            av_slots: HashMap::new(),
             is_exec: true,
             depth: 0,
         };
@@ -3905,6 +3985,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         f.av_widths.insert(*def, (*width).max(1));
                         f.dead_defs.remove(def);
                         f.ssa.insert(*def, v);
+                        // join-safe binding for the AvAction def itself
+                        let dp = self.av_slot(f, *def, (*width).max(1));
+                        self.builder.build_store(dp, v).unwrap();
                     }
                     Action::MethCall { instance, method, port, cond, args } => {
                         // ActionValue method on a prim child (trampoline)
@@ -4182,8 +4265,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         phi.add_incoming(&[(&v, g_end), (&z, s_end)]);
         let out = phi.as_basic_value().into_int_value();
         f.tasks.insert(cookie, (out, w));
+        // join-safe mirror of the interp's body-wide ctx.locals: store
+        // the result under the cookie's synthetic key (interp
+        // cookie_key) and the temp so references after an enclosing
+        // Cond join load the executed value instead of going Ineligible
+        let ck = 0x8000_0000u32 | cookie;
+        let cp = self.av_slot(f, ck, w);
+        self.builder.build_store(cp, out).unwrap();
         if let Some(t) = temp {
             f.ssa.insert(t, out);
+            let tp = self.av_slot(f, t, w);
+            self.builder.build_store(tp, out).unwrap();
         }
         Ok(out)
     }
