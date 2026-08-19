@@ -1176,9 +1176,25 @@ impl Interp {
                     // EN_* is latched 1 for the rest of the pass when the
                     // method executes (urgency inhibitors read it); an
                     // uncalled method's EN reads 0
-                    Some(&(w, ir::PortKind::MethodEnable)) => self
-                        .latched(inst, *name)
-                        .unwrap_or_else(|| Value::from_u64(w, 0)),
+                    Some(&(w, ir::PortKind::MethodEnable)) => {
+                        if let Some(v) = self.latched(inst, *name) {
+                            return v;
+                        }
+                        // compiled call sites store EN only in the
+                        // arena; interpreted cones (PG_FINAL early
+                        // rules, cold bodies) must read it there
+                        if !self.jit_arena_ptr.is_null() {
+                            if let Some(&slot) =
+                                self.jit_en_slots.get(&(inst, *name))
+                            {
+                                let word = unsafe {
+                                    *self.jit_arena_ptr.add(slot as usize)
+                                };
+                                return Value::from_u64(w, word);
+                            }
+                        }
+                        Value::from_u64(w, 0)
+                    }
                     Some(&(w, ir::PortKind::MethodArg)) => Value::from_u64(w, 0),
                     Some(&(w, _)) => Value::from_u64(w, 1),
                     None => Value::from_u64(1, 1),
@@ -4027,6 +4043,24 @@ impl Interp {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
                             let ap = j.arena_ptr();
+                            // latch space clears per edge UNCONDITIONALLY
+                            // and for BOTH dispatch arms (fused and node
+                            // walk): warming fallback bodies latch state as
+                            // they run, and the PG_FINAL early-rule pass
+                            // latches CF/WF — a surviving latch would shadow
+                            // both the arena fall-through and recomputation
+                            // on the NEXT timeslice (latched() wins in
+                            // eval), freezing an early rule's first fire
+                            // decision forever.  Review round 2 found the
+                            // first fix covered only the node-walk arm while
+                            // AOT runs fuse from the first slice.
+                            for i in 0..self.insts.len() {
+                                if let InstKind::User { latched, .. } =
+                                    &mut self.insts[i].kind
+                                {
+                                    latched.clear();
+                                }
+                            }
                             // fused fast path (task #17): the whole
                             // edge as one compiled call — the schedule
                             // promoted from data to code.  The node
@@ -4049,25 +4083,6 @@ impl Interp {
                             } else {
                             // ConfigReg reads compare written_at to now
                             unsafe { *ap.add(j.now_slot as usize) = t };
-                            let warming = j.lazy.any_cold();
-                            // latch space clears per edge UNCONDITIONALLY,
-                            // exactly like the interpreted path: warming
-                            // fallback bodies latch state as they run, and
-                            // the PG_FINAL early-rule pass latches CF/WF —
-                            // a surviving latch would shadow both the arena
-                            // fall-through and recomputation on the NEXT
-                            // timeslice (latched() wins in eval), freezing
-                            // an early rule's first fire decision forever
-                            // (review finding: fully-compiled/AOT mode
-                            // never cleared)
-                            for i in 0..self.insts.len() {
-                                if let InstKind::User { latched, .. } =
-                                    &mut self.insts[i].kind
-                                {
-                                    latched.clear();
-                                }
-                            }
-                            let _ = warming;
                             // the C++ schedule zeroes every enable at the
                             // top of the pass; compiled call sites set them
                             for &s in &j.en_slots {

@@ -971,16 +971,23 @@ fn aot_emit(
         .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
         let mf = tmp.join("meta.o");
         std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
+        // temp+rename: a crash mid-cc must never leave a truncated
+        // .so at the final path (it would dlopen-fail or worse on the
+        // next run before the gates can judge it)
+        let so_tmp = so.with_extension("so.tmp");
         let st = std::process::Command::new(cc_tool())
             .args(["-shared", "-o"])
-            .arg(so)
+            .arg(&so_tmp)
             .args([&f, &mf])
             .status()
             .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
         std::fs::remove_dir_all(&tmp).ok();
         if !st.success() {
+            std::fs::remove_file(&so_tmp).ok();
             return Err(EmitFail::Infra("cc -shared failed".into()));
         }
+        std::fs::rename(&so_tmp, so)
+            .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: emit + link {:?}", t0.elapsed());
         }
@@ -1102,16 +1109,21 @@ fn aot_emit(
     let mf = tmp.join("meta.o");
     std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
     files.push(mf);
+    // temp+rename, same discipline as the single-object emit
+    let so_tmp = so.with_extension("so.tmp");
     let st = std::process::Command::new("cc")
         .args(["-shared", "-o"])
-        .arg(so)
+        .arg(&so_tmp)
         .args(&files)
         .status()
         .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
     std::fs::remove_dir_all(&tmp).ok();
     if !st.success() {
+        std::fs::remove_file(&so_tmp).ok();
         return Err(EmitFail::Infra("cc -shared failed".into()));
     }
+    std::fs::rename(&so_tmp, so)
+        .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
     if std::env::var_os("TRS_JIT_TIME").is_some() {
         eprintln!("trs aot: emit + link {:?}", t0.elapsed());
     }
@@ -1346,6 +1358,7 @@ impl Interp {
         inst_envs: &HashMap<usize, InstEnv>,
         nodes: &[Vec<(bool, usize)>],
         specs: &[RuleSpec],
+        has_early: bool,
         stats: bool,
     ) -> trs_codegen::lower::EdgeSsaPlan {
         let specs_lite: Vec<(usize, usize)> =
@@ -2085,6 +2098,17 @@ impl Interp {
             .iter()
             .flat_map(|sp| sp.inhibit_slots.iter().copied())
             .collect();
+        // interp-side consumers: with any early (clock-crossing) rule,
+        // the PG_FINAL pass reads compiled CF slots (inhibitors via
+        // latched_or_arena) and eager/WF defs via eval's arena
+        // fallthrough — keep them all (early designs are rare; the
+        // cost is per-edge scalar stores)
+        if has_early {
+            for e in inst_envs.values() {
+                export_slots.extend(e.cfwf_slot.values().copied());
+                export_slots.extend(e.eager_slot.values().map(|&(b, _)| b));
+            }
+        }
         for &o in &outlined_execs {
             export_slots.insert(specs[o].wf_slot);
             let (inst, ridx) = specs_lite[o];
@@ -2121,6 +2145,10 @@ impl Interp {
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
         let request = std::mem::take(&mut self.jit_request);
+        // early (clock-crossing) rules run interpreted in the PG_FINAL
+        // pass and read compiled CF/eager slots — edge-SSA store
+        // elision must keep those stores (see edge_ssa_plan)
+        let has_early = rcomps.iter().any(|rc| !rc.early.is_empty());
         // direct-BDPI registries (task #22): baked-mode call emission
         // reads these; set-once, idempotent
         let _ = trs_codegen::lower::STDIO_CB.set(jit_stdio_cb as usize);
@@ -2837,7 +2865,7 @@ impl Interp {
                     v
                 })
                 .collect();
-            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, true);
+            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, has_early, true);
         }
         // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
         // consumed by 2+ rules of the same module — the cross-rule
@@ -2972,9 +3000,30 @@ impl Interp {
         // ---- exec dedup classes: one compiled body per class ----
         let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
         {
-            let mut key_to_class: HashMap<(u64, usize), usize> = HashMap::new();
+            let mut key_to_class: HashMap<(u64, usize, Vec<(bool, u32)>), usize> =
+                HashMap::new();
             for (o, sp) in specs.iter().enumerate() {
-                let key = (inst_sig[&sp.inst], sp.rule_idx);
+                // the compiled body bakes always_fire and inhibitor slot
+                // LOADS; own-region slots are region-relative in codegen
+                // (twins share safely), foreign-instance slots are
+                // absolute (twins must not share) — the key mirrors that
+                let ie = &inst_envs[&sp.inst];
+                let own: std::collections::HashSet<u32> =
+                    ie.cfwf_slot.values().copied().collect();
+                let r0 = ie.region.0;
+                let mut inh: Vec<(bool, u32)> = sp
+                    .inhibit_slots
+                    .iter()
+                    .map(|&sl| {
+                        if own.contains(&sl) {
+                            (true, sl - r0)
+                        } else {
+                            (false, sl)
+                        }
+                    })
+                    .collect();
+                inh.sort_unstable();
+                let key = (inst_sig[&sp.inst], sp.rule_idx, inh);
                 let c = *key_to_class.entry(key).or_insert_with(|| {
                     classes.push((o, Vec::new()));
                     classes.len() - 1
@@ -3000,6 +3049,13 @@ impl Interp {
                             SchedNode::Sched(r) => (r, true),
                             SchedNode::Exec(r) => (r, false),
                         };
+                        // early rules run in THIS comp's PG_FINAL pass
+                        // interpreted — emitting them here would double-
+                        // run a rule that another comp scheduled (and
+                        // gave an ordinal to) normally
+                        if rc.early.contains(&(en.inst, r)) {
+                            continue;
+                        }
                         // interface-method nodes have no ordinal:
                         // they are no-ops in the edge walk (interp
                         // parity — nothing to latch or execute)
@@ -3235,7 +3291,9 @@ impl Interp {
                         })
                         .collect();
                     let mut plan =
-                        self.edge_ssa_plan(&inst_envs, &nodes, &specs, false);
+                        self.edge_ssa_plan(
+                            &inst_envs, &nodes, &specs, has_early, false,
+                        );
                     plan.wire_clears =
                         self.wire_tick_coverage(&inst_envs, rcomps).0;
                     plan

@@ -2124,9 +2124,11 @@ impl Prim for RWire {
         true // wire clear placement differs by engine (see trait doc)
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
+        // slot-aware reads: after arena_attach the boxed fields are
+        // frozen at attach time; compiled wset writes only the slots
         match key {
-            "" | "value" => Some(self.value.clone()),
-            "isValid" => Some(Value::from_u64(1, self.valid as u64)),
+            "" | "value" => Some(self.get_value()),
+            "isValid" => Some(Value::from_u64(1, self.get_valid() as u64)),
             _ => None,
         }
     }
@@ -2912,6 +2914,11 @@ impl Prim for Fifo {
                     self.saved_elems = self.elems;
                 }
                 self.elems = 0;
+                // the reference's METH_clear resets BOTH cursors
+                // (bs_prim_mod_fifo.h: fst = 0; elems = 0) — a stale fst
+                // desynchronizes data addressing vs the reference after
+                // deq-then-clear (sym reads, unguarded first)
+                self.fst = 0;
                 self.mirror_header();
             }
             m => panic!("FIFO: unknown action method {m:?}"),
@@ -2931,6 +2938,7 @@ impl Prim for Fifo {
                 self.saved_elems = self.elems;
             }
             self.elems = 0;
+            self.fst = 0; // rst_tick_clk calls METH_clear: fst resets too
             self.suppress = true;
             self.mirror_header();
         }

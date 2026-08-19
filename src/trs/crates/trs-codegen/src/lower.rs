@@ -426,6 +426,9 @@ pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
 /// Inverse of encode_protos; None on truncation/garbage.
 pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
     let mut i = 0usize;
+    // artifact-supplied counts must never drive an allocation larger
+    // than the bytes backing them: every record is >= 4 bytes, so any
+    // count above b.len()/4 is corruption — reject before reserving
     fn r(b: &[u8], i: &mut usize) -> Option<u32> {
         let v = u32::from_le_bytes(b.get(*i..*i + 4)?.try_into().ok()?);
         *i += 4;
@@ -433,12 +436,18 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
     }
     fn rf(b: &[u8], i: &mut usize) -> Option<Vec<ForeignSpec>> {
         let n = r(b, i)?;
+        if n as usize > b.len() / 4 {
+            return None;
+        }
         let mut v = Vec::with_capacity(n as usize);
         for _ in 0..n {
             let inst = r(b, i)? as usize;
             let func = r(b, i)?;
             let ret_width = r(b, i)?;
             let argc = r(b, i)?;
+            if argc as usize > b.len() / 4 {
+                return None;
+            }
             let mut args = Vec::with_capacity(argc as usize);
             for _ in 0..argc {
                 let tag = r(b, i)?;
@@ -462,6 +471,9 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
     }
     fn rp(b: &[u8], i: &mut usize) -> Option<Vec<PrimCallSpec>> {
         let n = r(b, i)?;
+        if n as usize > b.len() / 4 {
+            return None;
+        }
         let mut v = Vec::with_capacity(n as usize);
         for _ in 0..n {
             let inst = r(b, i)? as usize;
@@ -469,6 +481,9 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
             let ret_width = r(b, i)?;
             let is_action = r(b, i)? != 0;
             let argc = r(b, i)?;
+            if argc as usize > b.len() / 4 {
+                return None;
+            }
             let mut arg_widths = Vec::with_capacity(argc as usize);
             for _ in 0..argc {
                 arg_widths.push(r(b, i)?);
@@ -478,6 +493,9 @@ pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
         Some(v)
     }
     let n = r(b, &mut i)?;
+    if n as usize > b.len() / 4 {
+        return None;
+    }
     let mut out = Vec::with_capacity(n as usize);
     for _ in 0..n {
         out.push(FnProtos {
@@ -834,7 +852,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 13;
+pub const AOT_LAYOUT_REV: u64 = 14;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -2258,6 +2276,17 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 // phi at the merge
                 let w = (*width).max(1);
                 let ws = self.expr_width(f, scrutinee)?;
+                // interp semantics (lib.rs Case eval): a scrutinee wider
+                // than 64 bits NEVER matches an arm (as_u64 compare is
+                // gated on width <= 64) — lower the default only.  Keys
+                // outside ws bits can't match either (the interp compares
+                // the untruncated u64), and truncating them into the
+                // switch could alias or duplicate cases.
+                if ws > 64 {
+                    let wd = self.expr_width(f, default)?;
+                    let dv = self.expr(f, default)?;
+                    return Ok(self.to_w(dv, wd, w, false));
+                }
                 let sv = self.expr(f, scrutinee)?;
                 let func =
                     self.builder.get_insert_block().unwrap().get_parent().unwrap();
@@ -2267,9 +2296,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .iter()
                     .map(|_| self.ctx.append_basic_block(func, "ca"))
                     .collect();
+                let representable =
+                    |k: u64| ws >= 64 || k < (1u64 << ws);
                 let cases: Vec<_> = arms
                     .iter()
                     .zip(&arm_bbs)
+                    .filter(|((k, _), _)| representable(*k))
                     .map(|((k, _), &bb)| {
                         (self.ity(ws).const_int_arbitrary_precision(&[*k]), bb)
                     })
@@ -2843,7 +2875,14 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         );
                 ok.then_some(2)
             }
-            E::Prim { args, .. } => {
+            E::Prim { op, args, .. } => {
+                // Quot/Rem lower with an unconditional divisor-zero trap
+                // check: speculating them in an unselected arm SIGFPEs
+                // where the interp (evaluating only the taken arm) does
+                // not — the canonical `b == 0 ? 0 : a % b` guard
+                if matches!(op, PrimOp::Quot | PrimOp::Rem) {
+                    return None;
+                }
                 let mut total = 1u32;
                 for a in args {
                     total += self.pure_size(f, a, cap.checked_sub(total)?)?;
@@ -2965,6 +3004,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         let token_const =
             self.token_kind | self.prim_calls.len() as u64;
+        if self.prim_calls.len() >= 1 << 16 {
+            return nope("prim call-site count exceeds the 16-bit token field");
+        }
         let token = self.spec.token_base | token_const;
         self.prim_calls.push(PrimCallSpec {
             inst: prim_inst,
@@ -3283,6 +3325,21 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// yields when the binding arm never ran), stored at task execution.
     /// Post-join references load it, mirroring the interp's body-wide
     /// ctx.locals.
+    /// The interp's Value::undet pattern (0xAA..., masked to width) as
+    /// an LLVM constant.
+    fn undet_const(&self, w: u32) -> IntValue<'ctx> {
+        let mut words = vec![0xAAAA_AAAA_AAAA_AAAAu64; words_for(w.max(1)) as usize];
+        let rem = w % 64;
+        if w != 0 && rem != 0 {
+            let last = words.len() - 1;
+            words[last] &= (1u64 << rem) - 1;
+        }
+        if w == 0 {
+            words = vec![0];
+        }
+        self.ity(w).const_int_arbitrary_precision(&words)
+    }
+
     fn av_slot(&mut self, f: &mut Frame<'ctx>, n: StrId, w: u32) -> PointerValue<'ctx> {
         if let Some(&(p, _)) = f.av_slots.get(&n) {
             return p;
@@ -3722,26 +3779,42 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     .into_int_value())
             }
             PrimOp::Concat => {
-                // left-to-right, first arg highest
+                // left-to-right, first arg highest.  Zero-width members
+                // contribute nothing and are skipped; the first real
+                // member seeds acc UNSHIFTED — otherwise a full-width
+                // member (its siblings all zero-width) would emit
+                // `shl iW acc, W`, which is LLVM poison
                 let t = self.ity(width);
-                let mut acc = t.const_zero();
+                let mut acc: Option<IntValue<'ctx>> = None;
                 let mut total = 0u32;
                 for a in args {
                     let wa = self.expr_width(f, a)?;
                     let v0 = self.expr(f, a)?;
+                    if wa == 0 {
+                        continue;
+                    }
                     let v = self.to_w(v0, wa, width, false);
                     total += wa;
                     if total > width {
                         return nope("concat width overflow");
                     }
-                    let sh = t.const_int(wa as u64, false);
-                    let shifted = self.builder.build_left_shift(acc, sh, "cc").unwrap();
-                    acc = self.builder.build_or(shifted, v, "co").unwrap();
+                    acc = Some(match acc {
+                        None => v,
+                        Some(prev) => {
+                            // prev holds >= 1 bit, so wa <= width - 1
+                            let sh = t.const_int(wa as u64, false);
+                            let shifted = self
+                                .builder
+                                .build_left_shift(prev, sh, "cc")
+                                .unwrap();
+                            self.builder.build_or(shifted, v, "co").unwrap()
+                        }
+                    });
                 }
                 if total != width {
                     return nope("concat width mismatch");
                 }
-                Ok(acc)
+                Ok(acc.unwrap_or_else(|| t.const_zero()))
             }
             PrimOp::ZeroExt => {
                 let ws = self.expr_width(f, &args[0])?;
@@ -4073,6 +4146,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Reals reach simulation only as literals, parameters, and muxes/
     /// defs over those, so the classification is decidable at lowering.
     fn expr_is_real(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.expr_is_real_in(f, e, &mut Vec::new())
+    }
+
+    fn expr_is_real_in(
+        &self,
+        f: &Frame<'ctx>,
+        e: &Expr,
+        seen: &mut Vec<StrId>,
+    ) -> bool {
         match e {
             Expr::Real(_) => true,
             Expr::Param(p) | Expr::Port(p) => self
@@ -4080,19 +4162,26 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .map(|ie| ie.real_consts.contains_key(p))
                 .unwrap_or(false),
             Expr::If { then_, else_, .. } => {
-                self.expr_is_real(f, then_) || self.expr_is_real(f, else_)
+                self.expr_is_real_in(f, then_, seen)
+                    || self.expr_is_real_in(f, else_, seen)
             }
             Expr::Case { arms, default, .. } => {
-                arms.iter().any(|(_, a)| self.expr_is_real(f, a))
-                    || self.expr_is_real(f, default)
+                arms.iter().any(|(_, a)| self.expr_is_real_in(f, a, seen))
+                    || self.expr_is_real_in(f, default, seen)
             }
             Expr::Def(n) => {
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                m.defs
-                    .iter()
-                    .find(|d| d.name == *n)
-                    .is_some_and(|d| self.expr_is_real(f, &d.expr))
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.expr_is_real_in(f, &d.expr, seen);
+                seen.pop();
+                r
             }
             _ => false,
         }
@@ -4103,6 +4192,15 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// Strings are literals, string params, muxes/defs over those,
     /// marker-passthrough width adjustments, and StringConcat results.
     fn expr_is_str(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.expr_is_str_in(f, e, &mut Vec::new())
+    }
+
+    fn expr_is_str_in(
+        &self,
+        f: &Frame<'ctx>,
+        e: &Expr,
+        seen: &mut Vec<StrId>,
+    ) -> bool {
         match e {
             Expr::Str(_) => true,
             Expr::Param(p) | Expr::Port(p) => self
@@ -4110,23 +4208,31 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 .map(|ie| ie.str_consts.contains_key(p))
                 .unwrap_or(false),
             Expr::If { then_, else_, .. } => {
-                self.expr_is_str(f, then_) || self.expr_is_str(f, else_)
+                self.expr_is_str_in(f, then_, seen)
+                    || self.expr_is_str_in(f, else_, seen)
             }
             Expr::Case { arms, default, .. } => {
-                arms.iter().any(|(_, a)| self.expr_is_str(f, a))
-                    || self.expr_is_str(f, default)
+                arms.iter().any(|(_, a)| self.expr_is_str_in(f, a, seen))
+                    || self.expr_is_str_in(f, default, seen)
             }
             Expr::Def(n) => {
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                m.defs
-                    .iter()
-                    .find(|d| d.name == *n)
-                    .is_some_and(|d| self.expr_is_str(f, &d.expr))
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.expr_is_str_in(f, &d.expr, seen);
+                seen.pop();
+                r
             }
             Expr::Prim { op: PrimOp::StringConcat, .. } => true,
             Expr::Prim { op: PrimOp::ZeroExt | PrimOp::SignExt, args, .. } => {
-                args.first().is_some_and(|a| self.expr_is_str(f, a))
+                args.first()
+                    .is_some_and(|a| self.expr_is_str_in(f, a, seen))
             }
             _ => false,
         }
@@ -4136,20 +4242,31 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
     /// including through Def table expansion?  Concat interns per
     /// evaluation, so it must never run on an unselected mux arm.
     fn contains_concat(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.contains_concat_in(f, e, &mut Vec::new())
+    }
+
+    fn contains_concat_in(
+        &self,
+        f: &Frame<'ctx>,
+        e: &Expr,
+        seen: &mut Vec<StrId>,
+    ) -> bool {
         match e {
             Expr::Prim { op: PrimOp::StringConcat, .. } => true,
             Expr::Prim { args, .. } => {
-                args.iter().any(|a| self.contains_concat(f, a))
+                args.iter().any(|a| self.contains_concat_in(f, a, seen))
             }
             Expr::If { cond, then_, else_, .. } => {
-                self.contains_concat(f, cond)
-                    || self.contains_concat(f, then_)
-                    || self.contains_concat(f, else_)
+                self.contains_concat_in(f, cond, seen)
+                    || self.contains_concat_in(f, then_, seen)
+                    || self.contains_concat_in(f, else_, seen)
             }
             Expr::Case { scrutinee, arms, default, .. } => {
-                self.contains_concat(f, scrutinee)
-                    || arms.iter().any(|(_, a)| self.contains_concat(f, a))
-                    || self.contains_concat(f, default)
+                self.contains_concat_in(f, scrutinee, seen)
+                    || arms
+                        .iter()
+                        .any(|(_, a)| self.contains_concat_in(f, a, seen))
+                    || self.contains_concat_in(f, default, seen)
             }
             Expr::Def(n) => {
                 // a positioned binding is already a pure id; only an
@@ -4157,12 +4274,18 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 if f.ssa.contains_key(n) {
                     return false;
                 }
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
                 let Ok(ie) = self.ie(f.inst) else { return false };
                 let m = &self.env.d.modules[ie.mir];
-                m.defs
-                    .iter()
-                    .find(|d| d.name == *n)
-                    .is_some_and(|d| self.contains_concat(f, &d.expr))
+                let Some(d) = m.defs.iter().find(|d| d.name == *n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.contains_concat_in(f, &d.expr, seen);
+                seen.pop();
+                r
             }
             _ => false,
         }
@@ -4213,9 +4336,16 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     return nope("string concat under a mux arm");
                 }
                 let ws = self.expr_width(f, scrutinee)?;
+                // interp mirror: wide scrutinees never match an arm
+                if ws > 64 {
+                    return self.str_expr(f, default, stop_bb);
+                }
                 let sv = self.expr(f, scrutinee)?;
                 let mut acc = self.str_expr(f, default, stop_bb)?;
                 for (k, a) in arms {
+                    if ws < 64 && *k >= (1u64 << ws) {
+                        continue; // key not representable: never matches
+                    }
                     let kv = self.ity(ws).const_int(*k, false);
                     let hit = self
                         .builder
@@ -4372,6 +4502,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         }
         let token =
             self.spec.token_base | self.token_kind | self.foreign_stmts.len() as u64;
+        if self.foreign_stmts.len() >= 1 << 16 {
+            return nope("foreign call-site count exceeds the 16-bit token field");
+        }
         let token_const = self.token_kind | (self.foreign_stmts.len() as u64);
         self.foreign_stmts.push(ForeignSpec {
             inst: f.inst,
@@ -4549,7 +4682,11 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                             let g_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(jn_bb).unwrap();
                             self.builder.position_at_end(sk_bb);
-                            let undet = self.ity(wd).const_zero();
+                            // the interp binds Value::undet (the masked
+                            // 0xAA... pattern) when the call condition is
+                            // false — NOT zero (review finding: the old
+                            // comment claimed parity while binding 0)
+                            let undet = self.undet_const(wd);
                             let s_end = self.builder.get_insert_block().unwrap();
                             self.builder.build_unconditional_branch(jn_bb).unwrap();
                             self.builder.position_at_end(jn_bb);
@@ -4570,6 +4707,12 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         let jn_bb = self.ctx.append_basic_block(func, "avjn");
                         self.builder.build_conditional_branch(cz, go_bb, sk_bb).unwrap();
                         self.builder.position_at_end(go_bb);
+                        // the trampoline routes is_action to call_action,
+                        // which never writes the out buffer, and no prim
+                        // implements an AV method (the interp panics):
+                        // refuse rather than read uninitialized words
+                        return nope("prim actionvalue method (no trampoline AV path)");
+                        #[allow(unreachable_code)]
                         let v = self
                             .emit_prim_call(f, child, *method, args, wd, true)?
                             .expect("av prim call returns");
