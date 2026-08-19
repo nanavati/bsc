@@ -1517,6 +1517,7 @@ fn lower_edge_ssa<'ctx>(
             dead_defs: Default::default(),
                     tasks: HashMap::new(),
                     av_slots: HashMap::new(),
+                    av_args: HashMap::new(),
                     is_exec: true,
                     depth: 0,
                 };
@@ -1536,6 +1537,7 @@ fn lower_edge_ssa<'ctx>(
             dead_defs: Default::default(),
                 tasks: HashMap::new(),
                 av_slots: HashMap::new(),
+                av_args: HashMap::new(),
                 is_exec,
                 depth: 0,
             };
@@ -1763,6 +1765,11 @@ struct Frame<'ctx> {
     /// ActionValue task results by cookie (Expr::TaskValue reads):
     /// (value, width)
     tasks: HashMap<u32, (IntValue<'ctx>, u32)>,
+    /// method arg values latched at inline AV call sites, gated on the
+    /// call condition (select(cond, v, 0) — the interp's per-edge
+    /// latched-if-called-else-0), keyed by (child instance name, arg
+    /// port name).  Expr::MethValue result cones read them.
+    av_args: HashMap<(StrId, StrId), (IntValue<'ctx>, u32)>,
     /// join-safe ActionValue task results (value alloca, width), keyed
     /// by the bound def/temp name and by the cookie's synthetic key:
     /// the interp's ctx.locals persists past a Cond join, so a task
@@ -2789,17 +2796,39 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
         else {
             return nope("unknown method on child");
         };
-        if m.kind != trs_ir::MethodKind::Value {
+        // the interp's call_value evaluates the method's RESULT expr
+        // for Value and ActionValue methods alike; an Expr::MethValue
+        // read arrives with NO args (the action side carried them).
+        // The one asymmetry: the interp may see caller-latched arg
+        // values in its Port fallthrough, which a fully-compiled design
+        // never latches — so an AV result whose cone reads its own arg
+        // ports stays ineligible.
+        if m.kind != trs_ir::MethodKind::Value
+            && !(m.kind == trs_ir::MethodKind::ActionValue && args.is_empty())
+        {
             return nope("non-value method in expression");
         }
         let Some(res) = m.result.clone() else {
             return nope("value method without result");
         };
-        if args.len() != m.args.len() {
+        if !args.is_empty() && args.len() != m.args.len() {
             return nope("method arg count mismatch");
         }
         let margs = m.args.clone();
         let mut cf = self.child_frame(f, child, Some(mi))?;
+        if m.kind == trs_ir::MethodKind::ActionValue {
+            // arg ports in the result cone read exactly what the interp
+            // reads at THIS evaluation site: the per-edge latch when the
+            // call was inlined earlier in this frame (select(cond, v, 0)
+            // captured at the call site), else the uncalled-MethodArg
+            // 0-fold via the Port fallthrough — sched-position hoists
+            // evaluate BEFORE the call and legitimately read 0
+            for pa in &margs {
+                if let Some(&(lv, lw)) = f.av_args.get(&(instance, pa.name)) {
+                    cf.args.insert(pa.name, (lv, lw));
+                }
+            }
+        }
         for (a, p) in args.iter().zip(&margs) {
             let wa = self.expr_width(f, a)?;
             let v0 = self.expr(f, a)?;
@@ -3080,6 +3109,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: f.is_exec,
             depth: f.depth + 1,
         })
@@ -3882,6 +3912,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: false,
             depth: 0,
         };
@@ -3998,6 +4029,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: true,
             depth: 0,
         };
@@ -4104,6 +4136,7 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             dead_defs: Default::default(),
             tasks: HashMap::new(),
             av_slots: HashMap::new(),
+            av_args: HashMap::new(),
             is_exec: true,
             depth: 0,
         };
@@ -4653,15 +4686,28 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                                 .position(|x| x == &en_name)
                                 .and_then(|id| cie.en_slot.get(&(id as StrId)).copied());
                             let mut cf = self.child_frame(f, child, Some(mi))?;
+                            let wc = self.expr_width(f, cond)?;
+                            let c = self.expr(f, cond)?;
+                            let cz = self.nonzero(c, wc);
                             for (a, pa) in args.iter().zip(&margs) {
                                 let wa = self.expr_width(f, a)?;
                                 let v0 = self.expr(f, a)?;
                                 let v = self.to_w(v0, wa, pa.width, false);
                                 cf.args.insert(pa.name, (v, pa.width));
+                                // per-edge arg latch for later
+                                // Expr::MethValue reads: the interp's
+                                // latched map holds the value iff the
+                                // method was CALLED this edge, else the
+                                // uncalled-MethodArg fallthrough reads 0
+                                let z = self.ity(pa.width.max(1)).const_zero();
+                                let lv = self
+                                    .builder
+                                    .build_select(cz, v, z, "avarg")
+                                    .unwrap()
+                                    .into_int_value();
+                                f.av_args
+                                    .insert((*instance, pa.name), (lv, pa.width));
                             }
-                            let wc = self.expr_width(f, cond)?;
-                            let c = self.expr(f, cond)?;
-                            let cz = self.nonzero(c, wc);
                             let go_bb = self.ctx.append_basic_block(func, "avmgo");
                             let sk_bb = self.ctx.append_basic_block(func, "avmsk");
                             let jn_bb = self.ctx.append_basic_block(func, "avmjn");
