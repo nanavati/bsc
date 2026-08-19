@@ -141,6 +141,10 @@ check_vcd() { # name top
     echo "PASS $name"
 }
 check_vcd FifoVcd sysFifoVcd
+# wide (>64-bit) module arguments in compiled bodies: multi-limb
+# port_consts (a single-u64 store once folded them to 0/1 and the run
+# went silently empty)
+check WideArgConst sysWideArgConst
 # dynamic scheduling v1 (G0100 single pair): no reference Bluesim exe
 # exists by design — the classic C++ backend refuses the design — so
 # stdout diffs against a hand-derived golden instead.  Also gates the
