@@ -1962,8 +1962,7 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
     -- AOT: let the trs driver compile the design and write the
     -- artifact (wrapper script + model .so + pinned options) — the
     -- same amortization as the C++ backend's g++ link, at a fraction
-    -- of the cost.  Any failure (trs not on PATH, built without the
-    -- jit feature, infra error) falls back to the interpreter wrapper.
+    -- of the cost.
     -- like the C++ backend, trs dumps waveforms only in VCD and FST
     let bad_fmts2 = filter (`notElem` ["vcd", "fst"]) (dumpFormats flags)
     when (not (null bad_fmts2)) $
@@ -1991,25 +1990,23 @@ trsLink errh flags toplevel user_cfiles user_ofiles = do
                     _           -> " (interpreted)"
         unless (quiet flags) $
             putStrLnF ("TRS simulation created" ++ how ++ ": " ++ outFile)
-      _ -> do
-        -- honor a strict-mode refusal: converting `trs link`'s
-        -- TRS_REQUIRE_AOT failure into an interpreter wrapper would
-        -- reintroduce the silent degrade at this layer
-        strictRc <- system "test -n \"$TRS_REQUIRE_AOT\""
-        when (strictRc == ExitSuccess) $
-            exitFailWith errh 86
-        writeFileCatch errh outFile $
-            unlines [ "#!/bin/sh"
-                    , ""
-                    , "TRS=${TRS:-trs}"
-                    , "exec \"$TRS\" run \"$0.bir\" \"$@\""
-                    ]
-        stat <- getFileStatus outFile
-        let mode = fileMode stat
-            mode' = foldl1 unionFileModes [mode, ownerExecuteMode, groupExecuteMode]
-        setFileMode outFile mode'
-        unless (quiet flags) $
-            putStrLnF ("TRS simulation created (interpreted): " ++ outFile)
+      ExitFailure 86 ->
+        -- `trs link`'s own strict-mode refusal (TRS_REQUIRE_AOT):
+        -- propagate the code so strict callers see the same contract
+        -- at every layer
+        exitFailWith errh 86
+      ExitFailure n ->
+        -- -trs asks for a trs simulation specifically: `trs link`
+        -- exits 0 for everything it handles (ineligible designs get
+        -- its own interpreter wrapper), so a non-zero exit is a
+        -- genuine failure (trs not on PATH, unresolved BDPI symbol,
+        -- infra error).  Standing in an interpreter wrapper here
+        -- turned those into silent successes that failed later, far
+        -- from the cause.  Report the failure and stop.
+        bsError errh
+            [(cmdPosition,
+              EGeneric ("TRS link failed with exit code " ++ show n ++
+                        ": " ++ linkCmd))]
 
 -- ===============
 -- vLink
