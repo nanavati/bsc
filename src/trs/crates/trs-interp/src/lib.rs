@@ -22,26 +22,26 @@ use trs_ir as ir;
 use trs_ir::{Action, Design, Expr, PrimOp, SchedNode, Stmt, StrId};
 
 mod bdpi;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 mod jit;
 
 use format::Arg;
 use prim::Prim;
 use value::Value;
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 use jit::JitPlans;
 /// Placeholder so Stepper's field exists (always None) without the
 /// `jit` feature.
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 type JitPlans = std::convert::Infallible;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 type JitShared = std::sync::Arc<jit::LazyJit>;
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 type JitShared = std::convert::Infallible;
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 type JitRequestT = jit::JitRequest;
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 type JitRequestT = ();
 
 /// central-loop bail diagnostics (task #21), dumped by finish() under
@@ -210,7 +210,7 @@ pub struct Interp {
     trace_clk: bool,
     /// Emit requests stash the serialized PlanA here for the meta
     /// object (prime derives it; the aot_emit call site reads it)
-    #[cfg(feature = "jit")]
+    #[cfg(feature = "aot")]
     plan_a_bytes: Option<Vec<u8>>,
     trace_wf: bool,
     /// $stop yield: ends the current advance at the slice boundary
@@ -713,7 +713,7 @@ impl Interp {
             debug_tier: false,
             trace_events: std::env::var_os("TRS_TRACE").is_some(),
             trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
-            #[cfg(feature = "jit")]
+            #[cfg(feature = "aot")]
             plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
             stop_request: false,
@@ -3489,12 +3489,12 @@ impl Interp {
     }
 
     pub fn run(&mut self, max_cycles: u64) -> i32 {
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let t0 = jit::prof::on().then(std::time::Instant::now);
         self.advance(max_cycles);
         self.dump_central_bails();
         let rc = self.finish();
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         if let Some(t0) = t0 {
             jit::prof::dump(t0.elapsed());
         }
@@ -3879,7 +3879,7 @@ impl Interp {
         }
         // baked plan first (Load requests): skip the derivation walks
         let mut psl = startup::StartupLap::new();
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let plan = match &self.jit_request {
             jit::JitRequest::Load { src } => {
                 match jit::aot_plan_a(src, self.bir_hash) {
@@ -3900,7 +3900,7 @@ impl Interp {
                 p
             }
         };
-        #[cfg(not(feature = "jit"))]
+        #[cfg(not(feature = "aot"))]
         let plan = {
             let p = self.derive_plan_a();
             psl.lap("plan-a (derived)");
@@ -3908,7 +3908,7 @@ impl Interp {
         };
         // Emit requests bake what they derived: stash the bytes for
         // the meta object (read at the aot_emit call site)
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         if matches!(self.jit_request, jit::JitRequest::Emit { .. }) {
             self.plan_a_bytes = bincode::serialize(&plan).ok();
         }
@@ -4089,18 +4089,18 @@ impl Interp {
 
         // capture BEFORE planning: jit_plan takes the request and the
         // field resets to the default (Run)
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let was_emit = matches!(self.jit_request, jit::JitRequest::Emit { .. });
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let jit = self.jit_plan(&rcomps);
-        #[cfg(not(feature = "jit"))]
+        #[cfg(not(feature = "aot"))]
         let jit = None;
 
         // TRS_REQUIRE_AOT: strict-execution contract for validation
         // runs — a design about to RUN interpreted is a hard failure,
         // never a silent degrade.  Emit requests are exempt (the link
         // caller enforces its own strictness on the emit result).
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         if jit.is_none()
             && !was_emit
             && !self.debug_tier
@@ -4160,7 +4160,7 @@ impl Interp {
             jit,
         } = self.stepper.take().unwrap();
 
-        #[cfg(feature = "jit")]
+        #[cfg(feature = "aot")]
         let mut central_tried = false;
         // ---- central loop (task #21): tight steady-state player ----
         // A single Wave clock with fused, tick-free posedge comps and a
@@ -4169,7 +4169,7 @@ impl Interp {
         // general event loop below (one shared semantics).
         macro_rules! try_central {
             () => {
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 'central: {
                     // hot path: no diagnostics on the already-tried check
                     if central_tried {
@@ -4465,9 +4465,9 @@ impl Interp {
                 // compiled dispatch: the whole composition runs as native
                 // Sched/Exec functions over the arena (no latch space —
                 // fire signals and schedule-position defs live in slots)
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 let mut _ran_fused = false;
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 let ran_jit = match &jit {
                     Some(j) => match &j.comp_nodes[rci] {
                         Some(nodes) => {
@@ -4565,7 +4565,7 @@ impl Interp {
                     },
                     _ => false,
                 };
-                #[cfg(not(feature = "jit"))]
+                #[cfg(not(feature = "aot"))]
                 let ran_jit = false;
 
                 if !ran_jit {
@@ -4607,7 +4607,7 @@ impl Interp {
 
                 // end-of-edge ticks (reset ticks are conditional: the
                 // prim itself checks its reset line)
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 let _tt0 = jit::prof::on().then(std::time::Instant::now);
                 for (_ti, (inst, pname, is_rst, owner, gexpr)) in
                     rc.ticks.iter().enumerate()
@@ -4625,7 +4625,7 @@ impl Interp {
                     }
                     // wire ticks compiled INTO the fused edge fn that
                     // just ran (edge-SSA artifacts): already done
-                    #[cfg(feature = "jit")]
+                    #[cfg(feature = "aot")]
                     if _ran_fused {
                         if let Some(j) = jit.as_ref() {
                             if j.covered_ticks
@@ -4671,7 +4671,7 @@ impl Interp {
                         }
                     }
                 }
-                #[cfg(feature = "jit")]
+                #[cfg(feature = "aot")]
                 if let Some(t0) = _tt0 {
                     jit::prof::add(&jit::prof::TICK_NS, t0);
                 }
@@ -4852,7 +4852,7 @@ pub fn bir_fingerprint(bytes: &[u8]) -> u64 {
     ir::fnv1a(bytes)
 }
 
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 impl Interp {
     /// trs link: make prime() emit the artifact .so instead of
     /// setting up a run.
@@ -4890,10 +4890,27 @@ impl Interp {
         self.jit_emit_result.take()
     }
 }
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 impl Interp {
     pub fn aot_request_emit(&mut self, _so: std::path::PathBuf) {}
+    pub fn aot_request_emit_exe(
+        &mut self,
+        _so: std::path::PathBuf,
+        _exe: std::path::PathBuf,
+        _libdir: std::path::PathBuf,
+    ) {
+    }
+    pub fn aot_request_code_self(&mut self) {}
     pub fn aot_request_code(&mut self, _so: std::path::PathBuf) {
+        // the strict contract holds even without the aot feature: a
+        // run that MUST be compiled cannot silently interpret
+        if std::env::var_os("TRS_REQUIRE_AOT").is_some() {
+            eprintln!(
+                "trs: TRS_REQUIRE_AOT is set but this trs was built \
+                 without artifact support (feature `aot`); refusing"
+            );
+            std::process::exit(86);
+        }
         eprintln!(
             "trs: warning: built without JIT/AOT support; \
              --code ignored (running interpreted)"
@@ -5454,7 +5471,7 @@ pub use startup::load_file;
 /// THIS process image (trs link --exe).  Load the embedded design,
 /// resolve the compiled functions from ourselves, run.  BDPI rides as
 /// a companion .so beside the executable.
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
     let mut sl = startup::StartupLap::new();
     let src = jit::ArtifactSource::This;

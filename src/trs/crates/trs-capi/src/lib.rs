@@ -1368,6 +1368,7 @@ pub extern "C" fn bk_define_clock(
 /// from there and runs it.  Argument handling mirrors the wrapper
 /// script's batch surface: -m N caps cycles, +foo registers a
 /// plusarg.
+#[cfg(feature = "aot")]
 #[no_mangle]
 pub extern "C" fn trs_run_main(
     argc: core::ffi::c_int,

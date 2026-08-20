@@ -47,7 +47,7 @@ pub fn load_file(
 /// doctrine: the .bir is the debug/link sidecar).  Falls back to the
 /// .bir for pre-snap artifacts or any embedded-gate failure; the
 /// fallback keeps the fingerprint cross-check.
-#[cfg(feature = "jit")]
+#[cfg(feature = "aot")]
 pub fn load_file_or_code(
     path: &str,
     code: Option<&str>,
@@ -86,7 +86,7 @@ pub fn load_file_or_code(
     load_file_inner(path, plusargs, vcd_file, true)
 }
 
-#[cfg(not(feature = "jit"))]
+#[cfg(not(feature = "aot"))]
 pub fn load_file_or_code(
     path: &str,
     _code: Option<&str>,

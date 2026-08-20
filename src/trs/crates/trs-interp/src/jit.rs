@@ -15,13 +15,17 @@ use super::*;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock};
 
-use trs_codegen::lower::{
-    compile_design_object, compile_execs, compile_fused, compile_helpers,
-    compile_helpers_object, compile_scheds, decode_protos, encode_protos, trial_lower,
+use trs_codegen::abi::{
+    decode_protos, encode_protos,
     FusedComp, FusedNode,
     CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb, HelperMap, HelperRef,
     HelperSpec, InstEnv, PlanEnv, PrimCb, RecMeth, RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
     TOKEN_KIND_EXEC,
+};
+#[cfg(feature = "jit")]
+use trs_codegen::lower::{
+    compile_design_object, compile_execs, compile_fused, compile_helpers,
+    compile_helpers_object, compile_scheds, trial_lower,
 };
 use prim::ArenaKind;
 
@@ -121,7 +125,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
-    if method == trs_codegen::lower::GATE_OUT_METHOD {
+    if method == trs_codegen::abi::GATE_OUT_METHOD {
         // compiled Expr::Gate on a prim child: not a method — answer
         // gate_out(), the interp's exact read
         let g = match &interp.insts[inst].kind {
@@ -144,7 +148,7 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
         prof::add(&prof::PRIM_NS, t0);
         prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // the gate sentinel is no string id — interp.s() would index OOB
-        let meth = if method == trs_codegen::lower::GATE_OUT_METHOD {
+        let meth = if method == trs_codegen::abi::GATE_OUT_METHOD {
             "$gate_out".to_string()
         } else {
             interp.s(method).to_string()
@@ -272,9 +276,16 @@ impl LazyJit {
         self.cold.load(Ordering::Acquire) != 0
     }
 
+    /// No compile tier without `jit`: cells stay cold (and are never
+    /// cold in practice — artifact loads pre-fill every cell, and the
+    /// planner bails before spawning workers otherwise).
+    #[cfg(not(feature = "jit"))]
+    fn work(&self) {}
+
     /// Worker loop: claim CLASS batches, compile one representative
     /// per class, fill every member's cell with the shared body and
     /// its own call-site tables.
+    #[cfg(feature = "jit")]
     fn work(&self) {
         loop {
             if self.stop.load(Ordering::Acquire) {
@@ -379,6 +390,12 @@ impl JitPlans {
         if std::env::var_os("TRS_NO_FUSION").is_some() {
             return;
         }
+        // no compile tier without `jit`: artifact-provided fused fns
+        // pre-filled the cell at plan build; anything else stays on
+        // the node walk
+        #[cfg(not(feature = "jit"))]
+        let _ = self.fused.get_or_init(|| vec![0; self.comp_nodes.len()]);
+        #[cfg(feature = "jit")]
         let _ = self.fused.get_or_init(|| {
             let comps: Vec<FusedComp> = self
                 .comp_nodes
@@ -392,14 +409,14 @@ impl JitPlans {
                             ns.iter()
                                 .map(|n| match *n {
                                     JitNode::Sched(o) => FusedNode::Sched(
-                                        trs_codegen::lower::HelperRef::Addr(
+                                        trs_codegen::abi::HelperRef::Addr(
                                             self.lazy.scheds[o as usize].sched as usize,
                                         ),
                                     ),
                                     JitNode::Exec(o) => {
                                         let (b, t) = self.lazy.exec_args[o as usize];
                                         FusedNode::Exec(
-                                            trs_codegen::lower::HelperRef::Addr(
+                                            trs_codegen::abi::HelperRef::Addr(
                                                 self.lazy.cells[o as usize]
                                                     .get()
                                                     .expect("fuse before warm")
@@ -498,7 +515,7 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             }
         }
     }
-    if func == trs_codegen::lower::STRING_CONCAT_FUNC {
+    if func == trs_codegen::abi::STRING_CONCAT_FUNC {
         // compiled PrimOp::StringConcat: concatenate the resolved
         // texts and intern per evaluation, the interp's exact behavior
         // (func is a sentinel, not a string id — resolve nothing)
@@ -816,7 +833,27 @@ impl<'a> ConeAnalyzer<'a> {
     }
 }
 
+/// No compile tier without `jit`: a plan that needs freshly compiled
+/// scheds cannot proceed — the caller falls back to the interpreter.
+#[cfg(not(feature = "jit"))]
+#[allow(clippy::too_many_arguments)]
+fn aot_or_jit_scheds(
+    _interp: &Interp,
+    _inst_envs: &HashMap<usize, InstEnv>,
+    _specs: &[RuleSpec],
+    _now_slot: u32,
+    _helpers: Option<&HelperMap>,
+    _nworkers: usize,
+    trace: bool,
+) -> Option<Vec<CompiledSched>> {
+    if trace {
+        eprintln!("trs jit: off (no artifact and no compile tier)");
+    }
+    None
+}
+
 /// Eager parallel sched compile (in-process JIT path).
+#[cfg(feature = "jit")]
 fn aot_or_jit_scheds(
     interp: &Interp,
     inst_envs: &HashMap<usize, InstEnv>,
@@ -879,12 +916,13 @@ fn cc_tool() -> String {
 /// Trial lower catches most ineligibility earlier — this covers
 /// shapes it does not walk (e.g. value-method reads reachable only
 /// through another module's cones).
+#[cfg(feature = "jit")]
 enum EmitFail {
     Ineligible(String),
     Infra(String),
 }
 
-#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "jit")]
 #[allow(clippy::too_many_arguments)]
 fn aot_emit(
     d: &Design,
@@ -903,7 +941,7 @@ fn aot_emit(
     bir_hash: u64,
     bir_hash_raw: u64,
     plan_a: &[u8],
-    edge_plan: Option<&trs_codegen::lower::EdgeSsaPlan>,
+    edge_plan: Option<&trs_codegen::abi::EdgeSsaPlan>,
     bdpi_names: &[String],
 ) -> Result<(), EmitFail> {
     use trs_codegen::lower::{compile_meta_object, compile_object_chunk};
@@ -985,7 +1023,7 @@ fn aot_emit(
             })
             .collect();
         let env = PlanEnv { d, insts: inst_envs, now_slot };
-        let _g = trs_codegen::lower::AotModeGuard::set();
+        let _g = trs_codegen::abi::AotModeGuard::set();
         let t1 = std::time::Instant::now();
         let obj = compile_design_object(
             &env,
@@ -1001,7 +1039,7 @@ fn aot_emit(
             eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
         }
         if std::env::var_os("TRS_EDGE_SSA_STATS").is_some() {
-            let s = trs_codegen::lower::edge_ssa_sites();
+            let s = trs_codegen::abi::edge_ssa_sites();
             eprintln!(
                 "trs edge-ssa census: fire-signal loads={} eager-reloads(exec)={} \
                  shared-reloads(sched)={} eager-stores={} promotable-load-words={}",
@@ -1046,8 +1084,16 @@ fn aot_emit(
         if let Some((exe_out, libdir)) = exe {
             // artifact-as-executable: the SAME objects, plus a 3-line
             // main shim, linked as a PIE with --export-dynamic so the
-            // runtime (libtrs_capi.so, via trs_run_main) resolves
-            // trs_snap and the edge fns from our own image
+            // runtime (via trs_run_main) resolves trs_snap and the
+            // edge fns from our own image.  Prefer the slim LLVM-free
+            // runtime (libtrs_rt.so): the full capi lib carries
+            // statically-linked LLVM whose constructors cost ~5ms at
+            // every exec of the produced binary.
+            let rt = if libdir.join("libtrs_rt.so").exists() {
+                "-l:libtrs_rt.so"
+            } else {
+                "-l:libtrs_capi.so"
+            };
             let mc = tmp.join("trs_main.c");
             std::fs::write(
                 &mc,
@@ -1061,7 +1107,7 @@ fn aot_emit(
                 .arg("-Wl,--export-dynamic")
                 .arg("-Wl,--no-as-needed")
                 .arg(format!("-L{}", libdir.display()))
-                .arg("-l:libtrs_capi.so")
+                .arg(rt)
                 .arg(format!("-Wl,-rpath,{}", libdir.display()))
                 .args(["-o"])
                 .arg(&exe_tmp)
@@ -1092,7 +1138,7 @@ fn aot_emit(
     let mut helpers_on = !helper_specs.is_empty();
     let mut helper_obj: Option<Vec<u8>> = None;
     if helpers_on {
-        let _g = trs_codegen::lower::AotModeGuard::set();
+        let _g = trs_codegen::abi::AotModeGuard::set();
         let env = PlanEnv { d, insts: inst_envs, now_slot };
         let pseudo = specs[0].clone();
         match compile_helpers_object(&env, helper_specs, refs_sym, &pseudo) {
@@ -1109,14 +1155,14 @@ fn aot_emit(
         let mut handles = Vec::new();
         for c in specs.chunks(chunk) {
             handles.push(sc.spawn(move || {
-                let _g = trs_codegen::lower::AotModeGuard::set();
+                let _g = trs_codegen::abi::AotModeGuard::set();
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), true, false)
             }));
         }
         for c in reps.chunks(rchunk) {
             handles.push(sc.spawn(move || {
-                let _g = trs_codegen::lower::AotModeGuard::set();
+                let _g = trs_codegen::abi::AotModeGuard::set();
                 let env = PlanEnv { d, insts: inst_envs, now_slot };
                 compile_object_chunk(&env, c, helpers_on.then_some(refs_sym), false, true)
             }));
@@ -1249,7 +1295,7 @@ pub(crate) fn aot_plan_a(
             return None;
         }
         let r: libloading::Symbol<*const u64> = lib.get(b"trs_layout_rev").ok()?;
-        if **r != trs_codegen::lower::AOT_LAYOUT_REV {
+        if **r != trs_codegen::abi::AOT_LAYOUT_REV {
             return None;
         }
         let s: libloading::Symbol<*const u8> = lib.get(b"trs_plan_a").ok()?;
@@ -1533,7 +1579,7 @@ impl Interp {
         specs: &[RuleSpec],
         has_early: bool,
         stats: bool,
-    ) -> trs_codegen::lower::EdgeSsaPlan {
+    ) -> trs_codegen::abi::EdgeSsaPlan {
         let specs_lite: Vec<(usize, usize)> =
             specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
         let specs_lite = &specs_lite[..];
@@ -2303,7 +2349,7 @@ impl Interp {
                 }
             }
         }
-        trs_codegen::lower::EdgeSsaPlan {
+        trs_codegen::abi::EdgeSsaPlan {
             nodes: nodes.to_vec(),
             exec_writes,
             def_reads,
@@ -2312,6 +2358,58 @@ impl Interp {
             wire_clears: Vec::new(),
             export_slots,
         }
+    }
+
+    /// Call-site tables when the artifact supplied none: re-derive them
+    /// by trial lowering (needs LLVM).  None = the plan is off, run
+    /// interpreted (and Emit requests record their ineligibility).
+    #[cfg(feature = "jit")]
+    fn trial_protos(
+        &mut self,
+        inst_envs: &HashMap<usize, InstEnv>,
+        specs: &[RuleSpec],
+        now_slot: u32,
+        request: &JitRequest,
+        trace: bool,
+    ) -> Option<Vec<FnProtos>> {
+        let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+        let t0 = std::time::Instant::now();
+        match trial_lower(&env, specs) {
+            Ok(p) => {
+                if std::env::var_os("TRS_JIT_TIME").is_some() {
+                    eprintln!("trs jit: trial lower {:?}", t0.elapsed());
+                }
+                Some(p)
+            }
+            Err(e) => {
+                if let JitRequest::Emit { .. } = request {
+                    self.jit_emit_result =
+                        Some(crate::AotEmit::Ineligible(e.to_string()));
+                }
+                if trace {
+                    eprintln!("trs jit: off ({e})");
+                }
+                None
+            }
+        }
+    }
+
+    /// No compile tier without `jit`: an artifact that loads without
+    /// baked protos (pre-protos layouts are refused by the rev gate, so
+    /// this is the artifact-load-failed path) runs interpreted.
+    #[cfg(not(feature = "jit"))]
+    fn trial_protos(
+        &mut self,
+        _inst_envs: &HashMap<usize, InstEnv>,
+        _specs: &[RuleSpec],
+        _now_slot: u32,
+        _request: &JitRequest,
+        trace: bool,
+    ) -> Option<Vec<FnProtos>> {
+        if trace {
+            eprintln!("trs jit: off (no artifact protos and no compile tier)");
+        }
+        None
     }
 
     /// Build the JIT plan for the resolved compositions, or None to run
@@ -2324,7 +2422,7 @@ impl Interp {
         let has_early = rcomps.iter().any(|rc| !rc.early.is_empty());
         // direct-BDPI registries (task #22): baked-mode call emission
         // reads these; set-once, idempotent
-        let _ = trs_codegen::lower::STDIO_CB.set(jit_stdio_cb as usize);
+        let _ = trs_codegen::abi::STDIO_CB.set(jit_stdio_cb as usize);
         if let Some(b) = &self.bdpi {
             // registry keys are C names (what call sites resolve)
             let m: std::collections::HashMap<String, usize> = b
@@ -2341,7 +2439,7 @@ impl Interp {
                     (c, a)
                 })
                 .collect();
-            let _ = trs_codegen::lower::BDPI_SYMS.set(m);
+            let _ = trs_codegen::abi::BDPI_SYMS.set(m);
         }
         if matches!(request, JitRequest::Run)
             && std::env::var_os("TRS_JIT").is_none()
@@ -3435,46 +3533,6 @@ impl Interp {
                 ((h.mir, h.def), (HelperRef::Sym(h.sym.clone()), h.width, h.ports.clone()))
             })
             .collect();
-        // deferred: Load requests only need addresses if the artifact
-        // fails to load (in-process fallback) — never compile helpers
-        // just to throw them away at every artifact startup
-        let compile_helpers_now = |inst_envs: &HashMap<usize, InstEnv>| -> HelperMap {
-            if helper_specs.is_empty() {
-                return HelperMap::new();
-            }
-            trs_codegen::lower::llvm_init_once();
-            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
-            let pseudo = specs[0].clone();
-            let t0 = std::time::Instant::now();
-            match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
-                Ok(addrs) => {
-                    if std::env::var_os("TRS_JIT_TIME").is_some() {
-                        eprintln!(
-                            "trs jit: {} helpers compiled {:?}",
-                            helper_specs.len(),
-                            t0.elapsed()
-                        );
-                    }
-                    let am: HashMap<String, usize> = addrs.into_iter().collect();
-                    helper_specs
-                        .iter()
-                        .map(|h| {
-                            (
-                                (h.mir, h.def),
-                                (HelperRef::Addr(am[&h.sym]), h.width, h.ports.clone()),
-                            )
-                        })
-                        .collect()
-                }
-                Err(e) => {
-                    if trace {
-                        eprintln!("trs jit: helpers off ({e})");
-                    }
-                    HelperMap::new()
-                }
-            }
-        };
-
         // Load attempt FIRST: an artifact carrying protos skips
         // trial_lower entirely (0.32s of sudoku startup); any failure
         // falls back to in-process compilation (which trials below)
@@ -3539,31 +3597,21 @@ impl Interp {
         // and artifact-fallback paths; skipped on successful loads)
         let protos: Vec<FnProtos> = match protos_opt {
             Some(p) => p,
-            None => {
-                let env = PlanEnv { d: &self.d, insts: &inst_envs, now_slot };
-                let t0 = std::time::Instant::now();
-                match trial_lower(&env, &specs) {
-                    Ok(p) => {
-                        if std::env::var_os("TRS_JIT_TIME").is_some() {
-                            eprintln!("trs jit: trial lower {:?}", t0.elapsed());
-                        }
-                        p
-                    }
-                    Err(e) => {
-                        if let JitRequest::Emit { .. } = &request {
-                            self.jit_emit_result =
-                                Some(crate::AotEmit::Ineligible(e.to_string()));
-                        }
-                        if trace {
-                            eprintln!("trs jit: off ({e})");
-                        }
-                        return None;
-                    }
-                }
-            }
+            None => match self.trial_protos(&inst_envs, &specs, now_slot, &request, trace) {
+                Some(p) => p,
+                None => return None,
+            },
         };
 
         // trs link: emit the artifact .so and stop (nothing runs)
+        #[cfg(not(feature = "jit"))]
+        if let JitRequest::Emit { .. } = &request {
+            self.jit_emit_result = Some(crate::AotEmit::Failed(
+                "this build has no compile tier (feature `jit`)".into(),
+            ));
+            return None;
+        }
+        #[cfg(feature = "jit")]
         if let JitRequest::Emit { so, exe } = &request {
             // whole-edge SSA emission (task #24, opt-in): build the
             // legality tables the edge emitter consumes
@@ -3653,11 +3701,57 @@ impl Interp {
         // SCHED functions compile eagerly (blocking, parallel): they
         // run on every edge and the cone-sharing keeps them small
         let chunk = n.div_ceil(nworkers).max(1);
+        // deferred: Load requests only need addresses if the artifact
+        // fails to load (in-process fallback) — never compile helpers
+        // just to throw them away at every artifact startup
+        #[cfg(feature = "jit")]
+        let compile_helpers_now = |inst_envs: &HashMap<usize, InstEnv>| -> HelperMap {
+            if helper_specs.is_empty() {
+                return HelperMap::new();
+            }
+            trs_codegen::lower::llvm_init_once();
+            let env = PlanEnv { d: &self.d, insts: inst_envs, now_slot };
+            let pseudo = specs[0].clone();
+            let t0 = std::time::Instant::now();
+            match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
+                Ok(addrs) => {
+                    if std::env::var_os("TRS_JIT_TIME").is_some() {
+                        eprintln!(
+                            "trs jit: {} helpers compiled {:?}",
+                            helper_specs.len(),
+                            t0.elapsed()
+                        );
+                    }
+                    let am: HashMap<String, usize> = addrs.into_iter().collect();
+                    helper_specs
+                        .iter()
+                        .map(|h| {
+                            (
+                                (h.mir, h.def),
+                                (HelperRef::Addr(am[&h.sym]), h.width, h.ports.clone()),
+                            )
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    if trace {
+                        eprintln!("trs jit: helpers off ({e})");
+                    }
+                    HelperMap::new()
+                }
+            }
+        };
+
+        #[cfg(feature = "jit")]
         let helpers_addr: HelperMap = if preloaded.is_some() {
             HelperMap::new()
         } else {
             compile_helpers_now(&inst_envs)
         };
+        // no compile tier: helper addresses only matter to in-process
+        // sched compilation, which the stub below refuses anyway
+        #[cfg(not(feature = "jit"))]
+        let helpers_addr = HelperMap::new();
         let jit_helpers: Option<&HelperMap> =
             (!helpers_addr.is_empty()).then_some(&helpers_addr);
         let (scheds, preexecs) = if let Some((s, e)) = preloaded {

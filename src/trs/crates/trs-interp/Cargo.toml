@@ -20,6 +20,12 @@ bincode = { workspace = true }
 cc = "1"
 
 [features]
+# AOT artifact loading (libloading + the trs-codegen ABI types): what a
+# slim, LLVM-free runtime needs to run `trs link` artifacts at full
+# speed.  No compilation tier — an artifact that fails its load gates
+# falls back to the interpreter.
+aot = ["dep:trs-codegen"]
 # hybrid JIT: eligible rules run as LLVM-compiled functions inside the
-# interpreter's event loop (TRS_JIT=1 at runtime; needs llvm-18-dev)
-jit = ["dep:trs-codegen", "trs-codegen/llvm"]
+# interpreter's event loop (TRS_JIT=1 at runtime; needs llvm-18-dev),
+# plus artifact EMISSION (trs link) and the in-process compile fallback
+jit = ["aot", "trs-codegen/llvm"]
