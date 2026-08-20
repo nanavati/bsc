@@ -3388,15 +3388,22 @@ impl Interp {
         {
             let mut key_to_class: HashMap<(u64, usize, Vec<(bool, u32)>), usize> =
                 HashMap::new();
+            // per-INSTANCE memo: rebuilding the own-slot set per spec was
+            // O(rules x cfwf-slots) — 26ms of FloatTest's startup
+            let mut own_by_inst: HashMap<
+                usize,
+                (std::collections::HashSet<u32>, u32),
+            > = HashMap::new();
             for (o, sp) in specs.iter().enumerate() {
                 // the compiled body bakes always_fire and inhibitor slot
                 // LOADS; own-region slots are region-relative in codegen
                 // (twins share safely), foreign-instance slots are
                 // absolute (twins must not share) — the key mirrors that
-                let ie = &inst_envs[&sp.inst];
-                let own: std::collections::HashSet<u32> =
-                    ie.cfwf_slot.values().copied().collect();
-                let r0 = ie.region.0;
+                let (own, r0) = own_by_inst.entry(sp.inst).or_insert_with(|| {
+                    let ie = &inst_envs[&sp.inst];
+                    (ie.cfwf_slot.values().copied().collect(), ie.region.0)
+                });
+                let (own, r0) = (&*own, *r0);
                 let mut inh: Vec<(bool, u32)> = sp
                     .inhibit_slots
                     .iter()
