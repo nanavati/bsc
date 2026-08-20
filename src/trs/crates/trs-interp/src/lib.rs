@@ -3408,6 +3408,112 @@ impl Interp {
         rc
     }
 
+    /// Lockstep selfcheck (trs run --selfcheck): drive this engine —
+    /// the PRIMARY, which owns stdout, waveforms, and the exit status —
+    /// and a quiet interp `shadow` in bounded steps, comparing time,
+    /// cycle/finish status, and architectural prim state every `every`
+    /// default-clock posedges (and at the end of the run).  One process
+    /// validates BOTH engines against each other with no reference
+    /// simulator anywhere; a divergence reports on stderr (instant +
+    /// the first mismatching state, primary-vs-shadow) and the run
+    /// exits 87 AT the divergence, the oracle doctrine's stop point.
+    ///
+    /// TRS_SELFCHECK_INJECT=<cycle> is the detector's negative
+    /// witness: once the primary passes that cycle, the shadow is
+    /// advanced one extra posedge, which must trip the next compare.
+    pub fn run_lockstep(
+        &mut self,
+        shadow: &mut Interp,
+        max_cycles: u64,
+        every: u64,
+    ) -> i32 {
+        let every = every.max(1);
+        let inject = std::env::var("TRS_SELFCHECK_INJECT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
+        let mut injected = false;
+        let trace = std::env::var_os("TRS_SELFCHECK_TRACE").is_some();
+        loop {
+            let target = self.cycles().saturating_add(every).min(max_cycles);
+            self.advance(target);
+            shadow.advance(target);
+            if trace {
+                eprintln!(
+                    "trs selfcheck: checkpoint target={target} primary \
+                     (t={}, c={}) shadow (t={}, c={})",
+                    self.now, self.cycle, shadow.now, shadow.cycle
+                );
+            }
+            if let Some(n) = inject {
+                if !injected && self.cycles() >= n {
+                    shadow.advance(shadow.cycles().saturating_add(1));
+                    injected = true;
+                }
+            }
+            let mut diverged = Vec::new();
+            // a stop consumed by the cycle budget alone is an INTERNAL
+            // point: the central player and the general loop credit the
+            // last posedge's companion-negedge instant differently, so
+            // `now` can sit half a period apart with identical
+            // architectural history (no output can observe it — VCD
+            // disables the central player, and interactive stops use
+            // the heap loop).  Time compares only where time is
+            // architecturally visible: $finish/$stop/heap-dry stops.
+            let budget_stop = self.finished.is_none()
+                && !self.stop_request
+                && self.cycles() >= target;
+            if !budget_stop && shadow.now != self.now {
+                diverged
+                    .push(format!("time {} vs primary {}", shadow.now, self.now));
+            }
+            if shadow.cycle != self.cycle {
+                diverged.push(format!(
+                    "cycle {} vs primary {}",
+                    shadow.cycle, self.cycle
+                ));
+            }
+            if shadow.finished != self.finished {
+                diverged.push(format!(
+                    "finished {:?} vs primary {:?}",
+                    shadow.finished, self.finished
+                ));
+            }
+            // shape first: state addressed at different times compares
+            // apples to oranges (the capi oracle's per-engine gate)
+            if diverged.is_empty() {
+                diverged = self.state_divergence(shadow, 8);
+            }
+            if !diverged.is_empty() {
+                eprintln!(
+                    "trs selfcheck: DIVERGENCE at time {} (cycle {}):",
+                    self.now, self.cycle
+                );
+                for d in &diverged {
+                    eprintln!("trs selfcheck:   {d}");
+                }
+                self.dump_central_bails();
+                let _ = self.finish();
+                return 87;
+            }
+            if self.finished.is_some()
+                || self.stop_request
+                || self.cycles() >= max_cycles
+            {
+                break;
+            }
+            if self.cycles() < target {
+                // neither $finish, $stop, nor the cycle target ended
+                // the step: the event heap is dry (run() would have
+                // returned here after its single advance)
+                break;
+            }
+        }
+        self.dump_central_bails();
+        let rc = self.finish();
+        let _ = shadow.finish();
+        rc
+    }
+
     /// Default-clock posedges processed so far (the `sim step` cursor).
     pub fn cycles(&self) -> u64 {
         self.cycle
@@ -5119,6 +5225,7 @@ pub fn run_file(
     wave: Option<(WaveFormat, Option<String>)>,
     code: Option<&str>,
     formats: Option<(bool, bool)>,
+    selfcheck: Option<u64>,
 ) -> Result<i32, String> {
     let mut interp = load_file(path, plusargs, vcd_file)?;
     if let Some((vcd, fst)) = formats {
@@ -5130,5 +5237,25 @@ pub fn run_file(
     if let Some(so) = code {
         interp.aot_request_code(so.into());
     }
-    Ok(interp.run(max_cycles))
+    let Some(every) = selfcheck else {
+        return Ok(interp.run(max_cycles));
+    };
+    // lockstep selfcheck: a second, pure-interp engine shadows the
+    // primary — quiet (no console/file/VCD output), no compiled code,
+    // debug tier (the shadow is an oracle, not the artifact's
+    // execution engine, so TRS_REQUIRE_AOT does not police it)
+    let mut shadow = load_file(path, plusargs, None)?;
+    shadow.set_quiet();
+    shadow.set_debug_tier();
+    if shadow.needs_user_bdpi() {
+        // dlopen of one path is one refcounted image: user C globals
+        // are process-global, shared across both engines (the capi
+        // oracle's isolation caveat)
+        eprintln!(
+            "trs selfcheck: note: design imports BDPI — user C state \
+             is process-global, so stateful foreign functions can \
+             produce phantom divergences (engines are not isolated)"
+        );
+    }
+    Ok(interp.run_lockstep(&mut shadow, max_cycles, every))
 }
