@@ -5361,7 +5361,7 @@ pub fn run_file(
     formats: Option<(bool, bool)>,
     selfcheck: Option<(u64, bool)>,
 ) -> Result<i32, String> {
-    let mut interp = load_file(path, plusargs, vcd_file)?;
+    let mut interp = startup::load_file_or_code(path, code, plusargs, vcd_file)?;
     if let Some((vcd, fst)) = formats {
         interp.set_allowed_wave_formats(vcd, fst);
     }
@@ -5429,7 +5429,7 @@ pub fn run_file(
     let mut shadows: Vec<(&'static str, Interp)> = Vec::new();
     for kind in kinds {
         prim::QUIET_ENGINE.with(|c| c.set(true));
-        let sh = load_file(path, plusargs, None);
+        let sh = startup::load_file_or_code(path, code, plusargs, None);
         prim::QUIET_ENGINE.with(|c| c.set(false));
         let mut sh = sh?;
         sh.set_quiet();

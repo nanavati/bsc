@@ -953,6 +953,7 @@ pub fn compile_meta_object(
     protos: &[u8],
     edge_wire_ticks: bool,
     bdpi_names: &[String],
+    snap: &[u8],
 ) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let module = ctx.create_module("trs_meta");
@@ -990,6 +991,16 @@ pub fn compile_meta_object(
     let arr = ctx.const_string(protos, false);
     let pg = module.add_global(arr.get_type(), None, "trs_protos");
     pg.set_initializer(&arr);
+    // the design snapshot rides INSIDE the artifact: a --code run
+    // decodes the design from here and never opens the .bir (full-AOT
+    // load doctrine: the .bir is the debug/link sidecar, not a
+    // runtime dependency).  len 0 = not embedded (encode failed);
+    // the loader falls back to the .bir path.
+    let sl = module.add_global(i64t, None, "trs_snap_len");
+    sl.set_initializer(&i64t.const_int(snap.len() as u64, false));
+    let sarr = ctx.const_string(snap, false);
+    let sg = module.add_global(sarr.get_type(), None, "trs_snap");
+    sg.set_initializer(&sarr);
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)

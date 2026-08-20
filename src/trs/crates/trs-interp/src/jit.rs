@@ -977,6 +977,7 @@ fn aot_emit(
             &encode_protos(protos),
             edge_plan.is_some_and(|p| p.wire_clears.iter().any(|v| !v.is_empty())),
             bdpi_names,
+            &d.snap_encode(bir_hash).unwrap_or_default(),
         )
         .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
         let mf = tmp.join("meta.o");
@@ -1114,6 +1115,7 @@ fn aot_emit(
         &encode_protos(protos),
         false, // chunked path never carries edge-SSA wire ticks
         bdpi_names,
+        &d.snap_encode(bir_hash).unwrap_or_default(),
     )
     .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
     let mf = tmp.join("meta.o");
@@ -1138,6 +1140,37 @@ fn aot_emit(
         eprintln!("trs aot: emit + link {:?}", t0.elapsed());
     }
     Ok(())
+}
+
+/// Full-AOT load: the design snapshot embedded in the artifact
+/// (trs_snap + trs_bir_hash), so a --code run never opens the .bir.
+/// None = pre-snap artifact, empty snap (encode failed at link), a
+/// missing/unloadable .so, or a snap-gate failure — the caller falls
+/// back to the .bir path and the normal fingerprint cross-check.
+pub(crate) fn aot_embedded_design(
+    so: &std::path::Path,
+) -> Option<(u64, trs_ir::Design)> {
+    unsafe {
+        let so_owned;
+        let so = if so.to_str().is_some_and(|s| !s.contains('/')) {
+            so_owned = std::path::Path::new(".").join(so);
+            so_owned.as_path()
+        } else {
+            so
+        };
+        let lib = libloading::Library::new(so).ok()?;
+        let h: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash").ok()?;
+        let hash = **h;
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_snap_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_snap").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        let d = trs_ir::Design::snap_decode(bytes, hash)?;
+        Some((hash, d))
+    }
 }
 
 /// trs run --code: dlopen the artifact, verify its fingerprint, fill
