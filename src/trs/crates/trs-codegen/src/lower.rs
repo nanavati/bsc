@@ -743,6 +743,18 @@ fn lower_helpers<'ctx>(
 /// backend).  Larger bodies stay as calls by the inliner's own cost
 /// model.
 #[allow(clippy::too_many_arguments)]
+/// compile_design_object's outcome: the object, or the measured
+/// per-comp inlined-section sizes when an edge fn exceeded the
+/// caller's instruction budget (the caller extends the plan's
+/// outlined set from the MEASURED sizes and re-lowers — lowering is
+/// ms-scale; only the pass pipeline is expensive, and it never runs
+/// on an over-budget module).
+pub enum DesignObject {
+    Object(Vec<u8>),
+    EdgeOverBudget(Vec<Vec<(usize, u64)>>),
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn compile_design_object(
     env: &PlanEnv,
     specs: &[RuleSpec],
@@ -751,7 +763,9 @@ pub fn compile_design_object(
     refs: &HelperMap,
     fused: &[FusedComp],
     edge_plan: Option<&EdgeSsaPlan>,
-) -> Result<Vec<u8>, Ineligible> {
+    // largest tolerated edge-fn size in instructions (0 = unbounded)
+    edge_insn_budget: u64,
+) -> Result<DesignObject, Ineligible> {
     let t_low = std::time::Instant::now();
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
@@ -824,12 +838,48 @@ pub fn compile_design_object(
         };
         lc.lower_exec()?;
     }
+    let mut section_sizes: Vec<Vec<(usize, u64)>> = Vec::new();
     match edge_plan {
-        Some(p) => {
-            lower_edge_ssa(env, &ctx, &module, cbs, specs, refs_opt, p, fused)?
-        }
+        Some(p) => lower_edge_ssa(
+            env,
+            &ctx,
+            &module,
+            cbs,
+            specs,
+            refs_opt,
+            p,
+            fused,
+            &mut section_sizes,
+        )?,
         None => {
             let _ = lower_fused(&ctx, &module, fused);
+        }
+    }
+    // measured edge budget: hand the per-section sizes back for a
+    // replan instead of feeding a giant function to the pass pipeline.
+    // The judgement is the FULL edge-fn size (sched sections and call
+    // preludes included — only exec sections are outlining candidates,
+    // so the caller may find no victims and accept the remainder).
+    if edge_insn_budget > 0 {
+        let mut over = false;
+        for k in 0..fused.len() {
+            if let Some(f) = module.get_function(&format!("edge_c{k}")) {
+                let mut insns = 0u64;
+                for bb in f.get_basic_blocks() {
+                    let mut ins = bb.get_first_instruction();
+                    while let Some(i) = ins {
+                        insns += 1;
+                        ins = i.get_next_instruction();
+                    }
+                }
+                if insns > edge_insn_budget {
+                    over = true;
+                    break;
+                }
+            }
+        }
+        if over {
+            return Ok(DesignObject::EdgeOverBudget(section_sizes));
         }
     }
     // ordinal-indexed fn tables: without them the loader dlsyms ~one
@@ -933,7 +983,7 @@ pub fn compile_design_object(
     if timing {
         eprintln!("trs aot: backend emit {:?}", t1.elapsed());
     }
-    Ok(buf.as_slice().to_vec())
+    Ok(DesignObject::Object(buf.as_slice().to_vec()))
 }
 
 /// JIT: compile a helper batch into one engine; returns (sym, addr).
@@ -1116,7 +1166,32 @@ fn lower_edge_ssa<'ctx>(
     outlined: Option<&HelperMap>,
     plan: &EdgeSsaPlan,
     fused: &[FusedComp],
+    // construction-time tracking: per comp, (spec ordinal, emitted
+    // instructions) for every INLINED section — the measured sizes
+    // the budget replan consumes (estimates were tried and failed:
+    // action-heavy bodies emit real code with near-zero cone mass)
+    section_sizes: &mut Vec<Vec<(usize, u64)>>,
 ) -> Result<(), Ineligible> {
+    let count_block = |bb: inkwell::basic_block::BasicBlock| -> u64 {
+        let mut insns = 0u64;
+        let mut ins = bb.get_first_instruction();
+        while let Some(i) = ins {
+            insns += 1;
+            ins = i.get_next_instruction();
+        }
+        insns
+    };
+    // instructions in blocks[from..]: the blocks a section appended
+    let count_new = |func: inkwell::values::FunctionValue,
+                     from_block: usize|
+     -> (usize, u64) {
+        let bbs = func.get_basic_blocks();
+        let mut insns = 0u64;
+        for bb in &bbs[from_block.min(bbs.len())..] {
+            insns += count_block(*bb);
+        }
+        (bbs.len(), insns)
+    };
     let i64t = ctx.i64_type();
     let i32t = ctx.i32_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
@@ -1149,6 +1224,14 @@ fn lower_edge_ssa<'ctx>(
             exports: plan.export_slots.clone(),
             ..Default::default()
         };
+        section_sizes.push(Vec::new());
+        // checkpoint for exact per-section attribution: new blocks
+        // PLUS growth of the carried-over insert block (straight-line
+        // sections often append no block at all — block-count deltas
+        // alone attribute their code to the next block creator)
+        let mut blocks_seen = func.count_basic_blocks() as usize;
+        let mut carry = entry;
+        let mut carry_insns = count_block(entry);
         let mut cur = entry;
         for (s, &(is_exec, o)) in plan.nodes[k].iter().enumerate() {
             let spec = &specs[o];
@@ -1293,6 +1376,15 @@ fn lower_edge_ssa<'ctx>(
             }
             cur = lc.builder.get_insert_block().unwrap();
             edge_ctx = lc.edge.take().unwrap();
+            let (nb, new_insns) = count_new(func, blocks_seen);
+            let carry_now = count_block(carry);
+            let insns = new_insns + carry_now.saturating_sub(carry_insns);
+            blocks_seen = nb;
+            carry = cur;
+            carry_insns = count_block(cur);
+            if is_exec && !plan.outlined_execs.contains(&o) {
+                section_sizes[k].push((o, insns));
+            }
         }
         let bend = ctx.create_builder();
         bend.position_at_end(cur);
