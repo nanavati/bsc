@@ -96,4 +96,32 @@ check_memload() {
     echo "PASS $name"
 }
 check_memload
+# String args must run COMPILED: byte parity alone would pass on an
+# interpreted fallback (see BdpiMin), and the point here is that the
+# compiler does not bail out on a string.  The model .so beside the
+# artifact is the tell.
+check_compiled() { # name top [cfile]
+    name=$1; top=$2; cfile=$3
+    cp "$SRC/$name.bsv" .
+    [ -n "$cfile" ] && cp "$SRC/$cfile" .
+    rm -f art.so
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    ./ref.exe > ref.out 2>&1; refrc=$?
+    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    [ -f art.so ] || { echo "FAIL $name (fell back to interpreted)"; fail=1; return; }
+    TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
+    if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
+    if ! cmp -s ref.out got.out; then echo "FAIL $name (stdout)"; diff ref.out got.out | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+# every way a constant string is built (param/literal concats, nesting,
+# $display of a concat), across two instances with different parameters:
+# compiled bodies are shared per equivalence class, so a baked-in string
+# would show up as one instance wearing the other's text
+check_compiled StrCatBdpi sysStrCatBdpi slen.c
+# a string chosen by a runtime condition: not a per-instance constant —
+# on this stack it still compiles (StrDyn marker values select among
+# interned ids at runtime), and the output must match the reference
+check_compiled StrDynSelect sysStrDynSelect slen.c
 exit $fail
