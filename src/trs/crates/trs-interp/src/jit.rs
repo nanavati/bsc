@@ -1423,14 +1423,34 @@ fn aot_load(
         ) -> i32 {
             panic!("trs: exec symbol elided by edge-SSA artifact was called");
         }
+        // ordinal-indexed fn tables (one_module artifacts): 3 dlsyms
+        // instead of ~one per rule.  Null entry = elided symbol.
+        // Absent or size-mismatched tables (chunked artifacts) fall
+        // back to the per-symbol path.
+        let tab = |name: &[u8], len_name: &[u8], want: usize| -> Option<&[usize]> {
+            let l = lib.get::<*const u64>(len_name).ok()?;
+            let t = lib.get::<*const usize>(name).ok()?;
+            (**l as usize == want)
+                .then(|| std::slice::from_raw_parts(*t, want))
+        };
+        let sched_tab = tab(b"trs_sched_tab", b"trs_sched_tab_len", specs.len());
+        let exec_tab = tab(b"trs_exec_tab", b"trs_exec_tab_len", specs.len());
+        let edge_tab = tab(b"trs_edge_tab", b"trs_edge_tab_len", ncomps);
         let mut scheds = Vec::with_capacity(specs.len());
-        for (spec, proto) in specs.iter().zip(protos.iter()) {
-            let sf = lib
-                .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)>(
-                    format!("sched_{}\0", spec.label).as_bytes(),
-                )
-                .map(|f| *f)
-                .unwrap_or(missing_sched);
+        for (o, (spec, proto)) in specs.iter().zip(protos.iter()).enumerate() {
+            let sf = match sched_tab {
+                Some(t) if t[o] != 0 => std::mem::transmute::<
+                    usize,
+                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void),
+                >(t[o]),
+                Some(_) => missing_sched,
+                None => lib
+                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void)>(
+                        format!("sched_{}\0", spec.label).as_bytes(),
+                    )
+                    .map(|f| *f)
+                    .unwrap_or(missing_sched),
+            };
             scheds.push(CompiledSched {
                 sched: sf,
                 foreign_stmts: proto.sched_foreign.clone(),
@@ -1441,17 +1461,29 @@ fn aot_load(
         let mut execs: Vec<Option<CompiledExec>> =
             (0..specs.len()).map(|_| None).collect();
         for (rep, members) in classes {
-            let ef = lib
-                .get::<unsafe extern "C" fn(
-                    *mut u64,
-                    *mut core::ffi::c_void,
-                    u64,
-                    u64,
-                ) -> i32>(
-                    format!("exec_{}\0", specs[*rep].label).as_bytes(),
-                )
-                .map(|f| *f)
-                .unwrap_or(missing_exec);
+            let ef = match exec_tab {
+                Some(t) if t[*rep] != 0 => std::mem::transmute::<
+                    usize,
+                    unsafe extern "C" fn(
+                        *mut u64,
+                        *mut core::ffi::c_void,
+                        u64,
+                        u64,
+                    ) -> i32,
+                >(t[*rep]),
+                Some(_) => missing_exec,
+                None => lib
+                    .get::<unsafe extern "C" fn(
+                        *mut u64,
+                        *mut core::ffi::c_void,
+                        u64,
+                        u64,
+                    ) -> i32>(
+                        format!("exec_{}\0", specs[*rep].label).as_bytes(),
+                    )
+                    .map(|f| *f)
+                    .unwrap_or(missing_exec),
+            };
             for &m in members {
                 execs[m] = Some(CompiledExec {
                     exec: ef,
@@ -1467,12 +1499,18 @@ fn aot_load(
         // fused edge fns (absent in pre-fusion artifacts: rev-gated)
         let mut fused = Vec::with_capacity(ncomps);
         for k in 0..ncomps {
-            let ef: libloading::Symbol<
-                unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64) -> i32,
-            > = lib
-                .get(format!("edge_c{k}\0").as_bytes())
-                .map_err(|e| e.to_string())?;
-            fused.push(*ef as usize);
+            let ef = match edge_tab {
+                Some(t) if t[k] != 0 => t[k],
+                Some(_) => return Err(format!("edge_c{k}: null table entry")),
+                None => *lib
+                    .get::<unsafe extern "C" fn(
+                        *mut u64,
+                        *mut core::ffi::c_void,
+                        u64,
+                    ) -> i32>(format!("edge_c{k}\0").as_bytes())
+                    .map_err(|e| e.to_string())? as usize,
+            };
+            fused.push(ef);
         }
         // stdio-flush + direct-BDPI callee globals (all optional:
         // absent in old or BDPI-free artifacts)

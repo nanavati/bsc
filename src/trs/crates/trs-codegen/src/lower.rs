@@ -690,6 +690,42 @@ pub fn compile_design_object(
             let _ = lower_fused(&ctx, &module, fused);
         }
     }
+    // ordinal-indexed fn tables: without them the loader dlsyms ~one
+    // symbol per rule (ms-scale on rule-heavy designs).  Null entry =
+    // symbol elided (edge-SSA covered scheds, non-rep exec members) —
+    // the loader stubs or skips those.  Chunked artifacts carry no
+    // tables (functions span objects) and keep the per-symbol path.
+    {
+        let ptrt = ctx.ptr_type(AddressSpace::default());
+        let i64t = ctx.i64_type();
+        let fnptr = |name: String| {
+            module
+                .get_function(&name)
+                .map(|f| f.as_global_value().as_pointer_value())
+                .unwrap_or_else(|| ptrt.const_null())
+        };
+        let scheds: Vec<_> = specs
+            .iter()
+            .map(|sp| fnptr(format!("sched_{}", sp.label)))
+            .collect();
+        let execs: Vec<_> = specs
+            .iter()
+            .map(|sp| fnptr(format!("exec_{}", sp.label)))
+            .collect();
+        let edges: Vec<_> =
+            (0..fused.len()).map(|k| fnptr(format!("edge_c{k}"))).collect();
+        for (name, vals) in [
+            ("trs_sched_tab", scheds),
+            ("trs_exec_tab", execs),
+            ("trs_edge_tab", edges),
+        ] {
+            let arr = ptrt.const_array(&vals);
+            let g = module.add_global(arr.get_type(), None, name);
+            g.set_initializer(&arr);
+            let l = module.add_global(i64t, None, &format!("{name}_len"));
+            l.set_initializer(&i64t.const_int(vals.len() as u64, false));
+        }
+    }
     let timing = std::env::var_os("TRS_JIT_TIME").is_some();
     if timing {
         eprintln!("trs aot: lowering {:?}", t_low.elapsed());
