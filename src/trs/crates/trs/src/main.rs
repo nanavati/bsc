@@ -614,6 +614,19 @@ fn main() -> ExitCode {
                     &script_cmds,
                 );
             }
+            // single-file UX: `trs run design.so` — the artifact
+            // carries its design, so the .so IS the runnable unit;
+            // the derived .bir name stays only as the fallback path
+            // for pre-snap artifacts
+            let so_direct;
+            let (path, code_so): (&str, Option<String>) =
+                if path.ends_with(".so") && code_so.is_none() {
+                    so_direct =
+                        path.strip_suffix(".so").unwrap().to_string() + ".bir";
+                    (so_direct.as_str(), Some(path.to_string()))
+                } else {
+                    (path as &str, code_so)
+                };
             match trs_interp::run_file(
                 path,
                 max_cycles,
