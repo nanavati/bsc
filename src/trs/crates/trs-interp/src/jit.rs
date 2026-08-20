@@ -98,19 +98,26 @@ pub(crate) unsafe extern "C" fn jit_prim_cb(
     };
     let (inst, method, ret_width, is_action) =
         (pc.inst, pc.method, pc.ret_width, pc.is_action);
-    let arg_widths = pc.arg_widths.clone();
-    let mut argv = Vec::with_capacity(arg_widths.len());
+    // pc borrows the OWNED Arc clone, so it outlives every interp use
+    // below — no arg_widths copy needed (this trampoline runs per
+    // boxed prim access; a Vec clone + a Vec per argument showed as
+    // the malloc traffic under TrafficBRAM's 403k calls)
+    let mut argv = Vec::with_capacity(pc.arg_widths.len());
     let mut off = 0usize;
-    for &w in &arg_widths {
+    for &w in &pc.arg_widths {
         // physical layout is w.max(1) words per argument on BOTH sides
         // of the ABI — a zero-width argument still occupies one (zero)
         // word (review finding: reading words.max(1) while advancing by
         // the logical count walked past the allocation)
         let words = ((w.max(1) as usize) + 63) / 64;
-        let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
         // TRUE logical width: a zero-width prim arg must reach the prim
-        // as the interp's width-0 Value (from_limbs64 masks the word)
-        argv.push(Value::from_limbs64(w, limbs));
+        // as the interp's width-0 Value (both constructors mask)
+        argv.push(if (1..=64).contains(&w) {
+            Value::from_u64(w, *args.add(off))
+        } else {
+            let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
+            Value::from_limbs64(w, limbs)
+        });
         off += words;
     }
     crate::prim::FROM_COMPILED.with(|c| c.set(token));
