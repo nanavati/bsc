@@ -2707,13 +2707,13 @@ impl Interp {
         }
         for d in &m.defs {
             let is_string = d.width == 0
-                || matches!(d.expr, Expr::Str(_))
-                || matches!(&d.expr, Expr::Prim { op: ir::PrimOp::StringConcat, .. });
+                || matches!(*d.expr, Expr::Str(_))
+                || matches!(&*d.expr, Expr::Prim { op: ir::PrimOp::StringConcat, .. });
             if is_string {
                 continue;
             }
             let n_fns = usage.get(&d.name).map(|s| s.len()).unwrap_or(0);
-            let is_task = matches!(d.expr, Expr::TaskValue { .. });
+            let is_task = matches!(*d.expr, Expr::TaskValue { .. });
             // -keep-fires pins CAN_FIRE/WILL_FIRE defs (cfwfOkToMove)
             let pinned_fire =
                 self.d.keep_fires && (d.props.can_fire || d.props.will_fire);
@@ -3243,7 +3243,7 @@ impl Interp {
         };
         let r = self.d.modules[mir].rules[ri].clone();
         let mut ctx = Ctx::default();
-        for st in &r.body {
+        for st in r.body.iter() {
             self.exec_stmt(inst, &mut ctx, st);
         }
     }

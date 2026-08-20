@@ -2002,7 +2002,7 @@ impl Interp {
                     let mir = inst_envs[&inst].mir;
                     let body = self.d.modules[mir].rules[ridx].body.clone();
                     let mut c = Cone::default();
-                    for st in &body {
+                    for st in body.iter() {
                         walk_stmt_defs(&mut cx, inst, st, &mut c);
                     }
                     Some((c, o))
@@ -2334,7 +2334,7 @@ impl Interp {
             let mir = inst_envs[&inst].mir;
             let body = self.d.modules[mir].rules[ridx].body.clone();
             let mut c = Cone::default();
-            for st in &body {
+            for st in body.iter() {
                 walk_stmt_defs(&mut cx, inst, st, &mut c);
             }
             for &(di, dn) in &c.defs {
@@ -3191,7 +3191,7 @@ impl Interp {
                     let Some(dd) = defs.iter().find(|dd| dd.name == cur) else {
                         return false;
                     };
-                    match &dd.expr {
+                    match &*dd.expr {
                         trs_ir::Expr::Const { limbs, .. } => {
                             return limbs.iter().any(|&l| l != 0)
                         }
@@ -3326,7 +3326,7 @@ impl Interp {
                 for r in &m.rules {
                     let mut seen: std::collections::HashSet<StrId> = Default::default();
                     let mut work: Vec<StrId> = vec![r.can_fire, r.will_fire];
-                    for st in &r.body {
+                    for st in r.body.iter() {
                         match st {
                             trs_ir::Stmt::Def { expr, .. } => refs(expr, &mut work),
                             trs_ir::Stmt::Action(a)
