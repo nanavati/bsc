@@ -941,6 +941,7 @@ fn aot_emit(
     bir_hash: u64,
     bir_hash_raw: u64,
     plan_a: &[u8],
+    plan_b: &[u8],
     edge_plan: Option<&trs_codegen::abi::EdgeSsaPlan>,
     bdpi_names: &[String],
 ) -> Result<(), EmitFail> {
@@ -1060,6 +1061,7 @@ fn aot_emit(
             bdpi_names,
             &d.snap_encode(bir_hash).unwrap_or_default(),
             plan_a,
+            plan_b,
         )
         .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
         let mf = tmp.join("meta.o");
@@ -1246,6 +1248,7 @@ fn aot_emit(
         bdpi_names,
         &d.snap_encode(bir_hash).unwrap_or_default(),
         plan_a,
+        plan_b,
     )
     .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
     let mf = tmp.join("meta.o");
@@ -1307,6 +1310,88 @@ pub(crate) fn aot_plan_a(
 
 fn plan_a_version(p: &crate::PlanA) -> u32 {
     p.version
+}
+
+/// The expensive-to-derive fraction of jit_plan, baked into artifacts
+/// as trs_plan_b: per-ordinal always-fire bits (deriving them walks
+/// WILL_FIRE def aliases and forces lazy expr decodes) and the exec
+/// dedup classes (deriving them hashes every instance's slot layout).
+/// The specs themselves re-derive at load — measured, that's plain
+/// compute, and shipping them costs more in decode allocations than
+/// the derivation.  Slot-layout consumers depend on trace mode
+/// (recording slots shift the layout), so unlike PlanA this gates on
+/// the SALTED hash — the same expression aot_load checks — plus the
+/// layout rev and the blob version.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct PlanB {
+    version: u32,
+    always_fire: Vec<u8>,
+    class_rep: Vec<u64>,
+    class_members: Vec<u64>,
+    class_off: Vec<u32>,
+}
+
+pub(crate) const PLAN_B_VERSION: u32 = 3;
+
+pub(crate) fn plan_b_encode(
+    specs: &[RuleSpec],
+    classes: &[(usize, Vec<usize>)],
+) -> Vec<u8> {
+    let mut class_members = Vec::new();
+    let mut class_off = vec![0u32];
+    for (_, m) in classes {
+        class_members.extend(m.iter().map(|&x| x as u64));
+        class_off.push(class_members.len() as u32);
+    }
+    let wire = PlanB {
+        version: PLAN_B_VERSION,
+        always_fire: specs.iter().map(|s| s.always_fire as u8).collect(),
+        class_rep: classes.iter().map(|(r, _)| *r as u64).collect(),
+        class_members,
+        class_off,
+    };
+    bincode::serialize(&wire).unwrap_or_default()
+}
+
+pub(crate) fn aot_plan_b(
+    src: &ArtifactSource,
+    expected_salted: u64,
+) -> Option<(Vec<u8>, Vec<(usize, Vec<usize>)>)> {
+    let wire: PlanB = unsafe {
+        let lib = src.open().ok()?;
+        let h: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash").ok()?;
+        if **h != expected_salted {
+            return None;
+        }
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_plan_b_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let r: libloading::Symbol<*const u64> = lib.get(b"trs_layout_rev").ok()?;
+        if **r != trs_codegen::abi::AOT_LAYOUT_REV {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_plan_b").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        bincode::deserialize(bytes).ok()?
+    };
+    if wire.version != PLAN_B_VERSION {
+        return None;
+    }
+    let classes: Vec<(usize, Vec<usize>)> = (0..wire.class_rep.len())
+        .map(|c| {
+            (
+                wire.class_rep[c] as usize,
+                wire.class_members
+                    [wire.class_off[c] as usize..wire.class_off[c + 1] as usize]
+                    .iter()
+                    .map(|&x| x as usize)
+                    .collect(),
+            )
+        })
+        .collect();
+    Some((wire.always_fire, classes))
 }
 
 /// Full-AOT load: the design snapshot embedded in the artifact
@@ -3030,14 +3115,40 @@ impl Interp {
         }
 
         sl.lap("plan passB (slot alloc + inst envs)");
+        // baked always-fire bits + dedup classes first (Load
+        // requests): skip the WILL_FIRE alias walks (they force lazy
+        // expr decodes) and the class derivation below.  Gated on the
+        // salted hash, so everything here is exactly what derivation
+        // would produce (same design, same trace mode, same layout
+        // rev) — the in-process-compile fallback stays consistent if
+        // aot_load fails later.
+        let mut baked: Option<(Vec<u8>, Vec<(usize, Vec<usize>)>)> = None;
+        if let JitRequest::Load { src } = &request {
+            let mut psl = crate::startup::StartupLap::new();
+            baked = aot_plan_b(
+                src,
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+            );
+            if baked.is_some() {
+                psl.lap("plan-b (baked decode)");
+            }
+        }
+        let (baked_af, baked_classes) = match baked {
+            Some((a, c)) => (Some(a), Some(c)),
+            None => (None, None),
+        };
         // ---- per-instance subtree signatures (exec dedup classes) ----
         // Two instances share compiled exec bodies iff their signatures
         // match.  The sig must cover EVERY input the exec lowering
         // reads: module IR id, region-relative slot layout (all maps),
         // absolute reset-node slots, and the user children recursively.
         // (Stage-2a made twin IR raw-identical; the sweep + twin test
-        // referee this invariant.)
-        let inst_sig: HashMap<usize, u64> = {
+        // referee this invariant.)  Consumed by the class derivation
+        // (skipped when classes are baked) and by helper symbol names
+        // (only when outlining selected pieces).
+        let inst_sig: HashMap<usize, u64> = if baked_classes.is_none()
+            || !outlined_sel.is_empty()
+        {
             use std::hash::{Hash, Hasher};
             let mut sigs: HashMap<usize, u64> = HashMap::new();
             for &i in dfs_order.iter().rev() {
@@ -3162,6 +3273,8 @@ impl Interp {
                 sigs.insert(i, h.finish());
             }
             sigs
+        } else {
+            HashMap::new()
         };
 
         // any Exec node of a RULE must belong to a scheduled rule
@@ -3232,29 +3345,32 @@ impl Interp {
             // into the WF def EXPRESSION (WF_a = CF_a && !WF_b), never
             // into me_inhibits — a const-true CAN_FIRE says nothing
             // (sysEspositoPreempt/sysRegFileVector regression).
-            let didx = &*def_idx.entry(mir).or_insert_with(|| {
-                let defs = &self.d.modules[mir].defs;
-                defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
-            });
-            let const_true = |name: StrId| -> bool {
-                let defs = &self.d.modules[mir].defs;
-                let mut cur = name;
-                for _ in 0..32 {
-                    let Some(dd) = didx.get(&cur).map(|&i| &defs[i]) else {
-                        return false;
-                    };
-                    match &*dd.expr {
-                        trs_ir::Expr::Const { limbs, .. } => {
-                            return limbs.iter().any(|&l| l != 0)
+            let always_fire = if let Some(af) = &baked_af {
+                af.get(ri.ordinal).is_some_and(|&b| b != 0)
+            } else {
+                let didx = &*def_idx.entry(mir).or_insert_with(|| {
+                    let defs = &self.d.modules[mir].defs;
+                    defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
+                });
+                let const_true = |name: StrId| -> bool {
+                    let defs = &self.d.modules[mir].defs;
+                    let mut cur = name;
+                    for _ in 0..32 {
+                        let Some(dd) = didx.get(&cur).map(|&i| &defs[i]) else {
+                            return false;
+                        };
+                        match &*dd.expr {
+                            trs_ir::Expr::Const { limbs, .. } => {
+                                return limbs.iter().any(|&l| l != 0)
+                            }
+                            trs_ir::Expr::Def(n) => cur = *n,
+                            _ => return false,
                         }
-                        trs_ir::Expr::Def(n) => cur = *n,
-                        _ => return false,
                     }
-                }
-                false
+                    false
+                };
+                inhibit_slots.is_empty() && const_true(rr.will_fire)
             };
-            let always_fire =
-                inhibit_slots.is_empty() && const_true(rr.will_fire);
             specs.push(RuleSpec {
                 always_fire,
                 inst: ri.inst,
@@ -3436,8 +3552,8 @@ impl Interp {
 
         sl.lap("plan specs");
         // ---- exec dedup classes: one compiled body per class ----
-        let mut classes: Vec<(usize, Vec<usize>)> = Vec::new();
-        {
+        let mut classes: Vec<(usize, Vec<usize>)> = baked_classes.unwrap_or_default();
+        if classes.is_empty() {
             let mut key_to_class: HashMap<(u64, usize, Vec<(bool, u32)>), usize> =
                 HashMap::new();
             // per-INSTANCE memo: rebuilding the own-slot set per spec was
@@ -3707,6 +3823,9 @@ impl Interp {
                     }
                     plan
                 });
+            // bake what this emit derived: a Load of the artifact
+            // decodes these instead of re-deriving (see PlanB)
+            let plan_b_bytes = plan_b_encode(&specs, &classes);
             self.jit_emit_result = Some(
                 match aot_emit(
                     &self.d,
@@ -3728,6 +3847,7 @@ impl Interp {
                 self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
                     self.bir_hash,
                     self.plan_a_bytes.as_deref().unwrap_or(&[]),
+                    &plan_b_bytes,
                     edge_plan.as_ref(),
                     &{
                         let mut v: Vec<String> = self

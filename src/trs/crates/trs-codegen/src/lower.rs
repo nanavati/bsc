@@ -491,6 +491,7 @@ pub fn compile_meta_object(
     bdpi_names: &[String],
     snap: &[u8],
     plan_a: &[u8],
+    plan_b: &[u8],
 ) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let module = ctx.create_module("trs_meta");
@@ -550,6 +551,14 @@ pub fn compile_meta_object(
     let aarr = ctx.const_string(plan_a, false);
     let ag = module.add_global(aarr.get_type(), None, "trs_plan_a");
     ag.set_initializer(&aarr);
+    // jit_plan's derived specs + dedup classes (see trs-interp PlanB):
+    // slot numbers depend on trace mode, so the loader gates this on
+    // the SALTED hash (trs_bir_hash), unlike the snap and PlanA
+    let bl = module.add_global(i64t, None, "trs_plan_b_len");
+    bl.set_initializer(&i64t.const_int(plan_b.len() as u64, false));
+    let barr = ctx.const_string(plan_b, false);
+    let bg = module.add_global(barr.get_type(), None, "trs_plan_b");
+    bg.set_initializer(&barr);
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)

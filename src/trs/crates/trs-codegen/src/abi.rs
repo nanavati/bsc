@@ -199,7 +199,7 @@ pub struct PlanEnv<'a> {
     pub insts: &'a HashMap<usize, InstEnv>,
 }
 /// One rule to compile.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuleSpec {
     /// owning instance (key into PlanEnv::insts)
     pub inst: usize,
