@@ -14,13 +14,22 @@
 ## Fairness ground rules
 
 - Every leg runs SINGLE-THREADED.
+- Every leg's generated code compiles `-O3`: Bluesim ships `c++ -O3`;
+  Verilator's packaged `verilated.mk` defaults `OPT_FAST`/`OPT_GLOBAL`
+  to `-Os`, which measured 34% slower on the dispatch floor (mkLong),
+  so the harness raises both to `-O3`; trs AOT uses its own shipped
+  LLVM pipeline.  Build seconds are reported, so the compile cost of
+  `-O3` stays visible.
 - Verilator runs with NO timing flags (per Ravi: `--timing` has known
   issues, and `--no-timing` would silently ignore stray delays).
-  Instead: `BSV_ASSIGNMENT_DELAY` is \`define'd away, bsc's literal
-  `#0;` system-task ordering guards are stripped (inert under the C++
-  driver — the negedge instant is a plain eval long after posedge
-  NBAs settle), and a generic C++ driver toggles CLK/RST_N on the bsc
-  top, so all three legs simulate the same closed testbench module.
+  Instead: bsc emits its delays behind `BSV_ASSIGNMENT_DELAY` and
+  `BSV_TASKS_DELAY` (the 0-tick system-task ordering guard), both
+  \`define'd empty on this leg — the guard is inert under the C++
+  driver anyway (the negedge instant is a plain eval long after
+  posedge NBAs settle) — and a generic C++ driver toggles CLK/RST_N
+  on the bsc top, so all three legs simulate the same closed
+  testbench module.  A literal-`#0;` strip survives only as a
+  fallback for benchmarking bsc revisions that predate the macro.
   Anything else timing-shaped errors loudly for explicit handling.
 - Designs terminate themselves (`$finish`): identical workload per
   leg, no `-m` games.

@@ -242,6 +242,13 @@ def bench_one(d, legs, runs, work):
                        "+define+BSV_ASSIGNMENT_DELAY=",
                        "+define+BSV_TASKS_DELAY=",
                        "+define+BSV_ZERO_DELAY=",  # transitional name, harmless if unused
+                       # every leg's generated C++ builds -O3: Bluesim
+                       # ships c++ -O3, but Verilator's packaged
+                       # verilated.mk defaults OPT_FAST/OPT_GLOBAL to
+                       # -Os — a size-optimized eval loop measured 34%
+                       # slower on the dispatch floor (mkLong)
+                       "-MAKEFLAGS", "OPT_FAST=-O3",
+                       "-MAKEFLAGS", "OPT_GLOBAL=-O3",
                        "-O3", "-Wno-fatal",
                        "--x-assign", "fast", "--x-initial", "fast",
                        "-y", os.path.abspath(vdir),
