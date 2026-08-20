@@ -69,6 +69,14 @@ pub trait Prim {
     fn sym_read_range(&mut self, _key: &str, _addr: u64, _now: u64) -> Option<Value> {
         None
     }
+    /// OCCUPIED addresses of a sparse SYM_RANGE (oracle compare):
+    /// Some(keys) tells the state walk to compare only these instead
+    /// of iterating lo..=hi — a dense walk over RegFile#(UInt#(42)) is
+    /// 4.4e12 reads per checkpoint (sysSparseRF hung the suite).
+    /// None = dense storage, the lo..=hi walk is fine.
+    fn sym_range_keys(&mut self, _key: &str) -> Option<Vec<u64>> {
+        None
+    }
     /// Value-method call (pure read).
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value;
     /// Action-method call (mutates).
@@ -1220,6 +1228,16 @@ impl Prim for RegFile {
                 .cloned()
                 .unwrap_or_else(|| Value::undet(self.width.max(1))),
         )
+    }
+    fn sym_range_keys(&mut self, key: &str) -> Option<Vec<u64>> {
+        // boxed regfiles store sparsely; arena-backed ones are dense
+        // and small by construction (the arena gate) — dense walk fine
+        if !key.is_empty() || self.slot.is_some() {
+            return None;
+        }
+        let mut ks: Vec<u64> = self.data.keys().copied().collect();
+        ks.sort_unstable();
+        Some(ks)
     }
     fn value_method(&mut self, method: &str, args: &[Value], now: u64) -> Value {
         match method {

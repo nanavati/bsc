@@ -5212,7 +5212,28 @@ impl Interp {
                         }
                     }
                     Some((lo, hi)) => {
-                        for addr in lo..=hi {
+                        // sparse ranges compare by OCCUPIED keys (the
+                        // union of both engines' sets — a key written
+                        // in one engine only reads undet in the other
+                        // and flags); a dense lo..=hi walk over a
+                        // RegFile#(UInt#(42)) is 4.4e12 reads per
+                        // checkpoint (sysSparseRF hung the suite)
+                        let ka = self.prim_sym_range_keys(i, ps.key);
+                        let kb = other.prim_sym_range_keys(i, ps.key);
+                        let keys: Option<Vec<u64>> = match (ka, kb) {
+                            (None, None) => None,
+                            (a, b) => {
+                                let mut u: Vec<u64> = a
+                                    .into_iter()
+                                    .flatten()
+                                    .chain(b.into_iter().flatten())
+                                    .collect();
+                                u.sort_unstable();
+                                u.dedup();
+                                Some(u)
+                            }
+                        };
+                        let mut cmp = |addr: u64, out: &mut Vec<String>| {
                             let a = self.prim_sym_read_range(i, ps.key, addr);
                             let b = other.prim_sym_read_range(i, ps.key, addr);
                             if a != b {
@@ -5222,8 +5243,23 @@ impl Interp {
                                     fmt(&b),
                                     fmt(&a)
                                 ));
-                                if out.len() >= max {
-                                    break;
+                            }
+                        };
+                        match keys {
+                            Some(ks) => {
+                                for addr in ks {
+                                    cmp(addr, &mut out);
+                                    if out.len() >= max {
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {
+                                for addr in lo..=hi {
+                                    cmp(addr, &mut out);
+                                    if out.len() >= max {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -5251,6 +5287,15 @@ impl Interp {
         let now = self.now;
         match &mut self.insts[i].kind {
             InstKind::Prim(p) => p.sym_read_range(key, addr, now),
+            _ => None,
+        }
+    }
+
+    /// Occupied addresses of a sparse SYM_RANGE (None = dense; walk
+    /// lo..=hi).  See Prim::sym_range_keys.
+    pub fn prim_sym_range_keys(&mut self, i: usize, key: &str) -> Option<Vec<u64>> {
+        match &mut self.insts[i].kind {
+            InstKind::Prim(p) => p.sym_range_keys(key),
             _ => None,
         }
     }
