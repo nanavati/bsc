@@ -57,10 +57,14 @@ POOL = [
     # FP pipeline dataflow (PAClib DFT, 64-pt): FIFOs + FP mul/add
     dict(name="DFT64v1", dir="testsuite/bsc.lib/PAClib/dft64/bsv",
          src="Tb_v1.bsv", top="sysTb_v1", cycles=None,
-         character="FP dataflow pipeline, FIFO-heavy"),
+         character="FP dataflow pipeline, FIFO-heavy",
+         vl_out_exempt="prints %t (always 0 untimed) and BDPI printf "
+                       "interleaves differently with $display"),
     dict(name="DFT64v5", dir="testsuite/bsc.lib/PAClib/dft64/bsv",
          src="Tb_v5.bsv", top="sysTb_v5", cycles=None,
-         character="FP dataflow, deeper variant"),
+         character="FP dataflow, deeper variant",
+         vl_out_exempt="prints %t (always 0 untimed) and BDPI printf "
+                       "interleaves differently with $display"),
     # FP arithmetic battery (add/mul/div/sqrt corner cases)
     dict(name="FloatTest", dir="testsuite/bsc.lib/FloatingPoint",
          src="FloatTest.bsv", top="sysFloatTest", cycles=None,
@@ -269,6 +273,15 @@ def bench_one(d, legs, runs, work):
                         open(pv, "w").write(txt2)
             with open(os.path.join(wk, "bench_main.cpp"), "w") as f:
                 f.write(VL_MAIN.replace("%TOP%", top))
+            # Verilator's makefile compiles user .c with $(CXX), which
+            # mangles the symbols the DPI imports expect unmangled —
+            # wrap each user C file in an extern "C" include shim
+            vl_cfiles = []
+            for i, cf in enumerate(cfiles):
+                shim = f"bench_dpi_{i}.cpp"
+                with open(os.path.join(wk, shim), "w") as f:
+                    f.write('extern "C" {\n#include "%s"\n}\n' % cf)
+                vl_cfiles.append(shim)
             vdir = os.path.join(os.path.dirname(shutil.which(BSC) or BSC),
                                 "..", "lib", "Verilog")
             # no timing flags at all (per Ravi: --timing has known
@@ -290,7 +303,7 @@ def bench_one(d, legs, runs, work):
                        "-O3", "-Wno-fatal",
                        "--x-assign", "fast", "--x-initial", "fast",
                        "-y", os.path.abspath(vdir),
-                       top + ".v", "bench_main.cpp"] + cfiles + ["-o", "simv"], wk)
+                       top + ".v", "bench_main.cpp"] + vl_cfiles + ["-o", "simv"], wk)
             if r.returncode != 0:
                 L["error"] = "verilator: " + _err(r)
                 res["legs"][leg] = L
@@ -318,7 +331,7 @@ def bench_one(d, legs, runs, work):
             if not re.match(r"^- .*Verilog \$finish", l)
         ).strip()
     outs = {k: norm(v) for k, v in outputs.items()}
-    if d.get("random"):
+    if d.get("random") or d.get("vl_out_exempt"):
         outs.pop("verilator", None)
     # Verilator's $finish sets a flag but finishes evaluating the
     # instant, so sibling always-blocks may print same-instant lines
