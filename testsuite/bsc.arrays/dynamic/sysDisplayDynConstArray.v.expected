@@ -16,9 +16,9 @@
   `define BSV_ASSIGNMENT_DELAY
 `endif
 
-`ifdef BSV_ZERO_DELAY
+`ifdef BSV_TASKS_DELAY
 `else
-  `define BSV_ZERO_DELAY #0
+  `define BSV_TASKS_DELAY #0
 `endif
 
 `ifdef BSV_POSITIVE_RESET
@@ -105,7 +105,7 @@ module sysDisplayDynConstArray(CLK,
   // synopsys translate_off
   always@(negedge CLK)
   begin
-    `BSV_ZERO_DELAY;
+    `BSV_TASKS_DELAY;
     if (RST_N != `BSV_RESET_VALUE)
       $display(CASE_idx_0_IF_c_THEN_1_ELSE_4_1_IF_c_THEN_2_EL_ETC__q1);
   end

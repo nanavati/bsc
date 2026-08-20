@@ -209,7 +209,7 @@ def bench_one(d, legs, runs, work):
                 continue
             L["frontend_s"] = round(t, 2)
             # bsc >= this tree emits the system-task blocks' 0-tick
-            # ordering guard as `BSV_ZERO_DELAY (defined away below);
+            # ordering guard as `BSV_TASKS_DELAY (defined away below);
             # the strip stays as a fallback for benchmarking OLDER bsc
             # revisions, whose literal `#0;` predates the macro.  It is
             # inert under the C++ driver either way (the negedge
@@ -232,7 +232,9 @@ def bench_one(d, legs, runs, work):
             # timing-shaped errors loudly for explicit handling
             r, t = sh(["verilator", "--cc", "--exe", "--build", "-j", "4",
                        "+define+BSV_ASSIGNMENT_DELAY=",
-                       "+define+BSV_ZERO_DELAY=", "-O3", "-Wno-fatal",
+                       "+define+BSV_TASKS_DELAY=",
+                       "+define+BSV_ZERO_DELAY=",  # transitional name, harmless if unused
+                       "-O3", "-Wno-fatal",
                        "--x-assign", "fast", "--x-initial", "fast",
                        "-y", os.path.abspath(vdir),
                        top + ".v", "bench_main.cpp", "-o", "simv"], wk)

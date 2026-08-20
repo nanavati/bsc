@@ -16,9 +16,9 @@
   `define BSV_ASSIGNMENT_DELAY
 `endif
 
-`ifdef BSV_ZERO_DELAY
+`ifdef BSV_TASKS_DELAY
 `else
-  `define BSV_ZERO_DELAY #0
+  `define BSV_TASKS_DELAY #0
 `endif
 
 `ifdef BSV_POSITIVE_RESET
@@ -104,7 +104,7 @@ module sysUseCondEqNEqCross1(CLK,
   // synopsys translate_off
   always@(negedge CLK)
   begin
-    `BSV_ZERO_DELAY;
+    `BSV_TASKS_DELAY;
     $display(shared__h204);
     if (a == 16'd1)
       $display("Error: \"UseCondEqNEqCross1.bsv\", line 23, column 9: (R0002)\n  Conflict-free rules RL_test2 and RL_test1 called conflicting methods read\n  and write of module instance source1.\n");

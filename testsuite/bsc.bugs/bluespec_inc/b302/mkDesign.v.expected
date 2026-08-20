@@ -20,9 +20,9 @@
   `define BSV_ASSIGNMENT_DELAY
 `endif
 
-`ifdef BSV_ZERO_DELAY
+`ifdef BSV_TASKS_DELAY
 `else
-  `define BSV_ZERO_DELAY #0
+  `define BSV_TASKS_DELAY #0
 `endif
 
 `ifdef BSV_POSITIVE_RESET
