@@ -503,7 +503,7 @@ pub(crate) enum ChildClass {
     Reg,
     CfgReg,
     Wire,
-    Fifo,
+    Fifo { loopy: bool },
     Other,
 }
 
@@ -683,8 +683,11 @@ impl<'a> ConeAnalyzer<'a> {
                                 // schedule certification pending: not stable
                                 (matches!(mname.as_str(), "whas" | "wget"), false)
                             }
-                            ChildClass::Fifo => match mname.as_str() {
-                                "i_notFull" | "i_notEmpty" => (true, true),
+                            ChildClass::Fifo { loopy } => match mname.as_str() {
+                                // loopy i_* read LIVE elems — a
+                                // same-instant deq changes them, so
+                                // they never certify as stable
+                                "i_notFull" | "i_notEmpty" => (true, !loopy),
                                 "first" | "notFull" | "notEmpty" => (true, false),
                                 _ => (false, false),
                             },
@@ -2324,7 +2327,7 @@ impl Interp {
                         Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
                         Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
                         Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
-                        Some(ArenaKind::Fifo { .. }) => ChildClass::Fifo,
+                        Some(ArenaKind::Fifo { loopy, .. }) => ChildClass::Fifo { loopy },
                         // arena-backed but NO stability contract and
                         // reads can WARN (bounds): the split analyzer
                         // treats it like an opaque prim
@@ -2457,10 +2460,10 @@ impl Interp {
                         creg_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
-                    Some(ArenaKind::Fifo { width, size, guard }) => {
+                    Some(ArenaKind::Fifo { width, size, guard, loopy }) => {
                         let words = width.max(1).div_ceil(64);
                         let base = alloc(&mut nslots, 7 + size * words);
-                        fifo_slot.insert(name, (base, width, size, guard));
+                        fifo_slot.insert(name, (base, width, size, guard, loopy));
                         attach.push((ci, base));
                     }
                     Some(ArenaKind::RegFile { width, lo, hi }) => {
@@ -2753,7 +2756,7 @@ impl Interp {
                 let mut m4: Vec<_> = e
                     .fifo_slot
                     .iter()
-                    .map(|(&k, &(b, w, sz, g))| (k, b - r0, w, sz, g))
+                    .map(|(&k, &(b, w, sz, g, lp))| (k, b - r0, w, sz, g, lp))
                     .collect();
                 m4.sort_unstable();
                 m4.hash(&mut h);
