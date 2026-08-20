@@ -33,6 +33,9 @@ fn main() -> ExitCode {
         // (the testsuite probes for "jit" to decide whether link-artifact
         // checks are supported)
         ["features"] => {
+            if cfg!(feature = "aot") {
+                println!("aot");
+            }
             if cfg!(feature = "jit") {
                 println!("jit");
             }
