@@ -1322,7 +1322,12 @@ pub extern "C" fn bk_set_waveform_format(
     if !vcd_capable(st) {
         return BK_ERROR;
     }
-    st.primary().wave_set_format(fmt);
+    // -dump-formats gate: the refusal (reference's exact stderr error,
+    // sim continues) must reach bluetcl as BK_ERROR — simWaveform only
+    // enables dumping on OK
+    if !st.primary().wave_set_format(fmt) {
+        return BK_ERROR;
+    }
     BK_SUCCESS
 }
 
