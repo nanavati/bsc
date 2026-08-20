@@ -2591,6 +2591,29 @@ impl Fifo {
         h[5] = self.clear_at;
         h[6] = self.suppress as u64;
     }
+    /// Header-only arena refresh: occupancy and head without paying
+    /// for the data mirror.  The oracle keys ("live"/"elems") read one
+    /// element per call — a full refresh there is O(size) per element
+    /// and turned deep-FIFO state compares quadratic (mkTestbench_TagRam:
+    /// 0.03s plain, 120s+ under selfcheck).
+    fn refresh_meta(&mut self) {
+        let Some(slot) = self.slot else { return };
+        let h = unsafe { std::slice::from_raw_parts(slot, 7) };
+        self.elems = h[0] as usize;
+        self.saved_elems = h[1] as usize;
+        self.fst = h[2] as usize;
+        self.enq_at = h[3];
+        self.deq_at = h[4];
+        self.clear_at = h[5];
+    }
+    /// One live element straight from the arena, skipping the O(size)
+    /// data mirror.  None when the prim is boxed (no slot).
+    fn arena_elem(&self, idx: usize) -> Option<Value> {
+        let slot = self.slot?;
+        let w = self.arena_words();
+        let h = unsafe { std::slice::from_raw_parts(slot.add(7 + idx * w), w) };
+        Some(Value::from_limbs64(self.width.max(1), h.to_vec()))
+    }
     /// Arena-authoritative refresh: compiled INLINE enq/deq update the
     /// slots directly; boxed ops re-read them first.
     fn refresh(&mut self) {
@@ -2666,7 +2689,7 @@ impl Prim for Fifo {
             "level" => Some(Value::from_u64(32, self.size as u64)),
             // oracle-only: the real occupancy (arena is authority)
             "elems" => {
-                self.refresh();
+                self.refresh_meta();
                 Some(Value::from_u64(32, self.elems as u64))
             }
             _ => None,
@@ -2680,22 +2703,24 @@ impl Prim for Fifo {
             if addr as usize >= self.size {
                 return None;
             }
-            self.refresh();
+            self.refresh_meta();
             if addr as usize >= self.elems {
                 return None;
             }
             let i = (self.fst + addr as usize) % self.size;
-            // normalize the width: arena refresh reconstructs entries
-            // at width.max(1) while boxed entries keep the enq'd width
+            // normalize the width: arena entries reconstruct at
+            // width.max(1) while boxed entries keep the enq'd width
             // (0 for zero-width fifos) — same bits, unequal Values
             // (sysZeroFIFOParamTest phantom divergence)
-            return Some(
-                self.data
+            return Some(match self.arena_elem(i) {
+                Some(v) => v,
+                None => self
+                    .data
                     .get(i)
                     .cloned()
                     .unwrap_or_else(|| Value::zero(self.width.max(1)))
                     .zext(self.width.max(1)),
-            );
+            });
         }
         if !key.is_empty() || addr as usize >= self.size {
             return None;
