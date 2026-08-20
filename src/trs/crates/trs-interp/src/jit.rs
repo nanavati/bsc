@@ -1333,7 +1333,7 @@ pub(crate) fn aot_embedded_design(
         }
         let s: libloading::Symbol<*const u8> = lib.get(b"trs_snap").ok()?;
         let bytes = std::slice::from_raw_parts(*s, len);
-        let d = trs_ir::Design::snap_decode(bytes, hash)?;
+        let d = trs_ir::Design::snap_decode_embedded(bytes, hash)?;
         Some((hash, d))
     }
 }

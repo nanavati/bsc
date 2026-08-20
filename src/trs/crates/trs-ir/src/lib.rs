@@ -350,6 +350,25 @@ impl Design {
     /// guards `Design::decode`, so residual misdecode degrades to the
     /// fallback, never a panic.
     pub fn snap_decode(bytes: &[u8], bir_hash: u64) -> Option<Design> {
+        Self::snap_decode_inner(bytes, bir_hash, true)
+    }
+
+    /// `snap_decode` for a snap EMBEDDED in an artifact .so: the
+    /// checksum gate exists to catch torn sidecar writes (fs::write is
+    /// not atomic), but an embedded snap has exactly the integrity of
+    /// the artifact it rides in — whose compiled code we execute
+    /// without a checksum — and artifacts are written temp+rename.
+    /// Skipping the byte-serial fnv pass saves ~25% of the decode
+    /// (3.7ms on an 11MB FloatTest snap).  All other gates still hold.
+    pub fn snap_decode_embedded(bytes: &[u8], bir_hash: u64) -> Option<Design> {
+        Self::snap_decode_inner(bytes, bir_hash, false)
+    }
+
+    fn snap_decode_inner(
+        bytes: &[u8],
+        bir_hash: u64,
+        checksum: bool,
+    ) -> Option<Design> {
         if bytes.len() < SNAP_HEADER || &bytes[..8] != SNAP_MAGIC {
             return None;
         }
@@ -363,7 +382,9 @@ impl Design {
             return None;
         }
         let payload = &bytes[SNAP_HEADER..];
-        if u64::from_le_bytes(bytes[24..32].try_into().ok()?) != fnv1a(payload) {
+        if checksum
+            && u64::from_le_bytes(bytes[24..32].try_into().ok()?) != fnv1a(payload)
+        {
             return None;
         }
         // caller's thread on purpose — see snap_encode's NOTE
