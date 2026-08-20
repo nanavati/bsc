@@ -315,11 +315,14 @@ def one_test(job):
 
     import time as _time
     tb0 = _time.monotonic()
-    # 420s: sysBRAM0Test/sysFloatTest reference builds measure
+    # 420s default: sysBRAM0Test/sysFloatTest reference builds measure
     # 166-256s depending on load and FLAPPED at a 180s ceiling
-    # (LINK_FAIL "unknown" = timeout with empty stderr)
+    # (LINK_FAIL "unknown" = timeout with empty stderr).  The
+    # ConflictFree*Large pair measures 489s cold on a 4-CPU box —
+    # DIFFSWEEP_BUILD_TIMEOUT raises the ceiling for such rechecks.
+    build_limit = int(os.environ.get("DIFFSWEEP_BUILD_TIMEOUT", "420"))
     r = run([BSC, "-sim", "-bir", "-e", top, "-o", "sim.exe"] + common + cfiles,
-            cwd=wk, timeout=420)
+            cwd=wk, timeout=build_limit)
     ref_build_secs = _time.monotonic() - tb0
     if r is None or r.returncode != 0:
         msg = "" if r is None else (r.stderr + r.stdout)
