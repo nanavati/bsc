@@ -241,6 +241,23 @@ pub enum ArenaKind {
     /// (sub of the most-recently-updated address returns upd_prev);
     /// out-of-range accesses stay on the trampoline (warnings).
     RegFile { width: u32, lo: u64, hi: u64 },
+    /// BRAM1/BRAM2 (+BE/Load variants) small enough for a dense image.
+    /// Per-port header (port B present only when `dual`):
+    ///   upd_at, upd_addr, written_at (1 word each),
+    ///   upd_wens (wenw words), upd_val, upd_prev, out, out2 (w words
+    ///   each; w = ceil(max(width,1)/64), wenw = ceil(max(num_wens,1)/64)).
+    /// Then size * w data words (addresses are 0-based).  put() is a
+    /// plain header store; the end-of-edge tick (Bram::clk) latches the
+    /// pending update into data/out with the cross-port same-instant
+    /// bypass — reads return out (out2 when `pipelined`).
+    Bram {
+        width: u32,
+        size: u64,
+        chunk_size: u32,
+        num_wens: u32,
+        dual: bool,
+        pipelined: bool,
+    },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -4954,6 +4971,10 @@ struct Bram {
     data: std::collections::HashMap<u64, Value>,
     a: BramPort,
     b: BramPort,
+    /// arena base when attached (see ArenaKind::Bram): the slots are
+    /// then the single source of truth; `data` and the port structs
+    /// hold only the pre-attach (construction/load-file) image
+    slot: Option<*mut u64>,
     vcd_base: u32,
     vcd_back: Option<(BramVcdBack, BramVcdBack)>,
 }
@@ -4998,6 +5019,7 @@ impl Bram {
             data: Default::default(),
             a: BramPort::new(width),
             b: BramPort::new(width),
+            slot: None,
             vcd_base: 0,
             vcd_back: None,
         };
@@ -5015,6 +5037,103 @@ impl Bram {
         addr_dump_val(a, self.addr_bits)
     }
 
+    // ---- arena layout (see ArenaKind::Bram) ----
+    fn vwords(&self) -> usize {
+        (self.width.max(1) as usize).div_ceil(64)
+    }
+    fn wen_words(&self) -> usize {
+        (self.num_wens.max(1) as usize).div_ceil(64)
+    }
+    fn port_words(&self) -> usize {
+        3 + self.wen_words() + 4 * self.vwords()
+    }
+    fn port_base(&self, port_b: bool) -> usize {
+        if port_b { self.port_words() } else { 0 }
+    }
+    fn data_base(&self) -> usize {
+        self.port_words() * if self.dual { 2 } else { 1 }
+    }
+    fn rd_val(&self, off: usize, width: u32, words: usize) -> Value {
+        let slot = self.slot.unwrap();
+        let src = unsafe { std::slice::from_raw_parts(slot.add(off), words) };
+        Value::from_limbs64(width.max(1), src.to_vec())
+    }
+    fn wr_val(&self, off: usize, v: &Value, words: usize) {
+        let slot = self.slot.unwrap();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot.add(off), words) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
+    /// Whole-header view of one port: arena when attached, the
+    /// BramPort struct otherwise.  clk() and VCD use this; the
+    /// per-call paths (put, read) touch only the words they need.
+    fn load_port(&self, port_b: bool) -> BramPort {
+        let Some(slot) = self.slot else {
+            let p = if port_b { &self.b } else { &self.a };
+            return BramPort {
+                upd_at: p.upd_at,
+                upd_addr: p.upd_addr,
+                upd_wens: p.upd_wens.clone(),
+                upd_val: p.upd_val.clone(),
+                written_at: p.written_at,
+                upd_prev: p.upd_prev.clone(),
+                out: p.out.clone(),
+                out2: p.out2.clone(),
+            };
+        };
+        let b = self.port_base(port_b);
+        let (wenw, w) = (self.wen_words(), self.vwords());
+        unsafe {
+            BramPort {
+                upd_at: *slot.add(b),
+                upd_addr: *slot.add(b + 1),
+                written_at: *slot.add(b + 2),
+                upd_wens: self.rd_val(b + 3, self.num_wens, wenw),
+                upd_val: self.rd_val(b + 3 + wenw, self.width, w),
+                upd_prev: self.rd_val(b + 3 + wenw + w, self.width, w),
+                out: self.rd_val(b + 3 + wenw + 2 * w, self.width, w),
+                out2: self.rd_val(b + 3 + wenw + 3 * w, self.width, w),
+            }
+        }
+    }
+    fn store_port(&mut self, port_b: bool, p: BramPort) {
+        let Some(slot) = self.slot else {
+            *(if port_b { &mut self.b } else { &mut self.a }) = p;
+            return;
+        };
+        let b = self.port_base(port_b);
+        let (wenw, w) = (self.wen_words(), self.vwords());
+        unsafe {
+            *slot.add(b) = p.upd_at;
+            *slot.add(b + 1) = p.upd_addr;
+            *slot.add(b + 2) = p.written_at;
+        }
+        self.wr_val(b + 3, &p.upd_wens, wenw);
+        self.wr_val(b + 3 + wenw, &p.upd_val, w);
+        self.wr_val(b + 3 + wenw + w, &p.upd_prev, w);
+        self.wr_val(b + 3 + wenw + 2 * w, &p.out, w);
+        self.wr_val(b + 3 + wenw + 3 * w, &p.out2, w);
+    }
+    fn mem_get(&self, addr: u64) -> Value {
+        if self.slot.is_some() {
+            let w = self.vwords();
+            return self.rd_val(self.data_base() + addr as usize * w, self.width, w);
+        }
+        self.data
+            .get(&addr)
+            .cloned()
+            .unwrap_or_else(|| Value::undet(self.width))
+    }
+    fn mem_set(&mut self, addr: u64, v: Value) {
+        if self.slot.is_some() {
+            let w = self.vwords();
+            self.wr_val(self.data_base() + addr as usize * w, &v, w);
+            return;
+        }
+        self.data.insert(addr, v);
+    }
+
     fn put(&mut self, port_b: bool, wens: Value, addr: u64, val: Value, now: u64, pname: &str) {
         if addr > self.hi_addr {
             qprintln!(
@@ -5025,6 +5144,18 @@ impl Bram {
                 self.addr_hex(addr)
             );
         }
+        if self.slot.is_some() {
+            let b = self.port_base(port_b);
+            let (wenw, w) = (self.wen_words(), self.vwords());
+            unsafe {
+                let slot = self.slot.unwrap();
+                *slot.add(b) = now;
+                *slot.add(b + 1) = addr;
+            }
+            self.wr_val(b + 3, &wens, wenw);
+            self.wr_val(b + 3 + wenw, &val, w);
+            return;
+        }
         let p = if port_b { &mut self.b } else { &mut self.a };
         p.upd_at = now;
         p.upd_addr = addr;
@@ -5033,21 +5164,18 @@ impl Bram {
     }
 
     fn clk(&mut self, port_b: bool, now: u64) {
-        let (pa, pb) = (&mut self.a, &mut self.b);
-        let (me, other) = if port_b { (pb, pa) } else { (pa, pb) };
+        let mut me = self.load_port(port_b);
+        let other = self.load_port(!port_b);
         me.out2 = me.out.clone();
         if me.upd_at != now {
+            self.store_port(port_b, me);
             return;
         }
         let is_write = !me.upd_wens.is_zero();
         if me.upd_addr > self.hi_addr {
             me.out = Value::undet(self.width);
         } else if is_write {
-            let cur = self
-                .data
-                .get(&me.upd_addr)
-                .cloned()
-                .unwrap_or_else(|| Value::undet(self.width));
+            let cur = self.mem_get(me.upd_addr);
             // previous value: if the other port wrote the same address at
             // this instant, use its pre-write value
             me.written_at = now;
@@ -5085,7 +5213,7 @@ impl Bram {
                 }
                 r
             };
-            self.data.insert(me.upd_addr, merged.clone());
+            self.mem_set(me.upd_addr, merged.clone());
             me.out = merged;
         } else {
             // read: if the other port wrote the same address at this
@@ -5093,13 +5221,11 @@ impl Bram {
             let v = if other.written_at == now && other.upd_addr == me.upd_addr {
                 other.upd_prev.clone()
             } else {
-                self.data
-                    .get(&me.upd_addr)
-                    .cloned()
-                    .unwrap_or_else(|| Value::undet(self.width))
+                self.mem_get(me.upd_addr)
             };
             me.out = v;
         }
+        self.store_port(port_b, me);
     }
 }
 
@@ -5165,11 +5291,9 @@ impl Prim for Bram {
         let mut num = self.vcd_base;
         let nports = if self.dual { 2 } else { 1 };
         for pi in 0..nports {
-            let (p, back) = if pi == 0 {
-                (&self.a, &mut back_a)
-            } else {
-                (&self.b, &mut back_b)
-            };
+            let p = self.load_port(pi == 1);
+            let p = &p;
+            let back = if pi == 0 { &mut back_a } else { &mut back_b };
             let en = p.upd_at == now;
             let dout = if self.pipelined { p.out2.clone() } else { p.out.clone() };
             match dt {
@@ -5254,21 +5378,21 @@ impl Prim for Bram {
     }
 
     fn value_method(&mut self, method: &str, _args: &[Value], _now: u64) -> Value {
+        let read = |port_b: bool| -> Value {
+            if self.slot.is_some() {
+                let w = self.vwords();
+                let off = self.port_base(port_b)
+                    + 3
+                    + self.wen_words()
+                    + (if self.pipelined { 3 } else { 2 }) * w;
+                return self.rd_val(off, self.width, w);
+            }
+            let p = if port_b { &self.b } else { &self.a };
+            if self.pipelined { p.out2.clone() } else { p.out.clone() }
+        };
         match method {
-            "read" | "a_read" => {
-                if self.pipelined {
-                    self.a.out2.clone()
-                } else {
-                    self.a.out.clone()
-                }
-            }
-            "b_read" => {
-                if self.pipelined {
-                    self.b.out2.clone()
-                } else {
-                    self.b.out.clone()
-                }
-            }
+            "read" | "a_read" => read(false),
+            "b_read" => read(true),
             m => panic!("BRAM: unknown value method {m:?}"),
         }
     }
@@ -5294,6 +5418,39 @@ impl Prim for Bram {
             "clkB" => self.clk(true, now),
             p => panic!("BRAM: unknown tick port {p:?}"),
         }
+    }
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        // dense image: gate the slot budget — huge memories stay boxed.
+        // The budget is per-prim and larger than RegFile's (BRAMs are
+        // the caches of CPU-scale designs; a 32K-word cache array is
+        // the point, not the exception).
+        let size = self.hi_addr.checked_add(1)?;
+        let slots = (self.port_words() * if self.dual { 2 } else { 1 }) as u64
+            + size * self.vwords() as u64;
+        (slots <= 1 << 20).then_some(ArenaKind::Bram {
+            width: self.width,
+            size,
+            chunk_size: self.chunk_size,
+            num_wens: self.num_wens,
+            dual: self.dual,
+            pipelined: self.pipelined,
+        })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        let a = std::mem::replace(&mut self.a, BramPort::new(self.width));
+        let b = std::mem::replace(&mut self.b, BramPort::new(self.width));
+        self.store_port(false, a);
+        if self.dual {
+            self.store_port(true, b);
+        }
+        let undet = Value::undet(self.width);
+        for addr in 0..=self.hi_addr {
+            let v = self.data.remove(&addr);
+            self.mem_set(addr, v.unwrap_or_else(|| undet.clone()));
+        }
+        self.data = Default::default();
     }
 }
 

@@ -2712,6 +2712,11 @@ impl Interp {
                         // reads can WARN (bounds): the split analyzer
                         // treats it like an opaque prim
                         Some(ArenaKind::RegFile { .. }) => ChildClass::Other,
+                        // arena-backed; reads are begin-of-instant
+                        // (out changes only at tick) but keep the
+                        // conservative class until the compiled tier
+                        // exploits it
+                        Some(ArenaKind::Bram { .. }) => ChildClass::Other,
                         None => ChildClass::Other,
                     }),
                     InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
@@ -2815,6 +2820,7 @@ impl Interp {
             let mut creg_slot = HashMap::new();
             let mut fifo_slot = HashMap::new();
             let mut regfile_slot = HashMap::new();
+            let mut bram_slot = HashMap::new();
             // sorted iteration: slot assignment must be deterministic
             // across processes so an AOT artifact's baked slot numbers
             // match a fresh planning walk at load time
@@ -2852,6 +2858,28 @@ impl Interp {
                         let base =
                             alloc(&mut nslots, 2 + words * (1 + entries));
                         regfile_slot.insert(name, (base, width, lo, hi));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::Bram {
+                        width,
+                        size,
+                        chunk_size,
+                        num_wens,
+                        dual,
+                        pipelined,
+                    }) => {
+                        let w = width.max(1).div_ceil(64);
+                        let wenw = num_wens.max(1).div_ceil(64);
+                        let pw = 3 + wenw + 4 * w;
+                        let ports = if dual { 2 } else { 1 };
+                        let base = alloc(
+                            &mut nslots,
+                            pw * ports + (size as u32) * w,
+                        );
+                        bram_slot.insert(
+                            name,
+                            (base, width, size, chunk_size, num_wens, dual, pipelined),
+                        );
                         attach.push((ci, base));
                     }
                     None => {}
@@ -3083,6 +3111,7 @@ impl Interp {
                     creg_slot,
                     fifo_slot,
                     regfile_slot,
+                    bram_slot,
                     reset_slot,
                     en_slot,
                     cfwf_slot,
@@ -3230,6 +3259,15 @@ impl Interp {
                     .collect();
                 m10.sort_unstable();
                 m10.hash(&mut h);
+                let mut m18: Vec<_> = e
+                    .bram_slot
+                    .iter()
+                    .map(|(&k, &(b, w, sz, cs, nw, du, pl))| {
+                        (k, b - r0, w, sz, cs, nw, du, pl)
+                    })
+                    .collect();
+                m18.sort_unstable();
+                m18.hash(&mut h);
                 // traced artifacts: recording layout is an exec input
                 let mut m16: Vec<_> = e
                     .rec_defs

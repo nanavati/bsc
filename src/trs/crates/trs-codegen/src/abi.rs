@@ -110,6 +110,10 @@ pub struct InstEnv {
     /// header [upd_at, upd_addr, upd_prev(w)] then dense data
     /// (see ArenaKind::RegFile)
     pub regfile_slot: HashMap<StrId, (u32, u32, u64, u64)>,
+    /// local BRAM instance name -> (base slot, width, size, chunk_size,
+    /// num_wens, dual, pipelined): per-port headers then dense data
+    /// (see ArenaKind::Bram)
+    pub bram_slot: HashMap<StrId, (u32, u32, u64, u32, u32, bool, bool)>,
     /// local FIFO instance name -> (base slot, width, size, guarded):
     /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
     /// data (see ArenaKind::Fifo)
@@ -475,7 +479,7 @@ pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 20;
+pub const AOT_LAYOUT_REV: u64 = 21;
 /// How a caller reaches an outlined def-piece helper: a baked address
 /// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
 /// resolves it inside the artifact .so).
