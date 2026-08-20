@@ -4778,7 +4778,19 @@ impl Interp {
     /// trs link: make prime() emit the artifact .so instead of
     /// setting up a run.
     pub fn aot_request_emit(&mut self, so: std::path::PathBuf) {
-        self.jit_request = jit::JitRequest::Emit { so };
+        self.jit_request = jit::JitRequest::Emit { so, exe: None };
+    }
+
+    /// trs link --exe: after the artifact .so, also link a
+    /// self-contained executable (design objects + a main shim,
+    /// --export-dynamic, against libtrs_capi.so in `libdir`).
+    pub fn aot_request_emit_exe(
+        &mut self,
+        so: std::path::PathBuf,
+        exe: std::path::PathBuf,
+        libdir: std::path::PathBuf,
+    ) {
+        self.jit_request = jit::JitRequest::Emit { so, exe: Some((exe, libdir)) };
     }
 
     /// trs run --code: resolve compiled functions from the artifact.
@@ -5358,6 +5370,29 @@ impl Interp {
 /// Load a .bir (and its companion .bdpi.so, if any) into an Interp ready
 /// to run — the driver's -c/-f scripting needs the handle between steps.
 pub use startup::load_file;
+
+/// Artifact-as-executable entry: the design objects are linked into
+/// THIS process image (trs link --exe).  Load the embedded design,
+/// resolve the compiled functions from ourselves, run.  BDPI rides as
+/// a companion .so beside the executable.
+#[cfg(feature = "jit")]
+pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
+    let src = jit::ArtifactSource::This;
+    let Some((hash, design)) = jit::aot_embedded_design(&src) else {
+        return Err("no embedded design in this executable (trs_snap)".into());
+    };
+    let mut interp = Interp::new(design);
+    interp.bir_hash = hash;
+    interp.plusargs = plusargs.to_vec();
+    if let Ok(exe) = std::env::current_exe() {
+        let b = format!("{}.bdpi.so", exe.display());
+        if std::path::Path::new(&b).exists() {
+            interp.load_bdpi(&b)?;
+        }
+    }
+    interp.aot_request_code_self();
+    Ok(interp.run(max_cycles))
+}
 
 pub fn run_file(
     path: &str,

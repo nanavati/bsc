@@ -61,6 +61,7 @@ fn main() -> ExitCode {
         ["link", path, rest @ ..] => {
             let mut out: Option<String> = None;
             let mut interactive = false;
+            let mut exe = false;
             // -dump-formats plumbing from bsc: which waveform writers
             // the artifact carries (reference default: vcd only)
             let mut fmt_arg = "vcd".to_string();
@@ -69,6 +70,7 @@ fn main() -> ExitCode {
                 match *a {
                     "-o" => out = it.next().map(|s| s.to_string()),
                     "--interactive" => interactive = true,
+                    "--exe" => exe = true,
                     "--dump-formats" => {
                         let Some(v) = it.next() else {
                             eprintln!("Error: --dump-formats requires a value");
@@ -173,7 +175,22 @@ fn main() -> ExitCode {
                 }
                 return link_interactive(path, &base, interp.top_name());
             }
-            interp.aot_request_emit(format!("{base}.so").into());
+            if exe {
+                // artifact-as-executable: <base> becomes a real PIE
+                // (design objects + main shim + libtrs_capi.so from
+                // the install dir) instead of the wrapper script
+                let libdir = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .unwrap_or_else(|| ".".into());
+                interp.aot_request_emit_exe(
+                    format!("{base}.so").into(),
+                    base.clone().into(),
+                    libdir,
+                );
+            } else {
+                interp.aot_request_emit(format!("{base}.so").into());
+            }
             interp.prime();
             // ineligible designs still get a valid artifact — it runs
             // interpreted (reference Bluesim always yields an
@@ -244,6 +261,23 @@ fn main() -> ExitCode {
                     eprintln!("trs link: copy {bdpi_src} -> {bdpi_dst}: {e}");
                     return ExitCode::FAILURE;
                 }
+            }
+            if exe {
+                if !compiled {
+                    // no compiled artifact = no PIE was linked; an
+                    // interpreted wrapper is what plain link is for
+                    eprintln!(
+                        "trs link: --exe requires the compiled artifact \
+                         (this design is not aot-eligible)"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                // --exe: aot_emit already linked the PIE at <base>;
+                // no wrapper script.  The capi/debug companions still
+                // ride beside the .so as usual.
+                let top = interp.top_name().to_string();
+                let _ = write_capi_shim(path, &base, &top, compiled);
+                return ExitCode::SUCCESS;
             }
             // wrapper script (trs must be on PATH, like bluetcl for
             // reference Bluesim executables)

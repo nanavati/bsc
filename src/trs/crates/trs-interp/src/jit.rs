@@ -213,6 +213,7 @@ pub(crate) enum JitRequest {
     Run,
     Emit {
         so: std::path::PathBuf,
+        exe: Option<(std::path::PathBuf, std::path::PathBuf)>,
     },
     Load {
         src: ArtifactSource,
@@ -898,6 +899,7 @@ fn aot_emit(
     comp_nodes: &[Option<Vec<JitNode>>],
     en_slots: &[u32],
     so: &std::path::Path,
+    exe: Option<&(std::path::PathBuf, std::path::PathBuf)>,
     bir_hash: u64,
     edge_plan: Option<&trs_codegen::lower::EdgeSsaPlan>,
     bdpi_names: &[String],
@@ -1030,17 +1032,55 @@ fn aot_emit(
             .args([&f, &mf])
             .status()
             .map_err(|e| EmitFail::Infra(format!("cc: {e}")))?;
-        std::fs::remove_dir_all(&tmp).ok();
         if !st.success() {
+            std::fs::remove_dir_all(&tmp).ok();
             std::fs::remove_file(&so_tmp).ok();
             return Err(EmitFail::Infra("cc -shared failed".into()));
         }
         std::fs::rename(&so_tmp, so)
             .map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
+        if let Some((exe_out, libdir)) = exe {
+            // artifact-as-executable: the SAME objects, plus a 3-line
+            // main shim, linked as a PIE with --export-dynamic so the
+            // runtime (libtrs_capi.so, via trs_run_main) resolves
+            // trs_snap and the edge fns from our own image
+            let mc = tmp.join("trs_main.c");
+            std::fs::write(
+                &mc,
+                "extern int trs_run_main(int argc, char** argv);\n                 int main(int argc, char** argv)                  { return trs_run_main(argc, argv); }\n",
+            )
+            .map_err(|e| EmitFail::Infra(e.to_string()))?;
+            let exe_tmp = exe_out.with_extension("exe.tmp");
+            let st = std::process::Command::new(cc_tool())
+                .arg(&mc)
+                .args([&f, &mf])
+                .arg("-Wl,--export-dynamic")
+                .arg("-Wl,--no-as-needed")
+                .arg(format!("-L{}", libdir.display()))
+                .arg("-l:libtrs_capi.so")
+                .arg(format!("-Wl,-rpath,{}", libdir.display()))
+                .args(["-o"])
+                .arg(&exe_tmp)
+                .status()
+                .map_err(|e| EmitFail::Infra(format!("cc exe: {e}")))?;
+            if !st.success() {
+                std::fs::remove_dir_all(&tmp).ok();
+                std::fs::remove_file(&exe_tmp).ok();
+                return Err(EmitFail::Infra("cc exe link failed".into()));
+            }
+            std::fs::rename(&exe_tmp, exe_out)
+                .map_err(|e| EmitFail::Infra(format!("rename exe: {e}")))?;
+        }
+        std::fs::remove_dir_all(&tmp).ok();
         if std::env::var_os("TRS_JIT_TIME").is_some() {
             eprintln!("trs aot: emit + link {:?}", t0.elapsed());
         }
         return Ok(());
+    }
+    if exe.is_some() {
+        return Err(EmitFail::Infra(
+            "--exe requires the one-module AOT path (TRS_AOT_ONE_MODULE=0 unsupported)".into(),
+        ));
     }
     // helpers are best-effort in AOT exactly as in JIT: if their
     // object fails to compile, drop them and link the design unsplit
@@ -3476,7 +3516,7 @@ impl Interp {
         };
 
         // trs link: emit the artifact .so and stop (nothing runs)
-        if let JitRequest::Emit { so } = &request {
+        if let JitRequest::Emit { so, exe } = &request {
             // whole-edge SSA emission (task #24, opt-in): build the
             // legality tables the edge emitter consumes
             // DEFAULT ON for AOT links (the specialized fast compile);
@@ -3526,6 +3566,7 @@ impl Interp {
                     &comp_nodes,
                     &en_slots,
                     so,
+                    exe.as_ref(),
                     // trace-salted: a traced plan (recording slots shift
                 // the whole layout) must never accept an untraced
                 // artifact, and vice versa
