@@ -69,8 +69,35 @@
   not `Empty`, so it needs a small closed BSV TB wrapper (drive
   LwcIfc with in-BSV vectors, self-check, `$finish`) before it can
   enter the pool.  Staged as follow-up.
-- BlueCheck / CHERI variants / further candidates: web survey in
-  progress; add here as they qualify.
+- Survey results (2026-08-20, full ranked table in the session notes) —
+  the starter set beyond the two cores, all cloned and all with
+  SELF-TERMINATING in-repo Bluesim testbenches:
+  - **JpegEncoder** (WangXuan95/BSV_Tutorial_cn, GPL-3.0):
+    `mkTbJpegEncoderMulti` reads 12 in-repo 1816x1008 .pgm images via
+    $fopen — a multi-million-cycle DSP run (2-D DCT, quantizer,
+    Huffman; dense wide fixed-point) with ZERO external deps.  The
+    non-CPU compute character the cores don't cover.
+  - **blue-rdma** (datenlord, GPL-2.0): RoCEv2 engine — 256-bit+
+    datapaths, header parse/deparse, CRC, FIFO meshes; ~30
+    independent self-terminating Bluesim tops
+    (`Makefile.test TESTFILE=.. TOPMODULE=..`), run length dialed via
+    MAX_CMP_CNT.  Its CI pins stock B-Lang bsc — proven open-bsc flow.
+  - **Fife running FreeRTOS** (rsnikhil/Learn_Bluespec_and_RISCV_Design,
+    MIT): 5-stage RV32 running the in-repo RTOSDemo.memhex32 —
+    millions of cycles of REAL SOFTWARE with no RISC-V toolchain;
+    paired b_*/v_* Bluesim/Verilator targets and DPI C devices
+    (exercises -use-dpi).  One-line `cycle_limit` edit bounds the run.
+    The most modern-bsc-idiomatic code in the pool (active 2026).
+  - **bluecheck** (CTSRD-CHERI/bluecheck — note: `mn416/blue-check`
+    does not exist): QuickCheck-style rule churn, dial-a-length;
+    correctness/scheduler stressor rather than throughput.
+  - Also surveyed and shelved with reasons: MAERI (accelerator
+    alternate), MIT 6.375 audio (FIR/FFT, license unclear), RVBS
+    (elaboration stressor), tinsel + airblue + riscy-OOO + SHAKTI +
+    quartz (all high-effort: dead TB infra, external toolchains, or
+    buck2), OpenSMART/Accel_AES/chromite (stale or no TB).  No
+    surveyed repo ships prebuilt Dhrystone/CoreMark images — Fife's
+    FreeRTOS and the JPEG encoder are the long real-workload runs.
 
 ## Running
 
