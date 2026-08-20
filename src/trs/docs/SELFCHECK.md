@@ -63,9 +63,18 @@ the testsuite (mkTest help.cmd).
 ## Caveats
 
 - BDPI: dlopen of one path is one refcounted image, so user C globals
-  are process-global and SHARED across both engines; stateful foreign
-  functions can produce phantom divergences (same caveat, and same
-  stderr note, as the bluetcl multi-engine oracle).
+  are process-global and SHARED across both engines — a lockstep
+  shadow DOUBLE-EXECUTES stateful foreign functions and corrupts the
+  primary's own outputs (14 foreign-battery witnesses in the first
+  selfcheck sweep).  Designs importing BDPI therefore SKIP the shadow
+  (stderr note; the run proceeds unchecked).
+- FIFO state compares use the ARCHITECTURAL view (occupancy + live
+  entries in queue order), not the bk tree's raw ring slots: post-deq
+  residue is dead state and the engines' ring disciplines legitimately
+  differ there (boxed interp vs compiled arena — dft64/Divide phantom
+  divergences in the first sweep).
+- The shadow's construction runs under the quiet stamp: elaboration
+  diagnostics ($readmem gap warnings) would otherwise print twice.
 - The shadow runs interpreted BY DESIGN; it is marked debug-tier and
   exempt from TRS_REQUIRE_AOT, which polices the primary (the
   artifact's execution engine) only.

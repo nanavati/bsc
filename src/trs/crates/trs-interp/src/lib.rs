@@ -5240,22 +5240,33 @@ pub fn run_file(
     let Some(every) = selfcheck else {
         return Ok(interp.run(max_cycles));
     };
+    if interp.needs_user_bdpi() {
+        // dlopen of one path is one refcounted image: user C globals
+        // are process-global, so a lockstep shadow DOUBLE-EXECUTES
+        // stateful foreign functions and corrupts the primary's own
+        // outputs (14 foreign-battery witnesses in the first selfcheck
+        // sweep) — skip the shadow, run plain
+        eprintln!(
+            "trs selfcheck: note: design imports BDPI — user C state \
+             is process-global and a lockstep shadow would \
+             double-execute stateful foreign functions; selfcheck \
+             skipped"
+        );
+        return Ok(interp.run(max_cycles));
+    }
     // lockstep selfcheck: a second, pure-interp engine shadows the
     // primary — quiet (no console/file/VCD output), no compiled code,
     // debug tier (the shadow is an oracle, not the artifact's
-    // execution engine, so TRS_REQUIRE_AOT does not police it)
-    let mut shadow = load_file(path, plusargs, None)?;
+    // execution engine, so TRS_REQUIRE_AOT does not police it).
+    // Construction runs under the quiet stamp too: elaboration-time
+    // prim diagnostics ($readmem gap warnings) print at load, before
+    // any advance re-stamps the thread-local (sysWarningTest leaked
+    // the shadow's copy into stdout).
+    prim::QUIET_ENGINE.with(|c| c.set(true));
+    let shadow_res = load_file(path, plusargs, None);
+    prim::QUIET_ENGINE.with(|c| c.set(false));
+    let mut shadow = shadow_res?;
     shadow.set_quiet();
     shadow.set_debug_tier();
-    if shadow.needs_user_bdpi() {
-        // dlopen of one path is one refcounted image: user C globals
-        // are process-global, shared across both engines (the capi
-        // oracle's isolation caveat)
-        eprintln!(
-            "trs selfcheck: note: design imports BDPI — user C state \
-             is process-global, so stateful foreign functions can \
-             produce phantom divergences (engines are not isolated)"
-        );
-    }
     Ok(interp.run_lockstep(&mut shadow, max_cycles, every))
 }
