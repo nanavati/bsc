@@ -208,6 +208,10 @@ pub struct Interp {
     /// per event)
     trace_events: bool,
     trace_clk: bool,
+    /// Emit requests stash the serialized PlanA here for the meta
+    /// object (prime derives it; the aot_emit call site reads it)
+    #[cfg(feature = "jit")]
+    plan_a_bytes: Option<Vec<u8>>,
     trace_wf: bool,
     /// $stop yield: ends the current advance at the slice boundary
     /// but does NOT finish the sim — cleared at the next advance so
@@ -388,6 +392,7 @@ enum FSlot {
 /// at t=0, high 5 / low 5 (the generated model's bk_alter_clock call), so
 /// posedges land at 0 (in reset), 10, 20, ...
 #[derive(Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Wave {
     init_high: bool,
     delay: u64,
@@ -404,6 +409,7 @@ struct Wave {
 /// never (noClock and top-level input clocks with no waveform — the
 /// kernel defines them with period 0 and they never fire).
 #[derive(Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize)]
 enum ClockSource {
     Wave(Wave),
     Triggered { init_high: bool, driver: usize },
@@ -415,6 +421,7 @@ enum ClockSource {
 /// ticks in directly executable form.
 /// One resolved schedule entry: a segment's nodes for one instance, plus
 /// the defs the C++ schedule computes eagerly at this position.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct REntry {
     inst: usize,
     /// module clock domain (used for VCD wiring at prime time)
@@ -439,6 +446,7 @@ struct REntry {
     eager: Vec<StrId>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct RComp {
     clk: usize,
     posedge: bool,
@@ -452,6 +460,24 @@ struct RComp {
     // schedule_after_posedge_* at PG_FINAL)
     early: HashSet<(usize, StrId)>,
 }
+
+/// prime()'s derivation half, baked into AOT artifacts as trs_plan_a:
+/// the pre-resolved schedule a --code run would otherwise re-derive
+/// through string-keyed walks (split_qual, inst_by_path, eager cones).
+/// Deterministic from the Design; trace-independent.  The blob is
+/// versioned (bincode is positional — a silent field reorder must
+/// fail the decode, not skew the schedule) and any gate failure falls
+/// back to fresh derivation.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct PlanA {
+    version: u32,
+    clocks: Vec<StrId>,
+    sources: Vec<ClockSource>,
+    driver_clock: Vec<(usize, usize)>,
+    rcomps: Vec<RComp>,
+}
+
+pub(crate) const PLAN_A_VERSION: u32 = 1;
 
 /// Collect the def names an expression references, descending into every
 /// subexpression (both mux arms — the C++ schedule assigns eagerly).
@@ -687,6 +713,8 @@ impl Interp {
             debug_tier: false,
             trace_events: std::env::var_os("TRS_TRACE").is_some(),
             trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
+            #[cfg(feature = "jit")]
+            plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
             stop_request: false,
             wave_pending: None,
@@ -3614,13 +3642,11 @@ impl Interp {
         self.finished.is_some()
     }
 
-    /// One-time event-loop setup: resolve clocks and compositions, wire
-    /// VCD clock state, seed the event heap, and run the kernel reset
-    /// protocol.  Idempotent — later calls are no-ops.
-    pub fn prime(&mut self) {
-        if self.stepper.is_some() {
-            return;
-        }
+    /// Derive PlanA fresh (see PlanA): the string-keyed schedule
+    /// resolution.  Emit requests always derive (the artifact writes
+    /// what it derived); Load requests prefer the artifact's baked
+    /// copy and fall back here.
+    fn derive_plan_a(&mut self) -> PlanA {
         let comps = self.d.compositions.clone();
 
         // distinct clocks in first-appearance order, with the default
@@ -3835,7 +3861,60 @@ impl Interp {
                 }
             })
             .collect();
+        PlanA {
+            version: PLAN_A_VERSION,
+            clocks,
+            sources,
+            driver_clock: driver_clock.into_iter().collect(),
+            rcomps,
+        }
+    }
 
+    /// One-time event-loop setup: resolve clocks and compositions, wire
+    /// VCD clock state, seed the event heap, and run the kernel reset
+    /// protocol.  Idempotent — later calls are no-ops.
+    pub fn prime(&mut self) {
+        if self.stepper.is_some() {
+            return;
+        }
+        // baked plan first (Load requests): skip the derivation walks
+        let mut psl = startup::StartupLap::new();
+        #[cfg(feature = "jit")]
+        let plan = match &self.jit_request {
+            jit::JitRequest::Load { src } => {
+                match jit::aot_plan_a(src, self.bir_hash) {
+                    Some(p) => {
+                        psl.lap("plan-a (baked decode)");
+                        p
+                    }
+                    None => {
+                        let p = self.derive_plan_a();
+                        psl.lap("plan-a (derived: no valid bake)");
+                        p
+                    }
+                }
+            }
+            _ => {
+                let p = self.derive_plan_a();
+                psl.lap("plan-a (derived)");
+                p
+            }
+        };
+        #[cfg(not(feature = "jit"))]
+        let plan = {
+            let p = self.derive_plan_a();
+            psl.lap("plan-a (derived)");
+            p
+        };
+        // Emit requests bake what they derived: stash the bytes for
+        // the meta object (read at the aot_emit call site)
+        #[cfg(feature = "jit")]
+        if matches!(self.jit_request, jit::JitRequest::Emit { .. }) {
+            self.plan_a_bytes = bincode::serialize(&plan).ok();
+        }
+        let PlanA { version: _, clocks, sources, driver_clock, rcomps } = plan;
+        let driver_clock: HashMap<usize, usize> =
+            driver_clock.into_iter().collect();
         // VCD clock state: reserve the kernel clock ids first (clock ids
         // are permanent across headers — vcd_keep_ids)
         if self.vcd_clocks.is_empty() {
@@ -5377,11 +5456,14 @@ pub use startup::load_file;
 /// a companion .so beside the executable.
 #[cfg(feature = "jit")]
 pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
+    let mut sl = startup::StartupLap::new();
     let src = jit::ArtifactSource::This;
     let Some((hash, design)) = jit::aot_embedded_design(&src) else {
         return Err("no embedded design in this executable (trs_snap)".into());
     };
+    sl.lap("design load (self-image snap)");
     let mut interp = Interp::new(design);
+    sl.lap("interp build (instantiate)");
     interp.bir_hash = hash;
     interp.plusargs = plusargs.to_vec();
     if let Ok(exe) = std::env::current_exe() {

@@ -874,7 +874,7 @@ fn gate_static(e: &Expr) -> bool {
 /// AOT layout revision, baked into every artifact: bump whenever slot
 /// allocation, token layout, or callback ABI changes so a stale .so is
 /// refused at load instead of silently misreading the arena.
-pub const AOT_LAYOUT_REV: u64 = 19;
+pub const AOT_LAYOUT_REV: u64 = 20;
 
 fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
@@ -949,11 +949,13 @@ pub fn compile_object_chunk(
 /// trusting the artifact's baked slot numbers.
 pub fn compile_meta_object(
     bir_hash: u64,
+    bir_hash_raw: u64,
     split_thresh: u64,
     protos: &[u8],
     edge_wire_ticks: bool,
     bdpi_names: &[String],
     snap: &[u8],
+    plan_a: &[u8],
 ) -> Result<Vec<u8>, Ineligible> {
     let ctx = Context::create();
     let module = ctx.create_module("trs_meta");
@@ -961,6 +963,11 @@ pub fn compile_meta_object(
     let ptrt = ctx.ptr_type(AddressSpace::default());
     let h = module.add_global(i64t, None, "trs_bir_hash");
     h.set_initializer(&i64t.const_int(bir_hash, false));
+    // the UNSALTED design identity: trace-independent consumers (the
+    // embedded snap, the baked PlanA) gate on this — trs_bir_hash is
+    // trace-salted and belongs to aot_load's mode check
+    let hr = module.add_global(i64t, None, "trs_bir_hash_raw");
+    hr.set_initializer(&i64t.const_int(bir_hash_raw, false));
     let r = module.add_global(i64t, None, "trs_layout_rev");
     r.set_initializer(&i64t.const_int(AOT_LAYOUT_REV, false));
     // split threshold changes the arena layout (memo slots): the
@@ -1001,6 +1008,13 @@ pub fn compile_meta_object(
     let sarr = ctx.const_string(snap, false);
     let sg = module.add_global(sarr.get_type(), None, "trs_snap");
     sg.set_initializer(&sarr);
+    // prime()'s derived schedule (see trs-interp PlanA): a --code run
+    // decodes this instead of re-deriving
+    let al = module.add_global(i64t, None, "trs_plan_a_len");
+    al.set_initializer(&i64t.const_int(plan_a.len() as u64, false));
+    let aarr = ctx.const_string(plan_a, false);
+    let ag = module.add_global(aarr.get_type(), None, "trs_plan_a");
+    ag.set_initializer(&aarr);
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)

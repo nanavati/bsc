@@ -901,6 +901,8 @@ fn aot_emit(
     so: &std::path::Path,
     exe: Option<&(std::path::PathBuf, std::path::PathBuf)>,
     bir_hash: u64,
+    bir_hash_raw: u64,
+    plan_a: &[u8],
     edge_plan: Option<&trs_codegen::lower::EdgeSsaPlan>,
     bdpi_names: &[String],
 ) -> Result<(), EmitFail> {
@@ -1013,11 +1015,13 @@ fn aot_emit(
         std::fs::write(&f, obj).map_err(|e| EmitFail::Infra(e.to_string()))?;
         let meta = compile_meta_object(
             bir_hash,
+            bir_hash_raw,
             split_thresh as u64,
             &encode_protos(protos),
             edge_plan.is_some_and(|p| p.wire_clears.iter().any(|v| !v.is_empty())),
             bdpi_names,
             &d.snap_encode(bir_hash).unwrap_or_default(),
+            plan_a,
         )
         .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
         let mf = tmp.join("meta.o");
@@ -1189,11 +1193,13 @@ fn aot_emit(
     }
     let meta = compile_meta_object(
         bir_hash,
+        bir_hash_raw,
         split_thresh as u64,
         &encode_protos(protos),
         false, // chunked path never carries edge-SSA wire ticks
         bdpi_names,
         &d.snap_encode(bir_hash).unwrap_or_default(),
+        plan_a,
     )
     .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
     let mf = tmp.join("meta.o");
@@ -1220,6 +1226,43 @@ fn aot_emit(
     Ok(())
 }
 
+/// Baked PlanA from the artifact (trs_plan_a): gated on the baked
+/// bir hash matching the interp's (same salted expression aot_load
+/// checks — a mismatched artifact must fail BOTH ways together so the
+/// fallback derives a plan consistent with the in-process compile),
+/// the layout rev, and the PlanA blob version.  Any miss = None =
+/// fresh derivation.
+pub(crate) fn aot_plan_a(
+    src: &ArtifactSource,
+    expected_raw: u64,
+) -> Option<crate::PlanA> {
+    unsafe {
+        let lib = src.open().ok()?;
+        let hr: libloading::Symbol<*const u64> =
+            lib.get(b"trs_bir_hash_raw").ok()?;
+        if **hr != expected_raw {
+            return None;
+        }
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_plan_a_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let r: libloading::Symbol<*const u64> = lib.get(b"trs_layout_rev").ok()?;
+        if **r != trs_codegen::lower::AOT_LAYOUT_REV {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_plan_a").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        let plan: crate::PlanA = bincode::deserialize(bytes).ok()?;
+        (plan_a_version(&plan) == crate::PLAN_A_VERSION).then_some(plan)
+    }
+}
+
+fn plan_a_version(p: &crate::PlanA) -> u32 {
+    p.version
+}
+
 /// Full-AOT load: the design snapshot embedded in the artifact
 /// (trs_snap + trs_bir_hash), so a --code run never opens the .bir.
 /// None = pre-snap artifact, empty snap (encode failed at link), a
@@ -1230,7 +1273,12 @@ pub(crate) fn aot_embedded_design(
 ) -> Option<(u64, trs_ir::Design)> {
     unsafe {
         let lib = src.open().ok()?;
-        let h: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash").ok()?;
+        // the RAW design identity: trs_bir_hash is trace-salted (it
+        // belongs to aot_load's mode gate) and would corrupt
+        // interp.bir_hash for traced artifacts.  Artifacts that carry
+        // a snap always carry the raw hash too (same commit).
+        let h: libloading::Symbol<*const u64> =
+            lib.get(b"trs_bir_hash_raw").ok()?;
         let hash = **h;
         let l: libloading::Symbol<*const u64> = lib.get(b"trs_snap_len").ok()?;
         let len = **l as usize;
@@ -3571,6 +3619,8 @@ impl Interp {
                 // the whole layout) must never accept an untraced
                 // artifact, and vice versa
                 self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+                    self.bir_hash,
+                    self.plan_a_bytes.as_deref().unwrap_or(&[]),
                     edge_plan.as_ref(),
                     &{
                         let mut v: Vec<String> = self
