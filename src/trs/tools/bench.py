@@ -56,10 +56,10 @@ POOL = [
          character="huge rule count per cycle (scheduler-bound)"),
     # FP pipeline dataflow (PAClib DFT, 64-pt): FIFOs + FP mul/add
     dict(name="DFT64v1", dir="testsuite/bsc.lib/PAClib/dft64/bsv",
-         src="Tb.bsv", top="sysTb_v1", cycles=None,
+         src="Tb_v1.bsv", top="sysTb_v1", cycles=None,
          character="FP dataflow pipeline, FIFO-heavy"),
     dict(name="DFT64v5", dir="testsuite/bsc.lib/PAClib/dft64/bsv",
-         src="Tb.bsv", top="sysTb_v5", cycles=None,
+         src="Tb_v5.bsv", top="sysTb_v5", cycles=None,
          character="FP dataflow, deeper variant"),
     # FP arithmetic battery (add/mul/div/sqrt corner cases)
     dict(name="FloatTest", dir="testsuite/bsc.lib/FloatingPoint",
@@ -75,7 +75,7 @@ POOL = [
          character="BRAM variants battery, wide state"),
     # combinational search (sudoku generator)
     dict(name="Sudoku", dir="testsuite/bsc.bsv_examples/sudoku",
-         src="GenerateTest.bsv", top="mkGenerateTest3", cycles=None,
+         src="GenerateTest3.bsv", top="mkGenerateTest3", cycles=None,
          character="deep combinational cones, backtracking search"),
     # iterative arithmetic (Randomize-fed dividers)
     dict(name="Dividers", dir="testsuite/bsc.lib/Divide",
@@ -85,10 +85,12 @@ POOL = [
     # sparse RegFile addressing
     dict(name="SparseRF", dir="testsuite/bsc.bluesim/misc",
          src="SparseRF.bsv", top="sysSparseRF", cycles=None,
-         character="RegFile range traffic"),
+         character="RegFile range traffic",
+         no_verilator="RegFile over a 42-bit index elaborates to a "
+                      "2^42-entry Verilog array"),
     # packet-processing app (mesa)
-    dict(name="Mesa", dir="testsuite/bsc.bsv_examples/mesa",
-         src="mkTestMesa.bsv", top="sysTestMesa", cycles=None,
+    dict(name="Mesa", dir="testsuite/bsc.bsv_examples/mesa/spiless-tx-bsv",
+         src="TestMesa.bsv", top="sysTestMesa", cycles=None,
          character="app-scale packet pipeline"),
 ]
 
@@ -160,12 +162,24 @@ def run_measured(cmd, cwd, runs):
                 max_rss_kb=rss), out
 
 
+def _err(r):
+    """Error lines from a failed command, not just the output tail —
+    bsc prints warnings after errors, so a blind tail shows the wrong
+    thing."""
+    txt = (r.stderr or "") + "\n" + (r.stdout or "")
+    lines = [l for l in txt.splitlines() if re.search(r"\berror\b", l, re.I)]
+    return (" | ".join(lines)[:300]) if lines else txt[-300:]
+
+
 def bench_one(d, legs, runs, work):
     res = dict(name=d["name"], top=d["top"], character=d["character"], legs={})
     src_dir = os.path.join(REPO, d["dir"])
     top = d["top"]
     outputs = {}
     for leg in legs:
+        if leg == "verilator" and d.get("no_verilator"):
+            res["legs"][leg] = {"skipped": d["no_verilator"]}
+            continue
         wk = os.path.join(work, d["name"], leg)
         os.makedirs(wk, exist_ok=True)
         for f in os.listdir(src_dir):
@@ -174,20 +188,23 @@ def bench_one(d, legs, runs, work):
                     shutil.copy(os.path.join(src_dir, f), wk)
                 except OSError:
                     pass
-        common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk, "-vdir", wk,
-                  "-p", wk + ":+"]
+        # no -p: -bdir already heads the search path with wk (an
+        # explicit "-p wk:+" duplicates it and bsc's S0073 warning then
+        # buries real errors in the reported tail), and the default
+        # path keeps "." (= wk, the cwd) and the libraries
+        common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk, "-vdir", wk]
         L = {}
         if leg in ("bluesim", "trs"):
             r, t = sh([BSC, "-sim", "-u", "-g", top] + common + [d["src"]], wk)
             if r.returncode != 0:
-                L["error"] = "bsc compile: " + (r.stderr or r.stdout)[-300:]
+                L["error"] = "bsc compile: " + _err(r)
                 res["legs"][leg] = L
                 continue
             L["frontend_s"] = round(t, 2)
             if leg == "bluesim":
                 r, t = sh([BSC, "-sim", "-e", top, "-o", "simb"] + common, wk)
                 if r.returncode != 0:
-                    L["error"] = "bluesim link: " + (r.stderr or r.stdout)[-300:]
+                    L["error"] = "bluesim link: " + _err(r)
                     res["legs"][leg] = L
                     continue
                 L["backend_s"] = round(t, 2)
@@ -197,12 +214,12 @@ def bench_one(d, legs, runs, work):
                 r, t = sh([BSC, "-sim", "-bir", "-e", top, "-o", "simr"] + common, wk)
                 bir = os.path.join(wk, top + ".bir")
                 if not os.path.exists(bir):
-                    L["error"] = "no .bir: " + (r.stderr or r.stdout)[-300:]
+                    L["error"] = "no .bir: " + _err(r)
                     res["legs"][leg] = L
                     continue
                 r2, t2 = sh([TRS, "link", bir, "-o", "art"], wk)
                 if r2.returncode != 0:
-                    L["error"] = "trs link: " + (r2.stderr or r2.stdout)[-300:]
+                    L["error"] = "trs link: " + _err(r2)
                     res["legs"][leg] = L
                     continue
                 L["backend_s"] = round(t2, 2)
@@ -212,7 +229,7 @@ def bench_one(d, legs, runs, work):
         else:  # verilator
             r, t = sh([BSC, "-verilog", "-u", "-g", top] + common + [d["src"]], wk)
             if r.returncode != 0:
-                L["error"] = "bsc -verilog: " + (r.stderr or r.stdout)[-300:]
+                L["error"] = "bsc -verilog: " + _err(r)
                 res["legs"][leg] = L
                 continue
             L["frontend_s"] = round(t, 2)
@@ -254,7 +271,7 @@ def bench_one(d, legs, runs, work):
                        "-y", os.path.abspath(vdir),
                        top + ".v", "bench_main.cpp", "-o", "simv"], wk)
             if r.returncode != 0:
-                L["error"] = "verilator: " + (r.stderr or r.stdout)[-300:]
+                L["error"] = "verilator: " + _err(r)
                 res["legs"][leg] = L
                 continue
             L["backend_s"] = round(t, 2)
@@ -282,7 +299,21 @@ def bench_one(d, legs, runs, work):
     outs = {k: norm(v) for k, v in outputs.items()}
     if d.get("random"):
         outs.pop("verilator", None)
-    if len(set(outs.values())) > 1:
+    # Verilator's $finish sets a flag but finishes evaluating the
+    # instant, so sibling always-blocks may print same-instant lines
+    # that abort-immediately semantics (Bluesim, trs) never reach: the
+    # bsc legs must match byte-exactly, and the verilator leg must
+    # EXTEND that common output (prefix match), never diverge from it.
+    vl = outs.pop("verilator", None)
+    mismatch = len(set(outs.values())) > 1
+    if not mismatch and vl is not None and outs:
+        base = next(iter(outs.values()))
+        if not (vl == base or vl.startswith(base)):
+            mismatch = True
+        outs["verilator"] = vl
+    if mismatch:
+        if vl is not None:
+            outs["verilator"] = vl
         res["output_mismatch"] = {k: v[-200:] for k, v in outs.items()}
     return res
 
