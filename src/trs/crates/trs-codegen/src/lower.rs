@@ -216,6 +216,64 @@ fn module_max_int_width(module: &Module) -> u32 {
     w
 }
 
+/// Running census of emitted IR, filled DURING construction: one
+/// single-function walk as each function completes, so every block is
+/// visited exactly once across the whole build.  Feeds the
+/// run_ir_passes size tier and width cap without post-hoc module
+/// walks, the TRS_JIT_TIME census, and the planner's mass-estimate
+/// calibration (tracked actuals against cone-mass predictions).
+#[derive(Default)]
+pub(crate) struct IrTally {
+    /// (name, instructions, blocks) per completed function
+    pub per_fn: Vec<(String, u64, u64)>,
+    /// max integer result width seen (see module_max_int_width)
+    pub max_width: u32,
+}
+
+impl IrTally {
+    pub fn add(&mut self, func: inkwell::values::FunctionValue) {
+        let name = func.get_name().to_string_lossy().into_owned();
+        let mut insns = 0u64;
+        let mut blocks = 0u64;
+        for bb in func.get_basic_blocks() {
+            blocks += 1;
+            let mut ins = bb.get_first_instruction();
+            while let Some(i) = ins {
+                insns += 1;
+                if let inkwell::types::AnyTypeEnum::IntType(t) = i.get_type() {
+                    self.max_width = self.max_width.max(t.get_bit_width());
+                }
+                ins = i.get_next_instruction();
+            }
+        }
+        self.per_fn.push((name, insns, blocks));
+    }
+    /// tally every not-yet-seen function in the module (used once for
+    /// the helper batch, whose lowering is shared with the JIT path)
+    pub fn add_all(&mut self, module: &Module) {
+        let seen: std::collections::HashSet<String> =
+            self.per_fn.iter().map(|(n, _, _)| n.clone()).collect();
+        let mut f = module.get_first_function();
+        while let Some(func) = f {
+            let next = func.get_next_function();
+            if func.count_basic_blocks() > 0
+                && !seen.contains(func.get_name().to_string_lossy().as_ref())
+            {
+                self.add(func);
+            }
+            f = next;
+        }
+    }
+    /// (instructions, blocks) of the largest-by-instructions function
+    pub fn max_shape(&self) -> (u64, u64) {
+        self.per_fn
+            .iter()
+            .map(|&(_, i, b)| (i, b))
+            .max_by_key(|&(i, _)| i)
+            .unwrap_or((0, 0))
+    }
+}
+
 /// (instructions, blocks) of the module's largest-by-instructions
 /// function (see the O1 size tier in run_ir_passes).
 fn module_max_fn_shape(module: &Module) -> (u64, u64) {
@@ -261,7 +319,13 @@ const IR_PASS_LINE_RATIO: u64 = 8;
 /// asks for optimization.  The engine/object paths only apply BACKEND
 /// codegen opts; without this the IR pass pipeline (GVN, instcombine,
 /// SimplifyCFG, jump threading) never runs at all.
-fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
+/// `tracked`: the construction-time census, when the caller built one
+/// (the one-module design object) — the width cap and size tier then
+/// read tracked totals instead of re-walking the module.
+fn run_ir_passes(
+    module: &Module,
+    tracked: Option<&IrTally>,
+) -> Result<(), Ineligible> {
     // mirror opt_level(): the AOT default is O1 even when the env var
     // is unset (this silently skipping was why one-module emission
     // showed zero inlining)
@@ -276,7 +340,10 @@ fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
             // body wedges default<O1> for minutes (sysInit65536Bit AOT
             // link timeout).  An explicit TRS_JIT_OPT still forces
             // the pipeline.
-            if module_max_int_width(module) > IR_PASS_WIDTH_CAP {
+            let width = tracked
+                .map(|t| t.max_width)
+                .unwrap_or_else(|| module_max_int_width(module));
+            if width > IR_PASS_WIDTH_CAP {
                 return Ok(());
             }
             // O3 default (measured on the edge-SSA + outline-model
@@ -285,7 +352,9 @@ fn run_ir_passes(module: &Module) -> Result<(), Ineligible> {
             // (see IR_PASS_FN_SIZE_CAP — faster to compile AND to
             // run; branch-ladder giants must keep O3)
             {
-                let (insns, blocks) = module_max_fn_shape(module);
+                let (insns, blocks) = tracked
+                    .map(|t| t.max_shape())
+                    .unwrap_or_else(|| module_max_fn_shape(module));
                 if insns > IR_PASS_FN_SIZE_CAP
                     && insns >= blocks.saturating_mul(IR_PASS_LINE_RATIO)
                 {
@@ -318,7 +387,7 @@ fn finish_engine(
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let opt = opt_level();
     let ee = module
         .create_jit_execution_engine(opt)
@@ -525,7 +594,7 @@ pub fn compile_object_chunk(
     if std::env::var_os("TRS_JIT_DUMP").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
@@ -686,8 +755,14 @@ pub fn compile_design_object(
     let t_low = std::time::Instant::now();
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
+    // construction-time IR census: every function tallied once as it
+    // completes (helpers here, scheds/execs below, edge fns via the
+    // final add_all) — the pipeline tier reads it instead of
+    // re-walking the module, and TRS_JIT_TIME prints from it
+    let mut tally = IrTally::default();
     if !helper_specs.is_empty() {
         lower_helpers(env, &ctx, &module, cbs, helper_specs, refs, &specs[0])?;
+        tally.add_all(&module);
     }
     let refs_opt = (!refs.is_empty()).then_some(refs);
     // rules covered by an SSA edge function need no standalone
@@ -793,11 +868,14 @@ pub fn compile_design_object(
             l.set_initializer(&i64t.const_int(vals.len() as u64, false));
         }
     }
+    // complete the construction-time census (scheds/execs/edge fns —
+    // everything not tallied incrementally above)
+    tally.add_all(&module);
     let timing = std::env::var_os("TRS_JIT_TIME").is_some();
     if timing {
         eprintln!("trs aot: lowering {:?}", t_low.elapsed());
-        // per-function-group IR census: emitted size is the
-        // load-immune proxy that predicts O3 cost; the exec/hlp vs
+        // per-function-group IR census from the tally: emitted size is
+        // the load-immune proxy that predicts O3 cost; the exec/hlp vs
         // edge split is the per-type-precompilation ceiling
         let mut groups: [(&str, u64, u64); 5] = [
             ("edge", 0, 0),
@@ -806,20 +884,8 @@ pub fn compile_design_object(
             ("sched", 0, 0),
             ("other", 0, 0),
         ];
-        let mut top: Vec<(u64, String)> = Vec::new();
-        let mut f = module.get_first_function();
-        while let Some(func) = f {
-            let name = func.get_name().to_string_lossy().into_owned();
-            let mut blocks = 0u64;
-            let mut insts = 0u64;
-            for bb in func.get_basic_blocks() {
-                blocks += 1;
-                let mut cur = bb.get_first_instruction();
-                while let Some(i) = cur {
-                    insts += 1;
-                    cur = i.get_next_instruction();
-                }
-            }
+        let mut top: Vec<(u64, &str)> = Vec::new();
+        for (name, insts, blocks) in &tally.per_fn {
             let gi = if name.starts_with("edge_") {
                 0
             } else if name.starts_with("exec_") {
@@ -833,10 +899,9 @@ pub fn compile_design_object(
             };
             groups[gi].1 += blocks;
             groups[gi].2 += insts;
-            if insts > 0 {
-                top.push((insts, name));
+            if *insts > 0 {
+                top.push((*insts, name.as_str()));
             }
-            f = func.get_next_function();
         }
         let census: Vec<String> = groups
             .iter()
@@ -844,7 +909,7 @@ pub fn compile_design_object(
             .map(|(n, b, i)| format!("{n}={i}insn/{b}bb"))
             .collect();
         eprintln!("trs aot: ir census {}", census.join(" "));
-        top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        top.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
         let tops: Vec<String> =
             top.iter().take(5).map(|(i, n)| format!("{n}={i}")).collect();
         eprintln!("trs aot: ir top {}", tops.join(" "));
@@ -853,7 +918,7 @@ pub fn compile_design_object(
     if std::env::var_os("TRS_JIT_DUMP_PRE").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, Some(&tally))?;
     if std::env::var_os("TRS_JIT_DUMP_POST").is_some() {
         eprintln!("{}", module.print_to_string().to_string());
     }
@@ -908,7 +973,7 @@ pub fn compile_helpers_object(
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     lower_helpers(env, &ctx, &module, cbs, specs, refs, pseudo)?;
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
@@ -1358,7 +1423,7 @@ pub fn compile_fused_object(comps: &[FusedComp]) -> Result<Vec<u8>, Ineligible> 
     let ctx = Context::create();
     let module = ctx.create_module("trs_fused");
     let _ = lower_fused(&ctx, &module, comps);
-    run_ir_passes(&module)?;
+    run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
