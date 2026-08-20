@@ -48,9 +48,21 @@
 
 ## External macro pool (clones under the session scratchpad, integration staged)
 
-- **Flute** (bluespec/Flute, RV32/64 5-stage) and **Toooba**
-  (bluespec/Toooba, RiscyOO superscalar OOO) — per Ravi, Piccolo is
-  NOT worth a third slot: it is Flute's 3-stage sibling from the same
+- **Flute** (bluespec/Flute, RV32/64 5-stage) and **CHERI-Toooba**
+  (CTSRD-CHERI/Toooba — per Ravi it DISPLACES upstream Toooba: it is
+  strictly the heavier stressor (129-bit capability datapaths
+  everywhere, plus a TagController — an extra cache level for tag
+  traffic — on top of RiscyOO's superscalar OOO), it is the more
+  actively maintained fork (2026-07 vs 2026-04), and its
+  `Tests/benchmarks` submodule is `CTSRD-CHERI/toooba-sim-benchmarks`:
+  PREBUILT MiBench/Olden-class RISC-V binaries (dijkstra, qsort,
+  picojpeg, rsa, basicmath, adpcm, bisort) with a Makefile — the
+  in-repo real-workload runtime images every other surveyed repo
+  lacks.  src_Core is only ~9% more BSV text than upstream Toooba
+  (58.7k -> 63.9k lines) but the submodule libs (cheri-cap-lib,
+  TagController, BlueStuff) and the widened state put the real
+  simulation delta well beyond that.  Per Ravi, Piccolo is
+  NOT worth a slot either: it is Flute's 3-stage sibling from the same
   lineage with a near-identical simulation profile (byte-identical
   Include_bluesim.mk); keep it only as a fallback if Flute fights the
   build.  Both share one recipe: `bsc -u -elab -sim` →
@@ -58,11 +70,11 @@
   `symbol_table.txt` in CWD (elf_to_hex, needs libelf) →
   `./exe +v1 +tohost` → PASS/FAIL + `$finish`.  In-repo workloads are
   the RISC-V ISA ELFs (short — fine for correctness and BUILD
-  benchmarking; Toooba's elaboration is a compile benchmark all by
-  itself).  Meaningful core RUNTIME numbers need a Dhrystone/CoreMark
-  hex — not shipped in-repo; build via a riscv-gnu toolchain or fetch
-  prebuilt when integrating.  Toooba additionally needs its BlueStuff
-  submodule (network).
+  benchmarking; Toooba-class elaboration is a compile benchmark all
+  by itself).  Core RUNTIME numbers come from the
+  toooba-sim-benchmarks binaries above (upstream repos ship no
+  Dhrystone/CoreMark).  CHERI-Toooba needs its submodules fetched
+  (BlueStuff, TagController, cheri-cap-lib, Tests/benchmarks).
 - **BlueLight** (kammoh/bluelight, LWC crypto: Ascon/Xoodyak/GIFT-COFB/
   Gimli/Subterranean) — compute-dense and modern-bsc-friendly, but it
   has NO Bluesim testbench (cocotb/Verilog only) and its `lwc` top is
