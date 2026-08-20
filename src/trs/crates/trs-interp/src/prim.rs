@@ -258,6 +258,12 @@ pub enum ArenaKind {
         dual: bool,
         pipelined: bool,
     },
+    /// CReg (CRegN5/CRegUN5, sync-reset or none): the semantic core —
+    /// live value (w words) then registered value (w words).  Port
+    /// reads return the live value, port writes store it; the
+    /// end-of-edge tick copies value into value_reg.  The per-port
+    /// VCD bookkeeping stays boxed (trampoline write path).
+    CReg5 { width: u32 },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -2336,6 +2342,11 @@ struct CReg {
     in_reset: bool,
     async_rst: bool,
     suppress: bool,
+    /// arena base when attached (see ArenaKind::CReg5): value then
+    /// value_reg, w words each — the semantic core.  The VCD
+    /// bookkeeping below stays in fields (maintained by the
+    /// trampoline write path and the interp tick).
+    slot: Option<*mut u64>,
     // VCD state (bs_prim_mod_reg.h:817+): per-port write history, the
     // registered value at cycle start, latched ENs
     write_val: Vec<Value>,
@@ -2361,12 +2372,52 @@ impl CReg {
             in_reset: false,
             async_rst,
             suppress: false,
+            slot: None,
             write_val: (0..5).map(|_| Value::undet(width)).collect(),
             did_write: vec![false; 5],
             did_write_rec: vec![false; 5],
             read_val0: Value::undet(width),
             vcd_base: 0,
             vcd_back: None,
+        }
+    }
+    fn words(&self) -> usize {
+        (self.value.width.max(1) as usize).div_ceil(64)
+    }
+    fn arena_get(&self, second: bool) -> Value {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let off = if second { w } else { 0 };
+        let src = unsafe { std::slice::from_raw_parts(slot.add(off), w) };
+        Value::from_limbs64(self.value.width.max(1), src.to_vec())
+    }
+    fn arena_set(&self, second: bool, v: &Value) {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let off = if second { w } else { 0 };
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot.add(off), w) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
+    fn load_val(&self) -> Value {
+        if self.slot.is_some() { self.arena_get(false) } else { self.value.clone() }
+    }
+    fn store_val(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(false, &v);
+        } else {
+            self.value = v;
+        }
+    }
+    fn load_val_reg(&self) -> Value {
+        if self.slot.is_some() { self.arena_get(true) } else { self.value_reg.clone() }
+    }
+    fn store_val_reg(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(true, &v);
+        } else {
+            self.value_reg = v;
         }
     }
 }
@@ -2380,7 +2431,7 @@ impl Prim for CReg {
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
         // live value == registered value at any stop boundary (the
         // edge tick latched it); mid-cycle it is the port-write chain
-        (key.is_empty()).then(|| self.value.clone())
+        (key.is_empty()).then(|| self.load_val())
     }
     fn vcd_defs(
         &mut self,
@@ -2482,7 +2533,7 @@ impl Prim for CReg {
         // portK__read returns the live value (port 0 sees the registered
         // value at cycle start because nothing has written yet)
         if method.starts_with("port") && method.ends_with("__read") {
-            self.value.clone()
+            self.load_val()
         } else {
             panic!("CReg: unknown value method {method:?}")
         }
@@ -2490,7 +2541,7 @@ impl Prim for CReg {
     fn action_method(&mut self, method: &str, args: &[Value], _now: u64) {
         if method.starts_with("port") && method.ends_with("__write") {
             if !(self.async_rst && self.suppress) {
-                self.value = args[0].clone();
+                self.store_val(args[0].clone());
                 let i = method.as_bytes()[4].saturating_sub(b'0') as usize;
                 if i < 5 {
                     self.did_write[i] = true;
@@ -2504,8 +2555,9 @@ impl Prim for CReg {
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, gate: bool) {
         if !gate { return; }
         // Q_OUT_0 starts from the value registered before this cycle
-        self.read_val0 = self.value_reg.clone();
-        self.value_reg = self.value.clone();
+        self.read_val0 = self.load_val_reg();
+        let v = self.load_val();
+        self.store_val_reg(v);
         for i in 0..5 {
             self.did_write_rec[i] = self.did_write[i];
             self.did_write[i] = false;
@@ -2513,8 +2565,8 @@ impl Prim for CReg {
     }
     fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
-            self.value = self.reset_value.clone();
-            self.value_reg = self.reset_value.clone();
+            self.store_val(self.reset_value.clone());
+            self.store_val_reg(self.reset_value.clone());
             self.suppress = true;
         }
     }
@@ -2522,12 +2574,25 @@ impl Prim for CReg {
         self.in_reset = asserted;
         if asserted {
             if self.async_rst {
-                self.value = self.reset_value.clone();
+                self.store_val(self.reset_value.clone());
                 self.suppress = true;
             }
         } else {
             self.suppress = false;
         }
+    }
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        // async-reset CRegs suppress writes while in reset (same gate
+        // as Reg): not arena-backable
+        (!self.async_rst)
+            .then_some(ArenaKind::CReg5 { width: self.value.width })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        let (v, vr) = (self.value.clone(), self.value_reg.clone());
+        self.arena_set(false, &v);
+        self.arena_set(true, &vr);
     }
 }
 

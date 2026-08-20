@@ -2717,6 +2717,8 @@ impl Interp {
                         // conservative class until the compiled tier
                         // exploits it
                         Some(ArenaKind::Bram { .. }) => ChildClass::Other,
+                        // live port-chained reads: never stable
+                        Some(ArenaKind::CReg5 { .. }) => ChildClass::Other,
                         None => ChildClass::Other,
                     }),
                     InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
@@ -2821,6 +2823,7 @@ impl Interp {
             let mut fifo_slot = HashMap::new();
             let mut regfile_slot = HashMap::new();
             let mut bram_slot = HashMap::new();
+            let mut creg5_slot = HashMap::new();
             // sorted iteration: slot assignment must be deterministic
             // across processes so an AOT artifact's baked slot numbers
             // match a fresh planning walk at load time
@@ -2858,6 +2861,12 @@ impl Interp {
                         let base =
                             alloc(&mut nslots, 2 + words * (1 + entries));
                         regfile_slot.insert(name, (base, width, lo, hi));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::CReg5 { width }) => {
+                        let base =
+                            alloc(&mut nslots, 2 * width.max(1).div_ceil(64));
+                        creg5_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
                     Some(ArenaKind::Bram {
@@ -3112,6 +3121,7 @@ impl Interp {
                     fifo_slot,
                     regfile_slot,
                     bram_slot,
+                    creg5_slot,
                     reset_slot,
                     en_slot,
                     cfwf_slot,
@@ -3259,6 +3269,13 @@ impl Interp {
                     .collect();
                 m10.sort_unstable();
                 m10.hash(&mut h);
+                let mut m19: Vec<_> = e
+                    .creg5_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .collect();
+                m19.sort_unstable();
+                m19.hash(&mut h);
                 let mut m18: Vec<_> = e
                     .bram_slot
                     .iter()

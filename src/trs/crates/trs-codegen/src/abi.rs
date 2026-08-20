@@ -114,6 +114,9 @@ pub struct InstEnv {
     /// num_wens, dual, pipelined): per-port headers then dense data
     /// (see ArenaKind::Bram)
     pub bram_slot: HashMap<StrId, (u32, u32, u64, u32, u32, bool, bool)>,
+    /// local CReg (CRegN5) instance name -> (base slot, width): live
+    /// value then registered value, w words each (see ArenaKind::CReg5)
+    pub creg5_slot: HashMap<StrId, (u32, u32)>,
     /// local FIFO instance name -> (base slot, width, size, guarded):
     /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
     /// data (see ArenaKind::Fifo)
