@@ -1162,6 +1162,17 @@ fn aot_load(
     String,
 > {
     unsafe {
+        // dlopen treats a bare filename as a library-search-path
+        // lookup, NOT a cwd file: `--code art.so` would miss, and the
+        // miss used to become a silent in-process-compile fallback
+        // (same fix as load_bdpi)
+        let so_owned;
+        let so = if so.to_str().is_some_and(|s| !s.contains('/')) {
+            so_owned = std::path::Path::new(".").join(so);
+            so_owned.as_path()
+        } else {
+            so
+        };
         let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
         let h: libloading::Symbol<*const u64> =
             lib.get(b"trs_bir_hash").map_err(|e| e.to_string())?;
