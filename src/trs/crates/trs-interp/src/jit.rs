@@ -2936,6 +2936,10 @@ impl Interp {
                         regfile_slot.insert(name, (base, width, lo, hi));
                         attach.push((ci, base));
                     }
+                    // traced plans keep CRegs boxed: the per-port VCD
+                    // bookkeeping (EN/D_IN history) lives in the boxed
+                    // write path, which inline compiled writes bypass
+                    Some(ArenaKind::CReg5 { .. }) if self.vcd_trace => {}
                     Some(ArenaKind::CReg5 { width }) => {
                         let base =
                             alloc(&mut nslots, 2 * width.max(1).div_ceil(64));

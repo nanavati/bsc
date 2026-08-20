@@ -2423,6 +2423,41 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
             phi.add_incoming(&[(&fv, f_end), (&sv, s_end)]);
             return Ok(phi.as_basic_value().into_int_value());
         }
+        if let Some(&(base, bw, _sz, _cs, nw, _dual, pipelined)) =
+            ie.bram_slot.get(&instance)
+        {
+            // BRAM reads return REGISTERED state (out, or out2 when
+            // pipelined) — a plain load, no bounds or bypass logic
+            // (addressing happened at put/tick)
+            let port_b = match mname.as_str() {
+                "read" | "a_read" => false,
+                "b_read" => true,
+                _ => return nope("bram value method mismatch"),
+            };
+            if bw != width || !args.is_empty() {
+                return nope("bram read shape mismatch");
+            }
+            let w = bw.max(1).div_ceil(64);
+            let wenw = nw.max(1).div_ceil(64);
+            let pw = 3 + wenw + 4 * w;
+            let off = base
+                + if port_b { pw } else { 0 }
+                + 3
+                + wenw
+                + (if pipelined { 3 } else { 2 }) * w;
+            return Ok(self.load_val(f, off, bw));
+        }
+        if let Some(&(base, cw)) = ie.creg5_slot.get(&instance) {
+            // CReg port reads return the LIVE value (schedule order
+            // makes port k's read see earlier ports' writes)
+            if !(mname.starts_with("port") && mname.ends_with("__read")) {
+                return nope("creg value method mismatch");
+            }
+            if cw != width {
+                return nope("creg read width mismatch");
+            }
+            return Ok(self.load_val(f, base, cw));
+        }
         // other prim children: trampoline into the interpreter's prim
         let Some(&child) = ie.children.get(&instance) else {
             return nope("call on unknown child");
@@ -5013,6 +5048,92 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                     self.builder.build_unconditional_branch(done_bb).unwrap();
 
                     self.builder.position_at_end(done_bb);
+                    return Ok(());
+                }
+                if let Some(&(base, bw, sz, _cs, nw, dual, _pl)) =
+                    ie.bram_slot.get(instance)
+                {
+                    // put latches the pending update into the port
+                    // header (the tick applies it); in-range is pure
+                    // stores, out-of-range bounces to the boxed prim
+                    // for the bounds warning
+                    let port_b = match mname.as_str() {
+                        "put" | "a_put" => false,
+                        "b_put" => true,
+                        _ => return nope("non-put BRAM action"),
+                    };
+                    if args.len() != 3 || (port_b && !dual) {
+                        return nope("bram put shape mismatch");
+                    }
+                    let Some(&child) = ie.children.get(instance) else {
+                        return nope("call on unknown child");
+                    };
+                    let i64t = self.ctx.i64_type();
+                    let w = bw.max(1).div_ceil(64);
+                    let wenw = nw.max(1).div_ceil(64);
+                    let pw = 3 + wenw + 4 * w;
+                    let pb = base + if port_b { pw } else { 0 };
+                    let ww = self.expr_width(f, &args[0])?;
+                    let w0 = self.expr(f, &args[0])?;
+                    let wens = self.to_w(w0, ww, nw.max(1), false);
+                    let aw = self.expr_width(f, &args[1])?;
+                    let a0 = self.expr(f, &args[1])?;
+                    let a = self.to_w(a0, aw, 64, false);
+                    let vw = self.expr_width(f, &args[2])?;
+                    let v0 = self.expr(f, &args[2])?;
+                    let vv = self.to_w(v0, vw, bw.max(1), false);
+                    let go_bb = self.ctx.append_basic_block(func, "bpg");
+                    let fast_bb = self.ctx.append_basic_block(func, "bpf");
+                    let slow_bb = self.ctx.append_basic_block(func, "bps");
+                    let done_bb = self.ctx.append_basic_block(func, "bpd");
+                    self.builder.build_conditional_branch(cz, go_bb, done_bb).unwrap();
+
+                    self.builder.position_at_end(go_bb);
+                    let inb = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::ULT,
+                            a,
+                            i64t.const_int(sz, false),
+                            "bpin",
+                        )
+                        .unwrap();
+                    self.builder.build_conditional_branch(inb, fast_bb, slow_bb).unwrap();
+
+                    self.builder.position_at_end(fast_bb);
+                    let now = self.load_word(f, self.env.now_slot);
+                    self.store_word(f, pb, now);
+                    self.store_word(f, pb + 1, a);
+                    self.store_val(f, pb + 3, nw.max(1), wens);
+                    self.store_val(f, pb + 3 + wenw, bw.max(1), vv);
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(slow_bb);
+                    let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                    self.emit_prim_call(f, child, *method, args, 0, true)?;
+                    f.ssa = saved;
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(done_bb);
+                    return Ok(());
+                }
+                if let Some(&(base, cw)) = ie.creg5_slot.get(instance) {
+                    // branchless port write: value = select(cond, v, old)
+                    if !(mname.starts_with("port") && mname.ends_with("__write"))
+                        || args.is_empty()
+                    {
+                        return nope("non-write CReg action");
+                    }
+                    let vw = self.expr_width(f, &args[0])?;
+                    let v0 = self.expr(f, &args[0])?;
+                    let vv = self.to_w(v0, vw, cw.max(1), false);
+                    let oldv = self.load_val(f, base, cw.max(1));
+                    let selv = self
+                        .builder
+                        .build_select(cz, vv, oldv, "cgw")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base, cw.max(1), selv);
                     return Ok(());
                 }
                 if let Some(&(base, fw, size, guarded, loopy)) =
