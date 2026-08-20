@@ -2459,6 +2459,10 @@ impl Interp {
         }
 
         let mut sl = crate::startup::StartupLap::new();
+        // per-module def name -> index, built on first touch: three
+        // plan passes look defs up by name, and linear scans there are
+        // O(rules x defs) on rule-heavy designs (ms-scale)
+        let mut def_idx: HashMap<usize, HashMap<StrId, usize>> = HashMap::new();
         let mut nslots: u32 = 0;
         let alloc = |n: &mut u32, words: u32| {
             let s = *n;
@@ -2599,13 +2603,15 @@ impl Interp {
             let mut mirs: Vec<usize> = exemplar.keys().copied().collect();
             mirs.sort_unstable();
             for mir in mirs {
+                let didx = def_idx.entry(mir).or_insert_with(|| {
+                    let defs = &self.d.modules[mir].defs;
+                    defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
+                });
                 for (name, pi) in an.module(mir) {
                     if pi.outlined && !eager_excl.contains(&(mir, name)) {
-                        let w = self.d.modules[mir]
-                            .defs
-                            .iter()
-                            .find(|dd| dd.name == name)
-                            .map(|dd| dd.width.max(1))
+                        let w = didx
+                            .get(&name)
+                            .map(|&i| self.d.modules[mir].defs[i].width.max(1))
                             .unwrap_or(1);
                         let stable = pi.stable && pi.ports.is_empty();
                         sel.insert((mir, name), (w, stable, pi.ports.clone()));
@@ -2854,9 +2860,13 @@ impl Interp {
                     }
                 }
                 union.sort_unstable();
+                let didx = def_idx.entry(mir).or_insert_with(|| {
+                    let defs = &self.d.modules[mir].defs;
+                    defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
+                });
                 for e in union {
                     let Some(ed) =
-                        self.d.modules[mir].defs.iter().find(|d| d.name == e)
+                        didx.get(&e).map(|&i| &self.d.modules[mir].defs[i])
                     else {
                         if trace {
                             eprintln!("trs jit: off (eager def unknown)");
@@ -3184,11 +3194,15 @@ impl Interp {
             // into the WF def EXPRESSION (WF_a = CF_a && !WF_b), never
             // into me_inhibits — a const-true CAN_FIRE says nothing
             // (sysEspositoPreempt/sysRegFileVector regression).
+            let didx = &*def_idx.entry(mir).or_insert_with(|| {
+                let defs = &self.d.modules[mir].defs;
+                defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
+            });
             let const_true = |name: StrId| -> bool {
                 let defs = &self.d.modules[mir].defs;
                 let mut cur = name;
                 for _ in 0..32 {
-                    let Some(dd) = defs.iter().find(|dd| dd.name == cur) else {
+                    let Some(dd) = didx.get(&cur).map(|&i| &defs[i]) else {
                         return false;
                     };
                     match &*dd.expr {
