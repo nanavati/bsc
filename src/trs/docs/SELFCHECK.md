@@ -1,13 +1,17 @@
 # Lockstep selfcheck — `trs run --selfcheck`
 
-One process validates BOTH engines against each other with no
+One process validates EVERY execution tier against the others with no
 reference simulator anywhere: the PRIMARY engine (compiled, when the
 artifact carries `--code`; the hybrid JIT otherwise) runs the design
-normally — it owns stdout, waveforms, and the exit status — while a
-quiet, pure-interp SHADOW of the same BIR runs beside it.  Every
-`--selfcheck-every` default-clock posedges (default 1000, env
-`TRS_SELFCHECK_EVERY`), and at the end of the run, the two are
-compared:
+normally — it owns stdout, waveforms, and the exit status — while
+quiet SHADOWS of the same BIR run beside it.  The default shadow set
+covers every other tier in one run: a pure interp always, plus a
+hybrid-jit shadow when the primary is the aot artifact — so interp,
+jit, and aot cross-check simultaneously, ONE test mode instead of a
+per-engine matrix (`TRS_SELFCHECK_ENGINES=interp[,jit]` overrides).
+Every `--selfcheck-every` default-clock posedges (default 1000, env
+`TRS_SELFCHECK_EVERY`), and at the end of the run, each shadow is
+compared against the primary:
 
 - shape first: cycle cursor and $finish status (state addressed at
   different times compares apples to oranges — the capi oracle's

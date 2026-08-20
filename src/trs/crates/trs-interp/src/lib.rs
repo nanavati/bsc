@@ -3460,20 +3460,23 @@ impl Interp {
 
     /// Lockstep selfcheck (trs run --selfcheck): drive this engine —
     /// the PRIMARY, which owns stdout, waveforms, and the exit status —
-    /// and a quiet interp `shadow` in bounded steps, comparing time,
-    /// cycle/finish status, and architectural prim state every `every`
-    /// default-clock posedges (and at the end of the run).  One process
-    /// validates BOTH engines against each other with no reference
-    /// simulator anywhere; a divergence reports on stderr (instant +
-    /// the first mismatching state, primary-vs-shadow) and the run
-    /// exits 87 AT the divergence, the oracle doctrine's stop point.
+    /// and one or more quiet shadow engines in bounded steps, comparing
+    /// each shadow against the primary every `every` default-clock
+    /// posedges (and at the end of the run): cycle/finish status,
+    /// architectural prim state, and time where time is architecturally
+    /// visible.  With an aot primary and interp+jit shadows, ONE run
+    /// cross-checks all three execution tiers — no per-engine test-mode
+    /// explosion — with no reference simulator anywhere.  A divergence
+    /// reports on stderr (instant + the first mismatching state,
+    /// primary-vs-shadow, shadow named by engine) and the run exits 87
+    /// AT the divergence, the oracle doctrine's stop point.
     ///
     /// TRS_SELFCHECK_INJECT=<cycle> is the detector's negative
-    /// witness: once the primary passes that cycle, the shadow is
+    /// witness: once the primary passes that cycle, the first shadow is
     /// advanced one extra posedge, which must trip the next compare.
     pub fn run_lockstep(
         &mut self,
-        shadow: &mut Interp,
+        shadows: &mut [(&'static str, Interp)],
         max_cycles: u64,
         every: u64,
     ) -> i32 {
@@ -3486,21 +3489,31 @@ impl Interp {
         loop {
             let target = self.cycles().saturating_add(every).min(max_cycles);
             self.advance(target);
-            shadow.advance(target);
+            for (_, sh) in shadows.iter_mut() {
+                sh.advance(target);
+            }
             if trace {
-                eprintln!(
+                let mut line = format!(
                     "trs selfcheck: checkpoint target={target} primary \
-                     (t={}, c={}) shadow (t={}, c={})",
-                    self.now, self.cycle, shadow.now, shadow.cycle
+                     (t={}, c={})",
+                    self.now, self.cycle
                 );
+                for (kind, sh) in shadows.iter() {
+                    line.push_str(&format!(
+                        " {kind} (t={}, c={})",
+                        sh.now, sh.cycle
+                    ));
+                }
+                eprintln!("{line}");
             }
             if let Some(n) = inject {
                 if !injected && self.cycles() >= n {
-                    shadow.advance(shadow.cycles().saturating_add(1));
+                    if let Some((_, sh)) = shadows.first_mut() {
+                        sh.advance(sh.cycles().saturating_add(1));
+                    }
                     injected = true;
                 }
             }
-            let mut diverged = Vec::new();
             // a stop consumed by the cycle budget alone is an INTERNAL
             // point: the central player and the general loop credit the
             // last posedge's companion-negedge instant differently, so
@@ -3512,38 +3525,47 @@ impl Interp {
             let budget_stop = self.finished.is_none()
                 && !self.stop_request
                 && self.cycles() >= target;
-            if !budget_stop && shadow.now != self.now {
-                diverged
-                    .push(format!("time {} vs primary {}", shadow.now, self.now));
-            }
-            if shadow.cycle != self.cycle {
-                diverged.push(format!(
-                    "cycle {} vs primary {}",
-                    shadow.cycle, self.cycle
-                ));
-            }
-            if shadow.finished != self.finished {
-                diverged.push(format!(
-                    "finished {:?} vs primary {:?}",
-                    shadow.finished, self.finished
-                ));
-            }
-            // shape first: state addressed at different times compares
-            // apples to oranges (the capi oracle's per-engine gate)
-            if diverged.is_empty() {
-                diverged = self.state_divergence(shadow, 8);
-            }
-            if !diverged.is_empty() {
-                eprintln!(
-                    "trs selfcheck: DIVERGENCE at time {} (cycle {}):",
-                    self.now, self.cycle
-                );
-                for d in &diverged {
-                    eprintln!("trs selfcheck:   {d}");
+            for si in 0..shadows.len() {
+                let (kind, shadow) = &mut shadows[si];
+                let kind = *kind;
+                let mut diverged = Vec::new();
+                if !budget_stop && shadow.now != self.now {
+                    diverged.push(format!(
+                        "time {} vs primary {}",
+                        shadow.now, self.now
+                    ));
                 }
-                self.dump_central_bails();
-                let _ = self.finish();
-                return 87;
+                if shadow.cycle != self.cycle {
+                    diverged.push(format!(
+                        "cycle {} vs primary {}",
+                        shadow.cycle, self.cycle
+                    ));
+                }
+                if shadow.finished != self.finished {
+                    diverged.push(format!(
+                        "finished {:?} vs primary {:?}",
+                        shadow.finished, self.finished
+                    ));
+                }
+                // shape first: state addressed at different times
+                // compares apples to oranges (the capi oracle's
+                // per-engine gate)
+                if diverged.is_empty() {
+                    diverged = self.state_divergence(shadow, 8);
+                }
+                if !diverged.is_empty() {
+                    eprintln!(
+                        "trs selfcheck: DIVERGENCE [{kind} shadow] at \
+                         time {} (cycle {}):",
+                        self.now, self.cycle
+                    );
+                    for d in &diverged {
+                        eprintln!("trs selfcheck:   {d}");
+                    }
+                    self.dump_central_bails();
+                    let _ = self.finish();
+                    return 87;
+                }
             }
             if self.finished.is_some()
                 || self.stop_request
@@ -3560,7 +3582,9 @@ impl Interp {
         }
         self.dump_central_bails();
         let rc = self.finish();
-        let _ = shadow.finish();
+        for (_, sh) in shadows.iter_mut() {
+            let _ = sh.finish();
+        }
         rc
     }
 
@@ -5304,19 +5328,47 @@ pub fn run_file(
         );
         return Ok(interp.run(max_cycles));
     }
-    // lockstep selfcheck: a second, pure-interp engine shadows the
-    // primary — quiet (no console/file/VCD output), no compiled code,
-    // debug tier (the shadow is an oracle, not the artifact's
-    // execution engine, so TRS_REQUIRE_AOT does not police it).
-    // Construction runs under the quiet stamp too: elaboration-time
-    // prim diagnostics ($readmem gap warnings) print at load, before
-    // any advance re-stamps the thread-local (sysWarningTest leaked
-    // the shadow's copy into stdout).
-    prim::QUIET_ENGINE.with(|c| c.set(true));
-    let shadow_res = load_file(path, plusargs, None);
-    prim::QUIET_ENGINE.with(|c| c.set(false));
-    let mut shadow = shadow_res?;
-    shadow.set_quiet();
-    shadow.set_debug_tier();
-    Ok(interp.run_lockstep(&mut shadow, max_cycles, every))
+    // lockstep selfcheck: quiet shadow engines ride beside the primary
+    // — no console/file/VCD output, debug tier (a shadow is an oracle,
+    // not the artifact's execution engine, so TRS_REQUIRE_AOT does not
+    // police it).  The default shadow set covers EVERY other execution
+    // tier in one run: a pure interp always, plus a hybrid-jit shadow
+    // when the primary is the aot artifact — interp, jit, and aot then
+    // cross-check simultaneously, one mode instead of three.
+    // TRS_SELFCHECK_ENGINES=interp[,jit] overrides.  Construction runs
+    // under the quiet stamp too: elaboration-time prim diagnostics
+    // ($readmem gap warnings) print at load, before any advance
+    // re-stamps the thread-local (sysWarningTest leaked the shadow's
+    // copy into stdout).
+    let kinds: Vec<&'static str> = match std::env::var("TRS_SELFCHECK_ENGINES") {
+        Ok(s) => s
+            .split(',')
+            .filter_map(|t| match t.trim() {
+                "interp" => Some("interp"),
+                "jit" => Some("jit"),
+                _ => None,
+            })
+            .collect(),
+        Err(_) => {
+            if code.is_some() {
+                vec!["interp", "jit"]
+            } else {
+                vec!["interp"]
+            }
+        }
+    };
+    let mut shadows: Vec<(&'static str, Interp)> = Vec::new();
+    for kind in kinds {
+        prim::QUIET_ENGINE.with(|c| c.set(true));
+        let sh = load_file(path, plusargs, None);
+        prim::QUIET_ENGINE.with(|c| c.set(false));
+        let mut sh = sh?;
+        sh.set_quiet();
+        sh.set_debug_tier();
+        if kind == "jit" {
+            sh.arm_jit();
+        }
+        shadows.push((kind, sh));
+    }
+    Ok(interp.run_lockstep(&mut shadows, max_cycles, every))
 }
