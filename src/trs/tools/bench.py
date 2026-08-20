@@ -91,7 +91,11 @@ POOL = [
     # packet-processing app (mesa)
     dict(name="Mesa", dir="testsuite/bsc.bsv_examples/mesa/spiless-tx-bsv",
          src="TestMesa.bsv", top="sysTestMesa", cycles=None,
-         character="app-scale packet pipeline"),
+         character="app-scale packet pipeline",
+         no_verilator="non-terminating under the generic C++ driver "
+                      "(packet input side free-runs; same Verilog "
+                      "passes the suite under iverilog with bsc's "
+                      "main.v) — under investigation"),
 ]
 
 VL_MAIN = r"""
