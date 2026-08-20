@@ -4783,7 +4783,15 @@ impl Interp {
 
     /// trs run --code: resolve compiled functions from the artifact.
     pub fn aot_request_code(&mut self, so: std::path::PathBuf) {
-        self.jit_request = jit::JitRequest::Load { so };
+        self.jit_request =
+            jit::JitRequest::Load { src: jit::ArtifactSource::Path(so) };
+    }
+
+    /// Artifact-as-executable: the design objects are linked into THIS
+    /// process image — resolve compiled functions from ourselves.
+    pub fn aot_request_code_self(&mut self) {
+        self.jit_request =
+            jit::JitRequest::Load { src: jit::ArtifactSource::This };
     }
 
     /// Outcome of an Emit request (valid after prime()).

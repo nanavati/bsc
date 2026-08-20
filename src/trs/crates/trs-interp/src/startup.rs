@@ -56,9 +56,9 @@ pub fn load_file_or_code(
 ) -> Result<Interp, String> {
     let mut sl = StartupLap::new();
     if let Some(so) = code {
-        if let Some((hash, design)) =
-            crate::jit::aot_embedded_design(std::path::Path::new(so))
-        {
+        if let Some((hash, design)) = crate::jit::aot_embedded_design(
+            &crate::jit::ArtifactSource::Path(so.into()),
+        ) {
             sl.lap("design load (artifact-embedded snap)");
             let mut interp = Interp::new(design);
             sl.lap("interp build (instantiate)");

@@ -166,6 +166,44 @@ pub(crate) enum JitNode {
     Exec(u32),
 }
 
+/// Where a --code artifact lives: a shared object on disk, or the
+/// process's own image (artifact-as-executable: the design objects
+/// are linked INTO the exe with --export-dynamic, and dlopen(NULL)
+/// resolves trs_snap / the edge fns from the global scope).
+#[derive(Clone, Debug)]
+pub enum ArtifactSource {
+    Path(std::path::PathBuf),
+    This,
+}
+
+impl ArtifactSource {
+    pub(crate) fn open(&self) -> Result<libloading::Library, String> {
+        match self {
+            ArtifactSource::Path(so) => {
+                // dlopen treats a bare filename as a library-search-
+                // path lookup, NOT a cwd file (same fix as load_bdpi)
+                let so_owned;
+                let so = if so.to_str().is_some_and(|s| !s.contains('/')) {
+                    so_owned = std::path::Path::new(".").join(so);
+                    so_owned.as_path()
+                } else {
+                    so
+                };
+                unsafe { libloading::Library::new(so).map_err(|e| e.to_string()) }
+            }
+            ArtifactSource::This => {
+                Ok(libloading::os::unix::Library::this().into())
+            }
+        }
+    }
+    pub(crate) fn display(&self) -> String {
+        match self {
+            ArtifactSource::Path(so) => so.display().to_string(),
+            ArtifactSource::This => "<self>".to_string(),
+        }
+    }
+}
+
 /// What prime()'s planning pass should do with the compiled form:
 /// JIT in-process (default), emit a persistent artifact .so (trs
 /// link), or load one (trs run --code).
@@ -177,7 +215,7 @@ pub(crate) enum JitRequest {
         so: std::path::PathBuf,
     },
     Load {
-        so: std::path::PathBuf,
+        src: ArtifactSource,
     },
 }
 
@@ -1148,17 +1186,10 @@ fn aot_emit(
 /// missing/unloadable .so, or a snap-gate failure — the caller falls
 /// back to the .bir path and the normal fingerprint cross-check.
 pub(crate) fn aot_embedded_design(
-    so: &std::path::Path,
+    src: &ArtifactSource,
 ) -> Option<(u64, trs_ir::Design)> {
     unsafe {
-        let so_owned;
-        let so = if so.to_str().is_some_and(|s| !s.contains('/')) {
-            so_owned = std::path::Path::new(".").join(so);
-            so_owned.as_path()
-        } else {
-            so
-        };
-        let lib = libloading::Library::new(so).ok()?;
+        let lib = src.open().ok()?;
         let h: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash").ok()?;
         let hash = **h;
         let l: libloading::Symbol<*const u64> = lib.get(b"trs_snap_len").ok()?;
@@ -1183,7 +1214,7 @@ const TRACE_MODE_MISMATCH: &str =
     "artifact trace mode differs from this run; compiling in-process";
 
 fn aot_load(
-    so: &std::path::Path,
+    src: &ArtifactSource,
     bir_hash: u64,
     specs: &[RuleSpec],
     classes: &[(usize, Vec<usize>)],
@@ -1195,18 +1226,7 @@ fn aot_load(
     String,
 > {
     unsafe {
-        // dlopen treats a bare filename as a library-search-path
-        // lookup, NOT a cwd file: `--code art.so` would miss, and the
-        // miss used to become a silent in-process-compile fallback
-        // (same fix as load_bdpi)
-        let so_owned;
-        let so = if so.to_str().is_some_and(|s| !s.contains('/')) {
-            so_owned = std::path::Path::new(".").join(so);
-            so_owned.as_path()
-        } else {
-            so
-        };
-        let lib = libloading::Library::new(so).map_err(|e| e.to_string())?;
+        let lib = src.open()?;
         let h: libloading::Symbol<*const u64> =
             lib.get(b"trs_bir_hash").map_err(|e| e.to_string())?;
         if **h != bir_hash {
@@ -3375,9 +3395,9 @@ impl Interp {
         let mut wire_ticks_flag = false;
         let mut protos_opt: Option<Vec<FnProtos>> = None;
         let mut fused_opt: Option<Vec<usize>> = None;
-        if let JitRequest::Load { so } = &request {
+        if let JitRequest::Load { src } = &request {
             match aot_load(
-                so,
+                src,
                 // trace-salted: a traced plan (recording slots shift
                 // the whole layout) must never accept an untraced
                 // artifact, and vice versa
@@ -3420,7 +3440,7 @@ impl Interp {
                     if e != TRACE_MODE_MISMATCH || trace {
                         eprintln!(
                             "trs: artifact {}: {e}; compiling in-process instead",
-                            so.display()
+                            src.display()
                         );
                     }
                 }
