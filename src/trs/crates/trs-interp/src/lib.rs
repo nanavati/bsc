@@ -55,11 +55,57 @@ fn is_lib_bdpi(c_name: &str) -> bool {
     matches!(c_name, "rand32" | "srand")
 }
 
-extern "C" {
-    #[link_name = "random"]
-    fn libc_random() -> std::ffi::c_long;
-    #[link_name = "srandom"]
-    fn libc_srandom(seed: std::ffi::c_uint);
+/// glibc random() (TYPE_3, trinomial x^31 + x^3 + 1), reimplemented so
+/// every Interp owns its OWN stream.  The reference's rand32.cxx calls
+/// libc random(), whose state is process-global — fine for one model
+/// per process, but the lockstep selfcheck and the bluetcl
+/// multi-engine oracle run several engines in one process, and a
+/// shared stream interleaves: each engine sees a different
+/// subsequence (witness: sysTest_mkNonPipelinedDivider, identical
+/// stdout with divergent Randomize-fed state).  Verified word-exact
+/// against glibc for 1000 draws under the default seed and srandom(N)
+/// reseeding (scratch rngtest.c).
+struct GlibcRandom {
+    state: [u32; 31],
+    f: usize,
+    r: usize,
+}
+
+impl GlibcRandom {
+    fn new() -> GlibcRandom {
+        // glibc's initial state is as if srandom(1)
+        let mut g = GlibcRandom { state: [0; 31], f: 3, r: 0 };
+        g.srandom(1);
+        g
+    }
+    fn srandom(&mut self, seed: u32) {
+        let seed = if seed == 0 { 1 } else { seed };
+        self.state[0] = seed;
+        for i in 1..31 {
+            // 16807 * prev % 2^31-1 via Schrage's method, exactly as
+            // glibc computes it (signed intermediate)
+            let prev = self.state[i - 1] as i32 as i64;
+            let hi = prev / 127773;
+            let lo = prev % 127773;
+            let mut word = 16807 * lo - 2836 * hi;
+            if word < 0 {
+                word += 2147483647;
+            }
+            self.state[i] = word as u32;
+        }
+        self.f = 3;
+        self.r = 0;
+        for _ in 0..310 {
+            self.next();
+        }
+    }
+    fn next(&mut self) -> u32 {
+        self.state[self.f] = self.state[self.f].wrapping_add(self.state[self.r]);
+        let res = (self.state[self.f] >> 1) & 0x7fff_ffff;
+        self.f = (self.f + 1) % 31;
+        self.r = (self.r + 1) % 31;
+        res
+    }
 }
 
 // ===============
@@ -215,6 +261,8 @@ pub struct Interp {
     /// TRACED artifact only: (instance, method) -> recording slots for
     /// the method's VCD ports (EN time / args / result)
     jit_rec_meths: HashMap<(usize, StrId), RecSlots>,
+    /// per-engine $random/$srandom stream (library rand32/srand BDPI)
+    rng: GlibcRandom,
 }
 
 /// Arena recording slots for one user-module method's VCD ports
@@ -650,6 +698,7 @@ impl Interp {
             jit_reset_slots: Vec::new(),
             jit_rec_defs: HashMap::new(),
             jit_rec_meths: HashMap::new(),
+            rng: GlibcRandom::new(),
         };
         // def/method-call recording must run from t=0 if the design can
         // ever start dumping ($dump* task present); -V sets it too
@@ -1970,8 +2019,9 @@ impl Interp {
         // glibc calls for bit-identical streams
         match self.s(ff.c_name) {
             "rand32" => {
-                // rand32.cxx: return (unsigned int)random();
-                let v = unsafe { libc_random() } as u64 & 0xffff_ffff;
+                // rand32.cxx: return (unsigned int)random(); ours is
+                // the same glibc stream, per-engine (see GlibcRandom)
+                let v = self.rng.next() as u64;
                 return Some(Value::from_u64(w.max(1), v));
             }
             "srand" => {
@@ -1980,7 +2030,7 @@ impl Interp {
                     Some(Arg::Val(v, _)) => v.as_u64() as u32,
                     _ => 0,
                 };
-                unsafe { libc_srandom(seed) };
+                self.rng.srandom(seed);
                 return Some(Value::from_u64(w.max(1), 0));
             }
             _ => {}

@@ -2667,11 +2667,16 @@ impl Prim for Fifo {
                 return None;
             }
             let i = (self.fst + addr as usize) % self.size;
+            // normalize the width: arena refresh reconstructs entries
+            // at width.max(1) while boxed entries keep the enq'd width
+            // (0 for zero-width fifos) — same bits, unequal Values
+            // (sysZeroFIFOParamTest phantom divergence)
             return Some(
                 self.data
                     .get(i)
                     .cloned()
-                    .unwrap_or_else(|| Value::zero(self.width.max(1))),
+                    .unwrap_or_else(|| Value::zero(self.width.max(1)))
+                    .zext(self.width.max(1)),
             );
         }
         if !key.is_empty() || addr as usize >= self.size {
