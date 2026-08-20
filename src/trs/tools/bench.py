@@ -199,12 +199,12 @@ def bench_one(d, legs, runs, work):
                 res["legs"][leg] = L
                 continue
             L["frontend_s"] = round(t, 2)
-            # bsc's system-task blocks open with a literal `#0;` (an
-            # intra-negedge ordering guard).  Under the C++ driver the
-            # negedge instant is a plain eval long after posedge NBAs
-            # settle, so the guard is inert — strip it rather than
-            # reaching for --timing/--no-timing (per Ravi: --timing has
-            # known issues; --no-timing would ignore delays silently).
+            # bsc >= this tree emits the system-task blocks' 0-tick
+            # ordering guard as `BSV_ZERO_DELAY (defined away below);
+            # the strip stays as a fallback for benchmarking OLDER bsc
+            # revisions, whose literal `#0;` predates the macro.  It is
+            # inert under the C++ driver either way (the negedge
+            # instant is a plain eval long after posedge NBAs settle).
             for vf in os.listdir(wk):
                 if vf.endswith(".v"):
                     pv = os.path.join(wk, vf)
@@ -222,7 +222,8 @@ def bench_one(d, legs, runs, work):
             # so the Verilog is genuinely delay-free and anything else
             # timing-shaped errors loudly for explicit handling
             r, t = sh(["verilator", "--cc", "--exe", "--build", "-j", "4",
-                       "+define+BSV_ASSIGNMENT_DELAY=", "-O3", "-Wno-fatal",
+                       "+define+BSV_ASSIGNMENT_DELAY=",
+                       "+define+BSV_ZERO_DELAY=", "-O3", "-Wno-fatal",
                        "--x-assign", "fast", "--x-initial", "fast",
                        "-y", os.path.abspath(vdir),
                        top + ".v", "bench_main.cpp", "-o", "simv"], wk)
