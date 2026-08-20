@@ -118,9 +118,18 @@ int main(int argc, char** argv) {
 """
 
 
+# Benchmark hygiene: a stray TRS_SELFCHECK=1 in the caller's shell
+# (say, right after a suite run) would silently run lockstep shadows
+# inside the trs leg and triple its numbers.  The selfcheck is a
+# validation mode, never a benchmark mode — scrub its knobs (and the
+# jit trace) from every child environment.
+_ENV = {k: v for k, v in os.environ.items()
+        if not k.startswith("TRS_SELFCHECK") and k != "TRS_JIT_TRACE"}
+
+
 def sh(cmd, cwd, env=None, timeout=7200):
     t0 = time.monotonic()
-    r = subprocess.run(cmd, cwd=cwd, env=env or os.environ,
+    r = subprocess.run(cmd, cwd=cwd, env=env or _ENV,
                        capture_output=True, text=True, timeout=timeout)
     return r, time.monotonic() - t0
 
