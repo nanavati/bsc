@@ -2582,10 +2582,6 @@ impl Interp {
         }
 
         let mut sl = crate::startup::StartupLap::new();
-        // per-module def name -> index, built on first touch: three
-        // plan passes look defs up by name, and linear scans there are
-        // O(rules x defs) on rule-heavy designs (ms-scale)
-        let mut def_idx: HashMap<usize, HashMap<StrId, usize>> = HashMap::new();
         let mut nslots: u32 = 0;
         let alloc = |n: &mut u32, words: u32| {
             let s = *n;
@@ -2726,13 +2722,11 @@ impl Interp {
             let mut mirs: Vec<usize> = exemplar.keys().copied().collect();
             mirs.sort_unstable();
             for mir in mirs {
-                let didx = def_idx.entry(mir).or_insert_with(|| {
-                    let defs = &self.d.modules[mir].defs;
-                    defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
-                });
                 for (name, pi) in an.module(mir) {
                     if pi.outlined && !eager_excl.contains(&(mir, name)) {
-                        let w = didx
+                        // self.mods[mir].defs is the prebuilt name index
+                        let w = self.mods[mir]
+                            .defs
                             .get(&name)
                             .map(|&i| self.d.modules[mir].defs[i].width.max(1))
                             .unwrap_or(1);
@@ -2983,13 +2977,11 @@ impl Interp {
                     }
                 }
                 union.sort_unstable();
-                let didx = def_idx.entry(mir).or_insert_with(|| {
-                    let defs = &self.d.modules[mir].defs;
-                    defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
-                });
                 for e in union {
-                    let Some(ed) =
-                        didx.get(&e).map(|&i| &self.d.modules[mir].defs[i])
+                    let Some(ed) = self.mods[mir]
+                        .defs
+                        .get(&e)
+                        .map(|&i| &self.d.modules[mir].defs[i])
                     else {
                         if trace {
                             eprintln!("trs jit: off (eager def unknown)");
@@ -3348,10 +3340,8 @@ impl Interp {
             let always_fire = if let Some(af) = &baked_af {
                 af.get(ri.ordinal).is_some_and(|&b| b != 0)
             } else {
-                let didx = &*def_idx.entry(mir).or_insert_with(|| {
-                    let defs = &self.d.modules[mir].defs;
-                    defs.iter().enumerate().map(|(i, dd)| (dd.name, i)).collect()
-                });
+                // self.mods[mir].defs is the prebuilt name index
+                let didx = &self.mods[mir].defs;
                 let const_true = |name: StrId| -> bool {
                     let defs = &self.d.modules[mir].defs;
                     let mut cur = name;
