@@ -72,14 +72,23 @@ _BSC_ID = None
 
 def _bsc_id():
     """Content hash of the bsc binary: golden entries from another bsc
-    build must never replay."""
+    build must never replay.  An installed `bsc` is a wrapper SCRIPT
+    that never changes across rebuilds (it exec's core/bsc beside it):
+    hashing only the wrapper kept the cache warm across bsc rebuilds
+    and replayed stale reference .birs — hash the real executable too."""
     global _BSC_ID
     if _BSC_ID is None:
         import hashlib
         h = hashlib.sha256()
-        with open(BSC, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
+        targets = [BSC]
+        core = os.path.join(os.path.dirname(BSC), "core",
+                            os.path.basename(BSC))
+        if os.path.exists(core):
+            targets.append(core)
+        for t in targets:
+            with open(t, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
         _BSC_ID = h.hexdigest().encode()
     return _BSC_ID
 
