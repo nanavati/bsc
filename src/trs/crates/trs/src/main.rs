@@ -389,16 +389,22 @@ fn main() -> ExitCode {
             // (vcd, fst) writers this model carries; None = the
             // reference default (vcd only) applied at load
             let mut formats: Option<(bool, bool)> = None;
-            // Some(N) = lockstep selfcheck, compare cadence N posedges.
-            // TRS_SELFCHECK=1 arms it environmentally — existing
-            // artifact wrappers then run checked with no relink (how
-            // the corpus-wide selfcheck sweep drives it).
-            let mut selfcheck: Option<u64> =
+            // Some((N, announce)) = lockstep selfcheck, compare
+            // cadence N posedges.  TRS_SELFCHECK=1 arms it
+            // environmentally — existing artifact wrappers then run
+            // checked with no relink (how the corpus sweep and the
+            // DejaGnu suite drive it); env-armed runs suppress the
+            // skip notes (announce=false) because byte-compare
+            // harnesses capture stderr.
+            let mut selfcheck: Option<(u64, bool)> =
                 std::env::var_os("TRS_SELFCHECK").map(|_| {
-                    std::env::var("TRS_SELFCHECK_EVERY")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(1000)
+                    (
+                        std::env::var("TRS_SELFCHECK_EVERY")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(1000),
+                        false,
+                    )
                 });
             let mut script_cmds = String::new();
             // bluesim.tcl's usage text, printed for -h and after the
@@ -457,18 +463,19 @@ fn main() -> ExitCode {
                     // N default-clock posedges (default 1000, or
                     // --selfcheck-every / TRS_SELFCHECK_EVERY)
                     "--selfcheck" => {
-                        if selfcheck.is_none() {
-                            selfcheck = Some(
+                        selfcheck = Some((
+                            selfcheck.map(|(n, _)| n).unwrap_or_else(|| {
                                 std::env::var("TRS_SELFCHECK_EVERY")
                                     .ok()
                                     .and_then(|v| v.parse().ok())
-                                    .unwrap_or(1000),
-                            );
-                        }
+                                    .unwrap_or(1000)
+                            }),
+                            true,
+                        ));
                     }
                     "--selfcheck-every" => match it.next() {
                         Some(n) => match n.parse::<u64>() {
-                            Ok(n) => selfcheck = Some(n),
+                            Ok(n) => selfcheck = Some((n, true)),
                             Err(_) => {
                                 eprintln!(
                                     "Error: --selfcheck-every requires a number"
@@ -576,7 +583,7 @@ fn main() -> ExitCode {
                 }
             }
             if !script_cmds.is_empty() {
-                if selfcheck.is_some() {
+                if matches!(selfcheck, Some((_, true))) {
                     // the bluetcl tier's equivalent is the multi-engine
                     // oracle (TRS_CAPI_ENGINES=interp,jit — see
                     // docs/SELFCHECK.md); the batch lockstep driver

@@ -5299,7 +5299,7 @@ pub fn run_file(
     wave: Option<(WaveFormat, Option<String>)>,
     code: Option<&str>,
     formats: Option<(bool, bool)>,
-    selfcheck: Option<u64>,
+    selfcheck: Option<(u64, bool)>,
 ) -> Result<i32, String> {
     let mut interp = load_file(path, plusargs, vcd_file)?;
     if let Some((vcd, fst)) = formats {
@@ -5311,7 +5311,14 @@ pub fn run_file(
     if let Some(so) = code {
         interp.aot_request_code(so.into());
     }
-    let Some(every) = selfcheck else {
+    // announce: notes print only for an EXPLICIT --selfcheck (an
+    // interactive user).  Env-armed runs (TRS_SELFCHECK=1 — the
+    // corpus sweep and the DejaGnu suite) stay silent on skips: the
+    // suite captures stderr into byte-compared output, and a note
+    // would fail every BDPI test.  Divergence reports are NOT notes —
+    // they always print (a diverging suite test failing with the
+    // report in its log is the point).
+    let Some((every, announce)) = selfcheck else {
         return Ok(interp.run(max_cycles));
     };
     if interp.needs_user_bdpi() {
@@ -5320,12 +5327,14 @@ pub fn run_file(
         // stateful foreign functions and corrupts the primary's own
         // outputs (14 foreign-battery witnesses in the first selfcheck
         // sweep) — skip the shadow, run plain
-        eprintln!(
-            "trs selfcheck: note: design imports BDPI — user C state \
-             is process-global and a lockstep shadow would \
-             double-execute stateful foreign functions; selfcheck \
-             skipped"
-        );
+        if announce {
+            eprintln!(
+                "trs selfcheck: note: design imports BDPI — user C \
+                 state is process-global and a lockstep shadow would \
+                 double-execute stateful foreign functions; selfcheck \
+                 skipped"
+            );
+        }
         return Ok(interp.run(max_cycles));
     }
     // lockstep selfcheck: quiet shadow engines ride beside the primary
