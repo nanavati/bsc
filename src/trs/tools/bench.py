@@ -183,7 +183,13 @@ def bench_one(d, legs, runs, work):
         wk = os.path.join(work, d["name"], leg)
         os.makedirs(wk, exist_ok=True)
         for f in os.listdir(src_dir):
-            if f.endswith((".bsv", ".bs", ".c", ".h", ".hex", ".bin", ".dat", ".txt", ".vec")):
+            # same input set as diffsweep's _GOLD_INPUTS: data files
+            # shape the OUTPUT (Mesa's LPM tables load from
+            # .handbuilt via RegFileLoad — without them every leg
+            # simulates empty tables, Verilator's $readmem fatally)
+            if f.endswith((".bsv", ".bs", ".c", ".h", ".hex", ".bin",
+                           ".dat", ".txt", ".vec", ".mem", ".input",
+                           ".vectors", ".handbuilt", ".rom", ".data")):
                 try:
                     shutil.copy(os.path.join(src_dir, f), wk)
                 except OSError:
@@ -193,6 +199,16 @@ def bench_one(d, legs, runs, work):
         # buries real errors in the reported tail), and the default
         # path keeps "." (= wk, the cwd) and the libraries
         common = ["-bdir", wk, "-info-dir", wk, "-simdir", wk, "-vdir", wk]
+        # BDPI designs need the user's C files at link (diffsweep does
+        # the same); bsc's -e link also emits the .bdpi.so the trs
+        # artifact loads
+        cfiles = sorted(f for f in os.listdir(wk)
+                        if f.endswith(".c") and not f.startswith("vpi_"))
+        has_bdpi = any('import "BDPI"' in open(os.path.join(wk, f),
+                                               errors="replace").read()
+                       for f in os.listdir(wk) if f.endswith(".bsv"))
+        if not has_bdpi:
+            cfiles = []
         L = {}
         if leg in ("bluesim", "trs"):
             r, t = sh([BSC, "-sim", "-u", "-g", top] + common + [d["src"]], wk)
@@ -202,7 +218,7 @@ def bench_one(d, legs, runs, work):
                 continue
             L["frontend_s"] = round(t, 2)
             if leg == "bluesim":
-                r, t = sh([BSC, "-sim", "-e", top, "-o", "simb"] + common, wk)
+                r, t = sh([BSC, "-sim", "-e", top, "-o", "simb"] + common + cfiles, wk)
                 if r.returncode != 0:
                     L["error"] = "bluesim link: " + _err(r)
                     res["legs"][leg] = L
@@ -211,7 +227,7 @@ def bench_one(d, legs, runs, work):
                 m, r = run_measured(["./simb"], wk, runs)
                 exe = "./simb"
             else:
-                r, t = sh([BSC, "-sim", "-bir", "-e", top, "-o", "simr"] + common, wk)
+                r, t = sh([BSC, "-sim", "-bir", "-e", top, "-o", "simr"] + common + cfiles, wk)
                 bir = os.path.join(wk, top + ".bir")
                 if not os.path.exists(bir):
                     L["error"] = "no .bir: " + _err(r)
@@ -227,7 +243,8 @@ def bench_one(d, legs, runs, work):
                 m, r = run_measured(["./art"], wk, runs)
                 exe = "./art"
         else:  # verilator
-            r, t = sh([BSC, "-verilog", "-u", "-g", top] + common + [d["src"]], wk)
+            t_dpi = ["-use-dpi"] if cfiles else []
+            r, t = sh([BSC, "-verilog", "-u", "-g", top] + t_dpi + common + [d["src"]], wk)
             if r.returncode != 0:
                 L["error"] = "bsc -verilog: " + _err(r)
                 res["legs"][leg] = L
@@ -269,7 +286,7 @@ def bench_one(d, legs, runs, work):
                        "-O3", "-Wno-fatal",
                        "--x-assign", "fast", "--x-initial", "fast",
                        "-y", os.path.abspath(vdir),
-                       top + ".v", "bench_main.cpp", "-o", "simv"], wk)
+                       top + ".v", "bench_main.cpp"] + cfiles + ["-o", "simv"], wk)
             if r.returncode != 0:
                 L["error"] = "verilator: " + _err(r)
                 res["legs"][leg] = L
@@ -337,6 +354,9 @@ def main():
         res = bench_one(d, legs, args.runs, work)
         results.append(res)
         for leg, L in res["legs"].items():
+            if "skipped" in L:
+                print(f"   {leg:9} skipped: {L['skipped']}")
+                continue
             if "error" in L:
                 print(f"   {leg:9} ERROR {L['error'][:120]}")
             else:
