@@ -30,10 +30,10 @@ import argparse
 import json
 import os
 import re
-import resource
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -135,17 +135,25 @@ def sh(cmd, cwd, env=None, timeout=7200):
 
 
 def run_measured(cmd, cwd, runs):
-    """Median wall + max RSS over `runs` executions (children rusage)."""
+    """Median wall + max RSS over `runs` executions.
+
+    RSS comes from /usr/bin/time %M per run, NOT from
+    getrusage(RUSAGE_CHILDREN): ru_maxrss there is a cumulative
+    high-water mark over every child ever waited on, so one big build
+    child (bsc peaks ~300MB) masquerades as every later run's RSS.
+    """
     walls, rss = [], 0
     out = None
     for _ in range(runs):
-        before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-        r, w = sh(cmd, cwd)
-        after = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-        if r.returncode not in (0,):
-            return None, r
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".rss") as tf:
+            r, w = sh(["/usr/bin/time", "-f", "%M", "-o", tf.name] + cmd, cwd)
+            if r.returncode not in (0,):
+                return None, r
+            try:
+                rss = max(rss, int(tf.read().strip().splitlines()[-1]))
+            except (ValueError, IndexError):
+                pass
         walls.append(w)
-        rss = max(rss, after if after > before else before)
         out = r
     walls.sort()
     return dict(wall=walls[len(walls) // 2], walls=walls,
