@@ -487,7 +487,7 @@ pub fn compile_meta_object(
     bir_hash_raw: u64,
     split_thresh: u64,
     protos: &[u8],
-    edge_wire_ticks: bool,
+    edge_tick_level: u64,
     bdpi_names: &[String],
     snap: &[u8],
     plan_a: &[u8],
@@ -510,17 +510,22 @@ pub fn compile_meta_object(
     // loader must plan with the SAME value or refuse the artifact
     let t = module.add_global(i64t, None, "trs_split_thresh");
     t.set_initializer(&i64t.const_int(split_thresh, false));
-    // edge fns contain the compiled wire ticks: the loader skips the
-    // interp tick loop's covered entries iff this is set (absent in
-    // old artifacts -> loader reads 0)
+    // edge fns contain compiled ticks: the loader skips the interp
+    // tick loop's covered entries per this level (absent in old
+    // artifacts -> loader reads 0).  1 = wire clears only (historic);
+    // 2 = wire clears + CReg copies + BRAM port ticks.
     let wt = module.add_global(i64t, None, "trs_edge_wire_ticks");
-    wt.set_initializer(&i64t.const_int(edge_wire_ticks as u64, false));
+    wt.set_initializer(&i64t.const_int(edge_tick_level, false));
     // single definition of the callback pointer-globals every chunk
     // object references; the loader fills them after dlopen
     for name in ["trs_cb_foreign", "trs_cb_sigfpe", "trs_cb_prim", "trs_cb_stdio"] {
         let g = module.add_global(ptrt, None, name);
         g.set_initializer(&ptrt.const_null());
     }
+    // compiled-BRAM-tick helper pointer (edge fns call through it;
+    // the loader fills it with abi::trs_bram_tick)
+    let bt = module.add_global(i64t, None, "trs_bram_tick_cb");
+    bt.set_initializer(&i64t.const_zero());
     // direct-BDPI callee pointers, filled by the loader from the
     // artifact's companion .bdpi.so
     for n in bdpi_names {
@@ -1186,6 +1191,81 @@ fn lower_edge_ssa<'ctx>(
                     .unwrap()
                 };
                 bend.build_store(gepw, i64t.const_zero()).unwrap();
+            }
+        }
+        // compiled CReg ticks: copy the live value into the registered
+        // value (the whole untraced semantics of CReg::tick)
+        if let Some(copies) = plan.creg_copies.get(k) {
+            for &(base, words) in copies {
+                for i in 0..words {
+                    let s = unsafe {
+                        bend.build_gep(
+                            i64t,
+                            arena,
+                            &[i64t.const_int((base + i) as u64, false)],
+                            "cs",
+                        )
+                        .unwrap()
+                    };
+                    let v = bend.build_load(i64t, s, "cv").unwrap();
+                    let d = unsafe {
+                        bend.build_gep(
+                            i64t,
+                            arena,
+                            &[i64t
+                                .const_int((base + words + i) as u64, false)],
+                            "cd",
+                        )
+                        .unwrap()
+                    };
+                    bend.build_store(d, v).unwrap();
+                }
+            }
+        }
+        // compiled BRAM ticks: one helper call per port tick, through
+        // the trs_bram_tick_cb pointer-global (filled at load).  Call
+        // order preserves the rc.ticks walk — the cross-port bypass
+        // reads the other port's just-latched written_at.
+        if let Some(ticks) = plan.bram_ticks.get(k) {
+            if !ticks.is_empty() {
+                // external declaration: the meta object owns the single
+                // definition (loader fills it after dlopen)
+                let cbg = module
+                    .get_global("trs_bram_tick_cb")
+                    .unwrap_or_else(|| {
+                        module.add_global(i64t, None, "trs_bram_tick_cb")
+                    });
+                let fp64 = bend
+                    .build_load(i64t, cbg.as_pointer_value(), "btc")
+                    .unwrap()
+                    .into_int_value();
+                let fp =
+                    bend.build_int_to_ptr(fp64, ptrt, "btp").unwrap();
+                let tick_ty = ctx.void_type().fn_type(
+                    &[
+                        ptrt.into(),
+                        i64t.into(),
+                        i64t.into(),
+                        i64t.into(),
+                        i64t.into(),
+                    ],
+                    false,
+                );
+                for a in ticks {
+                    bend.build_indirect_call(
+                        tick_ty,
+                        fp,
+                        &[
+                            arena.into(),
+                            now.into(),
+                            i64t.const_int(a[0], false).into(),
+                            i64t.const_int(a[1], false).into(),
+                            i64t.const_int(a[2], false).into(),
+                        ],
+                        "bt",
+                    )
+                    .unwrap();
+                }
             }
         }
         bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
