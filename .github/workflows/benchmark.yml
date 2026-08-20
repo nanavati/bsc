@@ -94,3 +94,31 @@ jobs:
           path: |
             bench-results.json
             bench-table.txt
+      # The durable archive is MatX-inc/bsc-benchmarks (results/ —
+      # queryable history, not expiring artifacts).  Needs the
+      # BENCH_ARCHIVE_TOKEN secret (contents:write on that repo);
+      # without it the artifact above is the fallback.
+      - name: Archive to bsc-benchmarks
+        if: ${{ env.BENCH_ARCHIVE_TOKEN != '' }}
+        env:
+          BENCH_ARCHIVE_TOKEN: ${{ secrets.BENCH_ARCHIVE_TOKEN }}
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${BENCH_ARCHIVE_TOKEN}@github.com/MatX-inc/bsc-benchmarks.git" archive
+          STAMP=$(date -u +%Y-%m-%d)
+          SHA=$(git rev-parse --short=9 HEAD)
+          OUT="archive/results/${STAMP}-${SHA}-gha.json"
+          python3 - "$OUT" "$SHA" <<'PY'
+          import json, sys, platform, subprocess
+          out, sha = sys.argv[1:3]
+          data = json.load(open("bench-results.json"))
+          meta = dict(label="indicative", bsc_sha=sha, host="github-actions",
+                      machine=platform.machine(),
+                      verilator=subprocess.run(["verilator", "--version"],
+                        capture_output=True, text=True).stdout.strip())
+          json.dump(dict(meta=meta, results=data), open(out, "w"), indent=1)
+          PY
+          cd archive
+          git -c user.name="bsc-bench-ci" -c user.email="bench-ci@users.noreply.github.com" \
+            add results && git -c user.name="bsc-bench-ci" -c user.email="bench-ci@users.noreply.github.com" \
+            commit -m "results: ${STAMP} ${SHA} (gha, indicative)" && git push
