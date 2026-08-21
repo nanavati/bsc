@@ -19,7 +19,13 @@ check() { # name top [cfile]
     $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
     $BSC -sim -bir -e "$top" -o ref.exe $cfile >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
     ./ref.exe > ref.out 2>&1; refrc=$?
-    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link "$top.bir" -o art >link.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    # byte parity cannot distinguish engines (that is the oracle
+    # contract), so the compiled contract is asserted explicitly: a
+    # fallback-to-interp artifact fails the battery
+    if grep -q "run interpreted" link.out; then
+        echo "FAIL $name (not compiled: $(head -1 link.out))"; fail=1; return
+    fi
     TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
     if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
     if ! cmp -s ref.out got.out; then echo "FAIL $name (stdout)"; diff ref.out got.out | head -3; fail=1; return; fi
@@ -166,7 +172,10 @@ check_dyn() { # name top errtag
     $BSC -sim -sched-dynamic -bir -trs -e "$top" -o dyn.exe >/dev/null 2>&1 || { echo "FAIL $name (bsc -trs link)"; fail=1; return; }
     "$TRS" run "$top.bir" > got.out 2>&1 || { echo "FAIL $name (trs run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" got.out; then echo "FAIL $name (run stdout)"; diff "$SRC/$name.expected" got.out | head -3; fail=1; return; fi
-    "$TRS" link "$top.bir" -o dynart >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    "$TRS" link "$top.bir" -o dynart >dynlink.out 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    # the compiled engine does not execute dynamic schedules yet; a
+    # compiled artifact here would mean the jit gate silently vanished
+    grep -q "run interpreted" dynlink.out || { echo "FAIL $name (expected interpreted artifact)"; fail=1; return; }
     TRS="$TRS" ./dynart > gota.out 2>&1 || { echo "FAIL $name (art run)"; fail=1; return; }
     if ! cmp -s "$SRC/$name.expected" gota.out; then echo "FAIL $name (art stdout)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return; fi
     echo "PASS $name"
