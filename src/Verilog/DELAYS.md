@@ -101,5 +101,35 @@ in one activation with an intervening conditional — e.g.
 `begin #0; ...; if (c) begin ...; #0; end ... end` — which is exactly
 the shape of the `always@(negedge CLK)` system-task blocks in
 BSC-generated Verilog.  A single `#0` in the same position is fine.
-Newer Verilator releases fix this; see the flow documentation for the
-recommended minimum version for `--timing`.
+Newer Verilator releases fix this (verified on a 5.051-devel source
+build); use a recent Verilator for `--timing`.
+
+## Validation summary (testsuite slices, 2026-08)
+
+Seven slices (bsc.mcd/{ClockDividers, MakeClock, Synchronizers,
+SyncReset, LevelFifo, ClockMux}, bsc.verilog/tasks; 826 checks per
+run, and 825 for iverilog which skips one verilator-only check):
+
+| run | pass | fail |
+|---|---|---|
+| iverilog (reference) | 825 | 0 |
+| verilator `--no-timing`, shipped harness (5.020) | 683 | 143 |
+| verilator `--no-timing`, new harness (5.020 and 5.051) | 683 | 143 (per-test identical to shipped) |
+| verilator `--timing`, new harness (5.051) | 804 | 22 |
+
+Residual `--timing` failure taxonomy (22): ~15 golden diffs whose only
+content difference is one or two missing pre-reset/startup display
+lines that event-driven simulators emit from X->value transitions at
+time 0 (a two-state simulator cannot reproduce these); ~3 diffs that
+are pure same-timestamp reordering of display lines across clock
+domains (a legal simulator ordering difference); 3 pre-existing golden
+diffs that fail identically under `--no-timing`; and 1 Verilator bug
+(`$display` of `$signed(sig[msb:0])` printing the unsliced value —
+reduced repro exists; surfaces in the timing build of
+bsc.verilog/tasks sysModuleDisplay, while the no-timing build of the
+same design is unaffected).  Conversely `--timing` fixes the
+`$error`/exit-status behavior of sysErrorTest, which fails under
+`--no-timing`.  No hangs and no lint failures remain in the sampled
+timing runs; under the shipped `--no-timing` flow, several
+divided-clock tests hang until killed (never-propagating reset) and
+one previously filled the disk with an unbounded VCD.
