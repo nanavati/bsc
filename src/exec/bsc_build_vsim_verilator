@@ -190,12 +190,61 @@ VLT_WARN=""
 
 VLT_CONFIG=$BLUESPECDIR/Verilator/verilator_config.vlt
 
-# Starting with version 5, zero-delay statements (like #0) require
-# a flag to specify how they should be handled (--timing or --no-timing)
+# Starting with version 5, delay statements (like #0) require a flag
+# to specify how they should be handled: ignored (--no-timing) or
+# honored (--timing).
+#
+# The default is --no-timing, matching the historical behavior of this
+# flow (and of pre-5 Verilator versions, which have no timing support).
+# Timing mode can be requested with the environment variable
+# BSC_VERILATOR_TIMING=1 or by passing '-Xv --timing' to bsc when
+# linking; BSC_VERILATOR_TIMING=0 or '-Xv --no-timing' selects
+# no-timing mode explicitly.  An explicit -Xv selection wins over the
+# environment variable.
+#
+# In timing mode:
+#  * delays in the Verilog primitives are honored -- in particular,
+#    ClockGen generates its output waveform by delay, so designs with
+#    generated clocks only work in this mode -- and the harness
+#    (sim_main.cpp, compiled with -DBSC_VLT_TIMING) services the
+#    model's internal timed-event queue alongside the external
+#    clock/reset schedule
+#  * the STMTDLY/INITIALDLY lint waivers are dropped (by using
+#    verilator_config_timing.vlt), so that real delay problems in user
+#    Verilog remain visible
+#
+TIMING_MODE="no-timing"
+case "$BSC_VERILATOR_TIMING" in
+  1|y|yes|on|timing) TIMING_MODE="timing" ;;
+esac
+
+# Scan the -Xv options for an explicit timing selection (last one wins)
+# and remove it, since this script passes its own timing flag
+FILTERED_VERILOG_OPTS=""
+for opt in $BSC_VERILOG_OPTS ; do
+  case "$opt" in
+    --timing)    TIMING_MODE="timing" ;;
+    --no-timing) TIMING_MODE="no-timing" ;;
+    *) FILTERED_VERILOG_OPTS="$FILTERED_VERILOG_OPTS $opt" ;;
+  esac
+done
+BSC_VERILOG_OPTS=$FILTERED_VERILOG_OPTS
+
+VLT_TIMING_CFLAGS=""
 MAJVER=`verilator --version 2>/dev/null | head -n 1 | grep -o -E "^Verilator [0-9]+\." | grep -o -E "[0-9]+"`
 if [ "$MAJVER" -ge "5" ]; then
-    VLT_TIMING="--no-timing"
+    if [ "$TIMING_MODE" = "timing" ]; then
+        VLT_TIMING="--timing"
+        VLT_TIMING_CFLAGS="-DBSC_VLT_TIMING"
+        VLT_CONFIG=$BLUESPECDIR/Verilator/verilator_config_timing.vlt
+    else
+        VLT_TIMING="--no-timing"
+    fi
 else
+    if [ "$TIMING_MODE" = "timing" ]; then
+        echo "ERROR: timing mode requires Verilator version 5 or later" >&2
+        exit 1
+    fi
     VLT_TIMING=""
 fi
 
@@ -235,12 +284,12 @@ fi
 if [ "$VERBOSE" = "yes" ]; then
   # XXX Verilator doesn't have a verbosity flag?
   VLT_VERBOSE=""
-  echo "exec: verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS \"-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS\" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS \"$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS\""
+  echo "exec: verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS \"-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING_CFLAGS\" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS \"$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS\""
 else
   VLT_VERBOSE=""
 fi
 
-verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
+verilator $VLT_VERBOSE --Mdir $OBJDIR $VLT_WARN --cc --exe sim_main.cpp -CFLAGS "-DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING_CFLAGS" $VLT_TOP $VLT_TOPINST $VLT_PREFIX $TRACEFLAGS $VSIM_PATH_FLAGS $BSC_VSIM_FLAGS -DTOP=$BSC_TOPLEVEL_MODULE $BSC_VERILOG_DEFS $VLT_TIMING $BSC_VERILOG_OPTS $TOP_VERFILE $VLT_CONFIG $BSC_VERILOG_FILES_NO_MAIN $VPI_FILES -LDFLAGS "$BSC_C_LIB_PATH $BSC_CLINK_OPTS $BSC_C_LIBS"
 
 status=$?
 if [ "$status" != "0" ]; then

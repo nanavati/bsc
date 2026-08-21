@@ -1210,6 +1210,23 @@ variable is used for this purpose.
 % \texttt{verilog\_libs} to the simulator search path (for simulators
 % such as \texttt{iverilog} and \texttt{vcs}).
 
+\index{BSC\_VERILATOR\_TIMING@\texttt{BSC\_VERILATOR\_TIMING} (environment variable)}
+When linking with \texttt{-vsim verilator}, BSC builds the model with
+Verilator's \texttt{--no-timing} mode by default: delay statements in
+the Verilog (such as \texttt{\#0}) are ignored.  Timing mode, in which
+delays are honored and the simulation harness services Verilator's
+timed-event queue, can be selected by setting the environment variable
+\textbf{\texttt{BSC\_VERILATOR\_TIMING}} to \texttt{1} or by passing
+\texttt{-Xv --timing} to \texttt{bsc} when linking (and deselected
+explicitly with \texttt{BSC\_VERILATOR\_TIMING=0} or \texttt{-Xv
+--no-timing}; the \texttt{-Xv} selection wins).  Designs whose clocks
+are produced by delay-based primitives (such as \texttt{ClockGen},
+used by \texttt{mkAbsoluteClock}) require timing mode to oscillate at
+all.  Timing mode requires Verilator version 5 or later; in this mode
+the \texttt{STMTDLY} and \texttt{INITIALDLY} lint waivers are not
+applied, so Verilator reports delay-related warnings in user-supplied
+Verilog rather than silently ignoring the delays.
+
 To add  directories to the search path when linking Verilog designs,
 use the \te{-vsearch}\index{-vsearch@\te{-vsearch} (compiler flag)} flag,
 described in Section~\ref{pathflags}.  For example, adding the flag \te{-vsearch

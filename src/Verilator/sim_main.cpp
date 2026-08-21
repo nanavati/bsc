@@ -25,42 +25,98 @@
 # include <verilated_vcd_c.h>
 #endif
 
-vluint64_t main_time = 0;    // Current simulation time
+// Simulation time is owned by the context and drives $time in Verilog.
+// (No sc_time_stamp() here: Verilator supplies a weak default, and
+// VerilatedContext::time() falls back to it while time is still zero,
+// so defining it in terms of the context would recurse.)
+static VerilatedContext* contextp = NULL;
 
-double sc_time_stamp () {    // Called by $time in Verilog
-    return main_time;
-}
+#ifndef BSC_VLT_TIMING
+
+// Model built without --timing: delays inside the Verilog are ignored,
+// so the external clock/reset schedule below is the only source of
+// events and time can advance in fixed steps.
 
 inline void step (mkV(TOP)* TOP, VerilatedVcdC* tfp, vluint64_t incr)
 {
 #if VM_TRACE
     if (tfp)
-      tfp->dump(main_time);
+      tfp->dump(contextp->time());
 #endif
     TOP->eval ();
-    main_time += incr;
+    contextp->timeInc(incr);
 }
 
+#else // BSC_VLT_TIMING
+
+// Model built with --timing: delays inside the Verilog are honored, so
+// the model has its own timed-event queue (e.g. a ClockGen primitive
+// generating a waveform by delay).  In addition to driving the external
+// clock/reset schedule, the harness must evaluate the model at every
+// time slot where internal events mature; otherwise delayed processes
+// would never resume.
+
+static VerilatedVcdC* s_tfp = NULL;
+
+// Evaluate the model at the current simulation time and record the
+// resulting values in the trace (at most one record per time slot,
+// since a slot can be evaluated more than once).
+static void eval_now (mkV(TOP)* TOP)
+{
+    TOP->eval ();
+#if VM_TRACE
+    static bool dumped = false;
+    static vluint64_t last_dump_time = 0;
+    if (s_tfp && (!dumped || contextp->time() != last_dump_time)) {
+        s_tfp->dump (contextp->time());
+        last_dump_time = contextp->time();
+        dumped = true;
+    }
+#endif
+}
+
+// Advance simulation time to 'target', evaluating the model at any
+// internal time slots reached on the way.  On return, time == target
+// (or $finish was executed).
+static void advance_to (mkV(TOP)* TOP, vluint64_t target)
+{
+    while (!contextp->gotFinish ()) {
+        vluint64_t next = target;
+        if (TOP->eventsPending ()) {
+            vluint64_t slot = TOP->nextTimeSlot ();
+            if (slot < next) next = slot;
+        }
+        contextp->time (next);
+        if (next >= target) return;
+        eval_now (TOP);
+    }
+}
+
+#endif // BSC_VLT_TIMING
+
 int main (int argc, char **argv, char **env) {
-    Verilated::commandArgs (argc, argv);    // remember args
+    contextp = new VerilatedContext;
+    contextp->commandArgs (argc, argv);    // remember args
 
     // Use a hierarchical name that matches 'main.v'
-    mkV(TOP)* TOP = new mkV(TOP)("main");    // create instance of model
+    mkV(TOP)* TOP = new mkV(TOP)(contextp, "main");    // create instance of model
 
     VerilatedVcdC* tfp = NULL;    // pointer for tracing
 
 #if VM_TRACE
     // If verilator was invoked with --trace argument,
     // and if at run time passed the +bscvcd argument, turn on tracing
-    const char* flag = Verilated::commandArgsPlusMatch("bscvcd");
+    const char* flag = contextp->commandArgsPlusMatch("bscvcd");
     if (flag && 0==strcmp(flag, "+bscvcd")) {
-        Verilated::traceEverOn(true);  // Verilator must compute traced signals
+        contextp->traceEverOn(true);  // Verilator must compute traced signals
         VL_PRINTF("Enabling waves into dump.vcd...\n");
         tfp = new VerilatedVcdC;
         TOP->trace(tfp, 99);  // Trace 99 levels of hierarchy
         tfp->open("dump.vcd");  // Open the dump file
     }
 #endif
+
+#ifndef BSC_VLT_TIMING
 
     // initial conditions
     TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
@@ -78,15 +134,59 @@ int main (int argc, char **argv, char **env) {
     // now resume normal CLK cycle
     // negedge on 5, posedge on 10
     //
-    while (! Verilated::gotFinish ()) {
+    while (! contextp->gotFinish ()) {
 
 	TOP->CLK = 0;
 	step(TOP, tfp, 5);
-	if (Verilated::gotFinish ()) break;
+	if (contextp->gotFinish ()) break;
 
 	TOP->CLK = 1;
 	step(TOP, tfp, 5);
     }
+
+#else // BSC_VLT_TIMING
+
+    s_tfp = tfp;
+
+    // initial conditions
+    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
+    TOP->CLK = 0;
+    eval_now (TOP);
+
+    // First CLK edge to time 1
+    advance_to (TOP, 1);
+    if (! contextp->gotFinish ()) {
+        TOP->CLK = 1;
+        eval_now (TOP);
+    }
+
+    // De-assert RST at time 2
+    advance_to (TOP, 2);
+    if (! contextp->gotFinish ()) {
+        TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+        eval_now (TOP);
+    }
+
+    // now resume normal CLK cycle, interleaved with the model's
+    // internal events: negedge on 5, posedge on 10 (mod 10)
+    //
+    vluint64_t t = 5;
+    while (! contextp->gotFinish ()) {
+
+	advance_to (TOP, t);
+	if (contextp->gotFinish ()) break;
+	TOP->CLK = 0;
+	eval_now (TOP);
+
+	advance_to (TOP, t + 5);
+	if (contextp->gotFinish ()) break;
+	TOP->CLK = 1;
+	eval_now (TOP);
+
+	t += 10;
+    }
+
+#endif // BSC_VLT_TIMING
 
     TOP->final ();    // Done simulating
 
@@ -97,6 +197,9 @@ int main (int argc, char **argv, char **env) {
 
     delete TOP;
     TOP = NULL;
+
+    delete contextp;
+    contextp = NULL;
 
     exit (0);
 }
