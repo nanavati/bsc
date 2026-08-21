@@ -70,6 +70,7 @@ import AUses(-- re-exported interface
              rumGetMethodIds, rumRuleUsesFF,
              getMethodActionUses, rumGetActionUses, lookupMethodActionUse)
 import Wires(WireProps(..), ClockDomain(..))
+import AIntraCycleStability(aInlineStableCone)
 import APaths(PathUrgencyPairs, PathNode)
 import AScheduleInfo
 import RSchedule(rSchedule, RAT)
@@ -4568,40 +4569,11 @@ verifyStaticScheduleOneRule errh flags gen_backend ifcRuleNames inlineGuard
 -- Returns Nothing if the predicate's cone contains anything whose value
 -- can change during an edge (wires, ports, non-register method calls,
 -- foreign functions), which would make the guard position-dependent
--- within the schedule.
+-- within the schedule.  The stability notion has ONE home:
+-- AIntraCycleStability.aInlineStableCone carries these exact
+-- semantics (shared with the Verilog dynamic-argument warning G0129).
 aDynSchedGuard :: APackage -> AExpr -> Maybe AExpr
-aDynSchedGuard amod e0 =
-    let defmap = M.fromList [ (adef_objid d, adef_expr d)
-                            | d <- apkg_local_defs amod ]
-        regset = S.fromList [ avi_vname avi
-                            | avi <- apkg_state_instances amod
-                            , getVNameString (vName (avi_vmi avi))
-                                  `elem` ["RegN", "RegUN", "RegA"] ]
-        -- cap the inlined cone size (inlining shares nothing, so a
-        -- heavily shared def DAG could otherwise explode)
-        limit = 4096 :: Int
-
-        go :: Int -> AExpr -> Maybe (Int, AExpr)
-        go n _ | n > limit = Nothing
-        go n (ASDef _ i) =
-            case (M.lookup i defmap) of
-              Just e -> go (n+1) e
-              Nothing -> Nothing
-        go n e@(ASInt {}) = Just (n+1, e)
-        go n e@(AMethCall _ obj meth [])
-            | obj `S.member` regset && getIdBaseString meth == "read"
-            = Just (n+1, e)
-        go n (APrim aid t op args) = do
-            (n', args') <- goList (n+1) args
-            return (n', APrim aid t op args')
-        go _ _ = Nothing
-
-        goList n [] = Just (n, [])
-        goList n (a:as) = do
-            (n', a') <- go n a
-            (n'', as') <- goList n' as
-            return (n'', a' : as')
-    in  snd <$> go 0 e0
+aDynSchedGuard = aInlineStableCone
 
 -- The three possible outcomes for a rule pair:
 -- an error, an implied biasing edge, or (with -sched-dynamic) a
