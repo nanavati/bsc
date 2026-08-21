@@ -2715,17 +2715,26 @@ impl Interp {
                 .collect();
             let _ = trs_codegen::abi::BDPI_SYMS.set(m);
         }
-        if matches!(request, JitRequest::Run)
-            && std::env::var_os("TRS_JIT").is_none()
-            && !self.jit_armed
+        // TRS_JIT=1 arms the hybrid; "0"/"off"/empty count as UNSET
+        // (the old presence-only check made TRS_JIT=0 turn the JIT ON)
+        let jit_env_on = std::env::var("TRS_JIT")
+            .map(|v| !(v.is_empty() || v == "0" || v == "off"))
+            .unwrap_or(false);
+        if matches!(request, JitRequest::Run) && !jit_env_on && !self.jit_armed
         {
             return None;
         }
         let trace = std::env::var_os("TRS_JIT_TRACE").is_some();
-        // VCD tracing compiles: the traced artifact carries recording
-        // slots + inline stores (the VCS/Verilator opt-in model).  Only
-        // the FST wave engine still runs interpreted.
-        if self.wave_pending.is_some() {
+        // BATCH waveform runs (-V / +bscvcd / +bscfst) stay fully
+        // interpreted: compiled call sites don't maintain the boxed
+        // prims' VCD bookkeeping (FIFO D_IN), so a compiled plan under
+        // a runtime dump produced waveforms that were both wrong and
+        // thread-timing nondeterministic.  wave_engine survives the
+        // wave_pending take in prime (the old wave_pending check here
+        // was dead — prime consumes it before planning).  Link-time
+        // TRACED artifacts (the VCS/Verilator opt-in model) are the
+        // fast path for dumps.
+        if self.wave_engine || self.wave_pending.is_some() {
             if trace {
                 eprintln!("trs jit: off (wave engine)");
             }

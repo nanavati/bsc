@@ -230,6 +230,14 @@ pub struct Interp {
     /// batch waveform request (-V / +bscvcd / +bscfst), consumed at
     /// the stepper build: format + file (None = the format's default)
     wave_pending: Option<(WaveFormat, Option<String>)>,
+    /// a batch waveform request was ARMED (survives the wave_pending
+    /// take): jit_plan's wave-engine gate reads this — checking
+    /// wave_pending there was dead code (prime consumes it first), so
+    /// the hybrid JIT raced the dump and boxed-only VCD bookkeeping
+    /// (FIFO D_IN) froze at a thread-timing-dependent cycle: the
+    /// waveform was both WRONG (4,933 D_IN changes collapsed to ~1-7
+    /// on TrafficBRAM) and nondeterministic run-to-run
+    wave_engine: bool,
     /// last computed value of each def, per instance — the C++ member
     /// fields persist between edges, so dumps show the value from the
     /// last time the def was computed (write_undet pattern before that)
@@ -733,6 +741,7 @@ impl Interp {
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
             stop_request: false,
             wave_pending: None,
+            wave_engine: false,
             vcd_def_vals: HashMap::new(),
             vcd_meth_calls: HashMap::new(),
             vcd_meth_results: HashMap::new(),
@@ -4089,6 +4098,11 @@ impl Interp {
                     None => self.vcd.set_state(true),
                 }
                 self.vcd_trace = true;
+                // armed: the wave engine runs interpreted (jit_plan
+                // reads this AFTER the take above).  A REFUSED request
+                // (-dump-formats gate) keeps the compile tier — the
+                // run continues dump-less at full speed.
+                self.wave_engine = true;
             }
         }
 
