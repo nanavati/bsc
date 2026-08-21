@@ -149,8 +149,20 @@ int main (int argc, char **argv, char **env) {
     s_tfp = tfp;
 
     // initial conditions
-    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
+    //
+    // Event-driven simulators see the reset assert at time 0 as an
+    // edge (X -> asserted), which triggers the 'always @(RST edge)'
+    // blocks in the asynchronous reset primitives.  Two-state
+    // Verilator has no X: inputs start at 0, so a negative reset
+    // asserted at time 0 produces no edge and those primitives would
+    // never see the assertion.  Evaluate once with the reset
+    // deasserted, then assert it, so the assertion is an edge here
+    // too (both evaluations are at time 0).
+    TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
     TOP->CLK = 0;
+    eval_now (TOP);
+
+    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
     eval_now (TOP);
 
     // First CLK edge to time 1
