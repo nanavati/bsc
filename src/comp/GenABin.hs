@@ -373,13 +373,22 @@ instance Bin AScheduleInfo where
            return (AScheduleInfo ws mumap rumap rat erdb sorder sch sgraph rrdb vsi dyns)
 
 instance Bin ADynSched where
-    writeBytes (ADynSched re g rl ms bs) =
+    writeBytes (ADynSched re g rl gl ms bs) =
         section "ADynSched" $
-        do toBin re; toBin g; toBin rl; toBin ms; toBin bs
+        do putI 0; toBin re; toBin g; toBin rl; toBin gl; toBin ms; toBin bs
+    writeBytes (ADynSchedSelf r g me ml bs) =
+        section "ADynSchedSelf" $
+        do putI 1; toBin r; toBin g; toBin me; toBin ml; toBin bs
     readBytes =
-        do re <- fromBin; g <- fromBin; rl <- fromBin;
-           ms <- fromBin; bs <- fromBin;
-           return (ADynSched re g rl ms bs)
+        do tag <- getI
+           case tag of
+             0 -> do re <- fromBin; g <- fromBin; rl <- fromBin;
+                     gl <- fromBin; ms <- fromBin; bs <- fromBin;
+                     return (ADynSched re g rl gl ms bs)
+             1 -> do r <- fromBin; g <- fromBin; me <- fromBin;
+                     ml <- fromBin; bs <- fromBin;
+                     return (ADynSchedSelf r g me ml bs)
+             n -> internalError ("GenABin.Bin(ADynSched) " ++ show n)
 
 instance Bin AScheduleErrInfo where
     writeBytes (AScheduleErrInfo ws es mumap rumap rat erdb sorder sch sgraph rrdb vsi) =
