@@ -1,0 +1,17 @@
+`verilator_config
+// Lint waivers for building BSC-generated Verilog with --timing.
+// Unlike verilator_config.vlt (the --no-timing configuration), this
+// file does not waive STMTDLY and INITIALDLY: with --timing, delays
+// are honored rather than ignored, so delay warnings point at real
+// scheduling behavior and should be visible.
+lint_off -rule WIDTH
+lint_off -rule CASEINCOMPLETE
+lint_off -rule UNSIGNED
+lint_off -rule CMPCONST
+lint_off -rule MULTIDRIVEN
+lint_off -rule UNOPTFLAT
+lint_off -rule UNUSED
+lint_off -rule PINCONNECTEMPTY
+lint_off -rule BLKSEQ
+lint_off -rule PINMISSING
+`verilog

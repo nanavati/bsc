@@ -11,6 +11,7 @@ install:
 	$(INSTALL) -m 755 -d $(INSTALLDIR)/
 	$(INSTALL) -m 755 sim_main.cpp $(INSTALLDIR)/sim_main.cpp
 	$(INSTALL) -m 755 verilator_config.vlt $(INSTALLDIR)/verilator_config.vlt
+	$(INSTALL) -m 755 verilator_config_timing.vlt $(INSTALLDIR)/verilator_config_timing.vlt
 
 .PHONY: clean full_clean
 clean full_clean:

@@ -275,30 +275,74 @@ if [ "$BSC_VSIM_INOUT_PORTS" = "1" ]; then
     exit 1
 fi
 
-# Starting with version 5, zero-delay statements (like #0) require
-# a flag to specify how they should be handled (--timing or --no-timing).
-# Designs that generate a clock/reset additionally require --timing, which
-# only exists in Verilator 5.0+.
+# Timing mode selection.
+#
+# Default: a design the analysis above marks as needing timing is built
+# with Verilator's --timing (delays honored; the sim_main.cpp harness,
+# compiled with -DBSC_VERILATOR_TIMING, then services the model's
+# timed-event queue alongside the external clock/reset schedule, and the
+# STMTDLY/INITIALDLY lint waivers are dropped so real delay problems in
+# user Verilog stay visible).  Every other design is built --no-timing,
+# preserving the historical behavior exactly.
+#
+# Overrides: BSC_VERILATOR_TIMING=1 (or '-Xv --timing' at link time, or
+# the older BSC_VERILATOR_ENABLE_TIMING) forces timing mode for a design
+# the analysis did not mark; BSC_VERILATOR_TIMING=0 (or
+# '-Xv --no-timing') disables timing, which for a needs-timing design
+# means refusing the link with a clear message rather than building a
+# simulation that cannot work.  An explicit -Xv selection wins over the
+# environment.
+#
+# --timing exists only in Verilator 5.0+; timing-dependent designs on an
+# older Verilator get a clear refusal.  Note also that Verilator releases
+# through at least 5.051 mis-initialize #0-initialized registers when
+# tracing is compiled in together with --timing (VCD and FST alike);
+# -dump-formats none avoids it (see src/Verilog/DELAYS.md).
+TIMING_MODE="auto"
+case "$BSC_VERILATOR_TIMING" in
+  1|y|yes|on|timing)     TIMING_MODE="timing" ;;
+  0|n|no|off|no-timing)  TIMING_MODE="no-timing" ;;
+esac
+if [ -n "$BSC_VERILATOR_ENABLE_TIMING" ]; then
+    TIMING_MODE="timing"
+fi
+
+# Scan the -Xv options for an explicit timing selection (last one wins)
+# and remove it, since this script passes its own timing flag
+FILTERED_VERILOG_OPTS=""
+for opt in $BSC_VERILOG_OPTS ; do
+  case "$opt" in
+    --timing)    TIMING_MODE="timing" ;;
+    --no-timing) TIMING_MODE="no-timing" ;;
+    *) FILTERED_VERILOG_OPTS="$FILTERED_VERILOG_OPTS $opt" ;;
+  esac
+done
+BSC_VERILOG_OPTS=$FILTERED_VERILOG_OPTS
+
+if [ "$TIMING_MODE" = "auto" ]; then
+    if [ "$NEEDS_TIMING" = "yes" ]; then TIMING_MODE="timing"; else TIMING_MODE="no-timing"; fi
+fi
+
 MAJVER=`verilator --version 2>/dev/null | head -n 1 | grep -o -E "^Verilator [0-9]+\." | grep -o -E "[0-9]+"`
-# Extra -CFLAGS for the sim_main.cpp harness; timing-dependent designs use a
-# different (event-driven) reset/run loop (see sim_main.cpp).
+# Extra -CFLAGS for the sim_main.cpp harness; timing builds use a
+# timed-event-aware reset/run loop (see sim_main.cpp).
 TIMING_CFLAGS=""
-if [ "$NEEDS_TIMING" = "yes" ]; then
-    # This design needs delay-based library Verilog that only simulates under
-    # Verilator's --timing (Verilator 5.0+).  Verilator's support for such
-    # designs is not yet complete (gated clocks, some resets, self-driving
-    # top modules), so by default we do NOT attempt it and fail with a clear
-    # message -- on any Verilator version.  The BSC_VERILATOR_ENABLE_TIMING
-    # back door opts into the --timing path for experimentation / future work.
-    if [ -n "$BSC_VERILATOR_ENABLE_TIMING" ] && [ "$MAJVER" -ge "5" ]; then
+if [ "$TIMING_MODE" = "timing" ]; then
+    if [ "$MAJVER" -ge "5" ]; then
 	VLT_TIMING="--timing"
 	TIMING_CFLAGS="-DBSC_VERILATOR_TIMING"
+	VLT_CONFIG=$BLUESPECDIR/Verilator/verilator_config_timing.vlt
     else
 	echo "ERROR: This design needs Verilator --timing (Verilator 5.0+) because" >&2
-	echo "       ${TIMING_REASON}.  That support is not yet complete and is" >&2
-	echo "       off by default.  Set BSC_VERILATOR_ENABLE_TIMING=1 to try it." >&2
+	echo "       ${TIMING_REASON:-timing mode was requested}." >&2
 	exit 1
     fi
+elif [ "$NEEDS_TIMING" = "yes" ]; then
+    # Timing was explicitly disabled for a design that requires it.
+    echo "ERROR: This design needs Verilator --timing because" >&2
+    echo "       ${TIMING_REASON}, but timing mode was disabled" >&2
+    echo "       (BSC_VERILATOR_TIMING=0 or '-Xv --no-timing')." >&2
+    exit 1
 elif [ "$MAJVER" -ge "5" ]; then
     # Starting with version 5, zero-delay statements (like #0) require a flag
     # to say how they should be handled (--timing or --no-timing).
