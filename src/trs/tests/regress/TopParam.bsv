@@ -6,7 +6,7 @@
 // zeroed wide values (the port_consts limb bug class), so this design
 // asserts multi-limb folding through rule arithmetic and $display.
 // No reference Bluesim executable exists by design; the sweep
-// compares against the stored hand-derived golden (sysTopParam.trsonly
+// compares against the stored hand-derived golden (sysTopParam.trsonly.expected
 // carries the bindings; acc_k = k*big + k*inc, checked by hand).
 (* synthesize *)
 module sysTopParam#(parameter Bit#(96) big, Bit#(8) inc)(Empty);

@@ -229,12 +229,16 @@ def one_test(job):
             except OSError:
                 pass
 
-    # trs-only golden-compared designs (<top>.trsonly sidecar): no
-    # reference Bluesim executable exists BY DESIGN — classic Bluesim
-    # refuses the design class (top-level args/params, always_enabled
-    # top methods) — so the "reference" is the stored hand-derived
-    # golden and the sidecar's bindings/engine expectations
-    trsonly = os.path.join(testdir, top + ".trsonly")
+    # trs-only golden-compared designs (<top>.trsonly.expected
+    # sidecar): no reference Bluesim executable exists BY DESIGN —
+    # classic Bluesim refuses the design class (top-level args/params,
+    # always_enabled top methods) — so the "reference" is the stored
+    # hand-derived golden and the sidecar's bindings/engine
+    # expectations.  The name ends in "expected" because the
+    # testsuite's `make clean` deletes sys*/mk* files EXCEPT
+    # %expected/%.exp/... (cleanonly.mk) — a bare <top>.trsonly was
+    # silently removed by every fullparallel-setup.
+    trsonly = os.path.join(testdir, top + ".trsonly.expected")
     if os.path.exists(trsonly):
         return _trsonly_test(rel, top, wk, testdir, src, trsonly)
 
@@ -366,7 +370,8 @@ def one_test(job):
 
 
 def _trsonly_test(rel, top, wk, testdir, src, trsonly):
-    """One trs-only golden-compared design.  The sidecar reads:
+    """One trs-only golden-compared design (<top>.trsonly.expected).
+    The sidecar reads:
          refuse=<tag>      classic Bluesim link must fail with this tag
          bind=NAME=value   trs binding, repeated (recorded per design)
          engine=aot|interp expected engine, ASSERTED (byte parity is
