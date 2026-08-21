@@ -4383,6 +4383,7 @@ impl Interp {
             let envp = self as *mut Interp as *mut core::ffi::c_void;
             let cycles0 = self.cycle;
             let mut fin_break = false;
+            let mut vcd_yield = false;
             while self.finished.is_none()
                 && !self.stop_request
                 && self.cycle < max_cycles
@@ -4410,6 +4411,20 @@ impl Interp {
                     fin_break = true;
                     break;
                 }
+                // a compiled $dumpvars/$dumpon armed the dump mid-
+                // slice: yield to the general loop, whose per-slice
+                // vcd_event takes over (and whose is_active probe
+                // blocks re-engagement).  The arming instant's own
+                // event fires below AFTER the clock bookkeeping — the
+                // reference writes the whole arming sequence
+                // (unstamped initial values, the time marker, the
+                // $dumpvars task, the checkpoint) in that one event.
+                // Cost on the hot path: three flag loads per posedge
+                // (the transition-tax budget).
+                if self.vcd.is_active() {
+                    vcd_yield = true;
+                    break;
+                }
                 if !self.rst_pending.is_empty() || !self.rstgen_out.is_empty() {
                     break;
                 }
@@ -4432,18 +4447,38 @@ impl Interp {
                 // and on both exit shapes the last RETIRED negedge
                 // is tn - period (tp/tn advance only on completed
                 // iterations).
-                let done = if fin_break { k.saturating_sub(1) } else { k };
+                // the vcd yield credits the lagging companion negedge
+                // too (it was time-passed silently, like every negedge
+                // inside the player): the general loop must resume at
+                // its SUCCESSOR, or a stale past-time negedge event
+                // writes a time-disordered clock line into the dump
+                let done = if fin_break {
+                    k.saturating_sub(1)
+                } else {
+                    k
+                };
                 if done > 0 {
                     c.neg_count += done;
                     c.neg_at = tn - period;
+                }
+                if vcd_yield {
+                    c.neg_count += 1;
+                    c.neg_at = tn;
                 }
             }
             // on a yield exit tp still names the EXECUTED posedge —
             // re-arming it verbatim would re-run that edge on a
             // $stop resume; its successor is the pending one
-            let tp_pend = if fin_break { tp + period } else { tp };
+            let tp_pend =
+                if fin_break || vcd_yield { tp + period } else { tp };
+            let tn_pend = if vcd_yield { tn + period } else { tn };
             heap.push(Reverse((tp_pend, 1, wci, true)));
-            heap.push(Reverse((tn, 1, wci, false)));
+            heap.push(Reverse((tn_pend, 1, wci, false)));
+            if vcd_yield {
+                // the arming slice's full dump sequence, with the
+                // clock bookkeeping above already in place
+                self.vcd_event(tp);
+            }
         
                 }
             };

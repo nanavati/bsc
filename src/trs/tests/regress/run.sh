@@ -132,4 +132,26 @@ check DualBE sysDualBE
 # (the reference's chunks_eq quirk), two lines per collision instant,
 # byte-positioned between the cycles' $display output
 check CollideEq sysCollideEq
+# design-armed $dumpvars on a compiled TRACED artifact: the dump must
+# byte-match the reference's ($date stripped) — this corner broke
+# silently twice (central loop never yielded to the wave engine: empty
+# files; inline FIFO enq bypassed the boxed D_IN bookkeeping)
+check_vcd() { # name top
+    name=$1; top=$2
+    cp "$SRC/$name.bsv" .
+    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
+    $BSC -sim -bir -e "$top" -o ref.exe >/dev/null 2>&1 || { echo "FAIL $name (ref link)"; fail=1; return; }
+    rm -f dump.vcd
+    ./ref.exe > ref.out 2>&1; refrc=$?
+    sed '/^\$date/,/^\$end/d' dump.vcd > ref.vcd 2>/dev/null
+    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
+    rm -f dump.vcd
+    TRS="$TRS" ./art > got.out 2>&1; gotrc=$?
+    sed '/^\$date/,/^\$end/d' dump.vcd > got.vcd 2>/dev/null
+    if [ "$refrc" != "$gotrc" ]; then echo "FAIL $name (exit $refrc vs $gotrc)"; fail=1; return; fi
+    if ! cmp -s ref.out got.out; then echo "FAIL $name (stdout)"; diff ref.out got.out | head -3; fail=1; return; fi
+    if ! cmp -s ref.vcd got.vcd; then echo "FAIL $name (vcd)"; diff ref.vcd got.vcd | head -3; fail=1; return; fi
+    echo "PASS $name"
+}
+check_vcd FifoVcd sysFifoVcd
 exit $fail

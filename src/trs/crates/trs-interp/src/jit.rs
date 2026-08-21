@@ -3013,6 +3013,12 @@ impl Interp {
                         creg_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
+                    // traced plans keep FIFOs boxed: the D_IN port var
+                    // dumps the last ATTEMPTED enq value (dummyval),
+                    // maintained only by the boxed enq path, which
+                    // inline compiled enqs bypass (CReg5/Counter
+                    // precedent)
+                    Some(ArenaKind::Fifo { .. }) if self.vcd_trace => {}
                     Some(ArenaKind::Fifo { width, size, guard, loopy }) => {
                         let words = width.max(1).div_ceil(64);
                         let base = alloc(&mut nslots, 7 + size * words);
