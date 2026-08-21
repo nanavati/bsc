@@ -607,8 +607,65 @@ pub unsafe extern "C" fn trs_bram_tick(
     let (o_wens, o_val) = (3, 3 + wenw);
     let (o_prev, o_out, o_out2) =
         (3 + wenw + w, 3 + wenw + 2 * w, 3 + wenw + 3 * w);
-    // out2 <- out (unconditional rotation, like the boxed clk)
     unsafe {
+        // single-limb fast path (width <= 64, one enable word — the
+        // overwhelmingly common BRAM shape): straight scalar loads and
+        // stores, no libc memcpy, word-level lane merge.  Semantics
+        // identical to the general path below, including the
+        // unconditional out2 rotation (the boxed clk rotates every
+        // tick and selfcheck compares that state).
+        if w == 1 && wenw == 1 {
+            *arena.add(me + o_out2) = *arena.add(me + o_out);
+            if *arena.add(me) != now {
+                return;
+            }
+            let addr = *arena.add(me + 1);
+            let wens = *arena.add(me + o_wens);
+            if addr >= size {
+                *arena.add(me + o_out) = 0xAAAA_AAAA_AAAA_AAAA;
+                mask_top(arena.add(me + o_out), width, 1);
+                return;
+            }
+            let daddr = base + pw * if dual { 2 } else { 1 } + addr as usize;
+            let other_hit = dual
+                && *arena.add(other + 2) == now
+                && *arena.add(other + 1) == addr;
+            if wens != 0 {
+                *arena.add(me + 2) = now;
+                *arena.add(me + o_prev) = if other_hit {
+                    *arena.add(other + o_prev)
+                } else {
+                    *arena.add(daddr)
+                };
+                // enabled-lane mask over the value word
+                let mut m = 0u64;
+                for n in 0..num_wens {
+                    if wens >> (n % 64) & 1 == 0 || n * chunk >= width {
+                        continue;
+                    }
+                    let lo = n * chunk;
+                    let len = chunk.min(width - lo);
+                    let lane = if len >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << len) - 1) << lo
+                    };
+                    m |= lane;
+                }
+                let d = arena.add(daddr);
+                *d = *d & !m | *arena.add(me + o_val) & m;
+                *arena.add(me + o_out) = *d;
+            } else {
+                *arena.add(me + o_out) = if other_hit {
+                    *arena.add(other + o_prev)
+                } else {
+                    *arena.add(daddr)
+                };
+            }
+            return;
+        }
+        // general path (wide data / >64 enables)
+        // out2 <- out (unconditional rotation, like the boxed clk)
         std::ptr::copy_nonoverlapping(
             arena.add(me + o_out),
             arena.add(me + o_out2),
@@ -636,7 +693,8 @@ pub unsafe extern "C" fn trs_bram_tick(
             && *arena.add(other + 1) == addr;
         if !wens_zero {
             // write: prev <- (bypass ? other.prev : data), then merge
-            // the enabled lanes of upd_val into data, out <- merged
+            // the enabled lanes of upd_val into data word-wise, out <-
+            // merged
             *arena.add(me + 2) = now;
             if other_hit {
                 std::ptr::copy_nonoverlapping(
@@ -663,11 +721,21 @@ pub unsafe extern "C" fn trs_bram_tick(
                 }
                 let lo = (n * chunk) as usize;
                 let len = chunk.min(width - n * chunk) as usize;
-                for b in lo..lo + len {
-                    let bit =
-                        *arena.add(me + o_val + b / 64) >> (b % 64) & 1;
-                    let d = arena.add(daddr + b / 64);
-                    *d = *d & !(1u64 << (b % 64)) | bit << (b % 64);
+                // word-level merge over [lo, lo+len): the bit-by-bit
+                // loop here was 35% of TrafficBRAM's model compute
+                let mut b = lo;
+                while b < lo + len {
+                    let wi = b / 64;
+                    let off = b % 64;
+                    let take = (64 - off).min(lo + len - b);
+                    let m = if take >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << take) - 1) << off
+                    };
+                    let d = arena.add(daddr + wi);
+                    *d = *d & !m | *arena.add(me + o_val + wi) & m;
+                    b += take;
                 }
             }
             std::ptr::copy_nonoverlapping(
