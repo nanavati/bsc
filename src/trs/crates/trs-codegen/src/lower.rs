@@ -340,9 +340,18 @@ fn run_ir_passes(
     // (miscompile bisection — e.g. "default<O1>,gvn")
     let pipeline =
         std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
-    module
-        .run_passes(&pipeline, &tm, opts)
-        .map_err(|e| Ineligible(format!("IR passes: {e}")))
+    module.run_passes(&pipeline, &tm, opts).map_err(|e| {
+        // LOUD on stderr, not just the Ineligible fallback chain: a
+        // rejected pipeline string (an LLVM upgrade renaming a pass in
+        // AOT_PIPELINE) would otherwise degrade every run to the
+        // interpreter silently.  See the upgrade ritual on
+        // AOT_PIPELINE / tools/pipeline-matrix.py.
+        eprintln!(
+            "trs: WARNING: IR pass pipeline rejected ({e}); \
+             artifact compilation will fall back"
+        );
+        Ineligible(format!("IR passes: {e}"))
+    })
 }
 
 fn finish_engine(
