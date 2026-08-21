@@ -208,6 +208,8 @@ pub struct Interp {
     /// per event)
     trace_events: bool,
     trace_clk: bool,
+    /// $display scratch: reused output buffer (see write_display)
+    fmt_out: String,
     /// Emit requests stash the serialized PlanA here for the meta
     /// object (prime derives it; the aot_emit call site reads it)
     #[cfg(feature = "aot")]
@@ -713,6 +715,7 @@ impl Interp {
             debug_tier: false,
             trace_events: std::env::var_os("TRS_TRACE").is_some(),
             trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
+            fmt_out: String::new(),
             #[cfg(feature = "aot")]
             plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
@@ -2098,6 +2101,32 @@ impl Interp {
         }
     }
 
+    /// Format a $display-family call into the per-Interp scratch and
+    /// write it to stdout in ONE locked write_all (println!-per-call
+    /// paid a fresh String, a lock, and a core::fmt walk each; the
+    /// scratch survives across calls so the hot path allocates
+    /// nothing).  Same std LineWriter, so flush semantics ($fflush,
+    /// the BDPI phase-0 flush, newline-triggered line flushes) are
+    /// untouched.
+    fn write_display(
+        &mut self,
+        args: &[Arg],
+        base: u32,
+        loc: &str,
+        newline: bool,
+        errs: &mut Vec<String>,
+    ) {
+        let mut out = std::mem::take(&mut self.fmt_out);
+        out.clear();
+        format::format_args_into(&mut out, args, base, self.now, loc, errs);
+        if newline {
+            out.push('\n');
+        }
+        use std::io::Write;
+        let _ = std::io::stdout().lock().write_all(out.as_bytes());
+        self.fmt_out = out;
+    }
+
     fn foreign_action(&mut self, name: &str, args: &[Arg], loc: &str) {
         // oracle secondary: console output and the VCD task family are
         // suppressed wholesale ($f* writes die in write_fd; Sink slots
@@ -2231,49 +2260,49 @@ impl Interp {
             }
             "$display" => {
                 let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
+                self.write_display(args, 10, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$displayh" => {
                 let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 16, self.now, loc, &mut errs));
+                self.write_display(args, 16, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$displayb" => {
                 let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 2, self.now, loc, &mut errs));
+                self.write_display(args, 2, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$displayo" => {
                 let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 8, self.now, loc, &mut errs));
+                self.write_display(args, 8, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$write" => {
                 let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
+                self.write_display(args, 10, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             "$writeh" => {
                 let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 16, self.now, loc, &mut errs));
+                self.write_display(args, 16, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             "$writeb" => {
                 let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 2, self.now, loc, &mut errs));
+                self.write_display(args, 2, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             "$writeo" => {
                 let mut errs = Vec::new();
-                print!("{}", format::format_args(args, 8, self.now, loc, &mut errs));
+                self.write_display(args, 8, loc, false, &mut errs);
                 emit_output_errors(&errs);
             }
             // dollar_error/dollar_warning/dollar_info format exactly like
             // $display — bsc compiles the severity prefix into the message
             "$error" | "$warning" | "$info" => {
                 let mut errs = Vec::new();
-                println!("{}", format::format_args(args, 10, self.now, loc, &mut errs));
+                self.write_display(args, 10, loc, true, &mut errs);
                 emit_output_errors(&errs);
             }
             "$fatal" => {
@@ -2285,10 +2314,7 @@ impl Interp {
                 };
                 if !self.quiet {
                     let mut errs = Vec::new();
-                    println!(
-                        "{}",
-                        format::format_args(rest, 10, self.now, loc, &mut errs)
-                    );
+                    self.write_display(rest, 10, loc, true, &mut errs);
                     emit_output_errors(&errs);
                 }
                 self.fataled = true;
