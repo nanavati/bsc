@@ -10,7 +10,9 @@ use crate::value::Value;
 pub enum Arg {
     /// value + signed-display flag
     Val(Value, bool),
-    Str(String),
+    /// Arc so a precomputed call-site template clones as a refcount
+    /// bump, not a heap copy (the $display hot path)
+    Str(std::sync::Arc<str>),
     /// real-valued argument (the C++ 'r' annotation)
     Real(f64),
 }

@@ -210,6 +210,14 @@ pub struct Interp {
     trace_clk: bool,
     /// $display scratch: reused output buffer (see write_display)
     fmt_out: String,
+    /// foreign-call scratch (jit_foreign_cb): argv spine + task-name
+    /// and %m-location buffers, reused across calls
+    foreign_argv: Vec<Arg>,
+    fname_buf: String,
+    loc_buf: String,
+    /// string id -> Arc'd text for Arg::Str: interned once, cloned as
+    /// a refcount bump on every later call
+    arg_strs: HashMap<u32, std::sync::Arc<str>>,
     /// Emit requests stash the serialized PlanA here for the meta
     /// object (prime derives it; the aot_emit call site reads it)
     #[cfg(feature = "aot")]
@@ -716,6 +724,10 @@ impl Interp {
             trace_events: std::env::var_os("TRS_TRACE").is_some(),
             trace_clk: std::env::var_os("TRS_TRACE_CLK").is_some(),
             fmt_out: String::new(),
+            foreign_argv: Vec::new(),
+            fname_buf: String::new(),
+            loc_buf: String::new(),
+            arg_strs: HashMap::new(),
             #[cfg(feature = "aot")]
             plan_a_bytes: None,
             trace_wf: std::env::var_os("TRS_TRACE_WF").is_some(),
@@ -1623,11 +1635,11 @@ impl Interp {
 
     fn eval_arg(&mut self, inst: usize, ctx: &mut Ctx, e: &Expr, signed: bool) -> Arg {
         match e {
-            Expr::Str(s) => Arg::Str(self.s(*s).to_string()),
+            Expr::Str(s) => Arg::Str(self.s(*s).into()),
             Expr::Port(name) | Expr::Param(name) => {
                 if let InstKind::User { str_params, .. } = &self.insts[inst].kind {
                     if let Some(&sid) = str_params.get(name) {
-                        return Arg::Str(self.s(sid).to_string());
+                        return Arg::Str(self.s(sid).into());
                     }
                 }
                 let v = self.eval(inst, ctx, e);
@@ -1646,7 +1658,7 @@ impl Interp {
             return Arg::Real(r);
         }
         match v.as_str_id() {
-            Some(id) => Arg::Str(self.s(id).to_string()),
+            Some(id) => Arg::Str(self.s(id).into()),
             None => Arg::Val(v, signed),
         }
     }
@@ -1662,6 +1674,18 @@ impl Interp {
             locals: HashMap::new(),
             memo,
         }
+    }
+
+    /// Arg::Str text for a string id, Arc-interned on first use (the
+    /// per-event-tax audit: an Arc clone per call replaces a String
+    /// alloc per call on the $display path).
+    pub(crate) fn arg_str(&mut self, id: u32) -> std::sync::Arc<str> {
+        if let Some(a) = self.arg_strs.get(&id) {
+            return a.clone();
+        }
+        let a: std::sync::Arc<str> = std::sync::Arc::from(self.s(id));
+        self.arg_strs.insert(id, a.clone());
+        a
     }
 
     fn call_value(&mut self, callee: usize, method: StrId, argv: &[Value], w: u32) -> Value {
@@ -1714,8 +1738,10 @@ impl Interp {
         }
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
-                let mname = self.d.strings[method as usize].clone();
-                p.action_method(&mname, argv, self.now);
+                // borrow, don't clone (same disjoint-fields fix as
+                // call_value; per-event-tax audit finding 3)
+                let mname: &str = &self.d.strings[method as usize];
+                p.action_method(mname, argv, self.now);
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -1787,8 +1813,8 @@ impl Interp {
     fn call_actionvalue(&mut self, callee: usize, method: StrId, argv: &[Value]) -> Value {
         match &mut self.insts[callee].kind {
             InstKind::Prim(p) => {
-                let mname = self.d.strings[method as usize].clone();
-                p.actionvalue_method(&mname, argv, self.now)
+                let mname: &str = &self.d.strings[method as usize];
+                p.actionvalue_method(mname, argv, self.now)
             }
             InstKind::User { module, .. } => {
                 let module = *module;
@@ -2335,7 +2361,7 @@ impl Interp {
             // waves: dollar_dumpvars.cxx semantics
             "$dumpfile" => {
                 let name = match args.first() {
-                    Some(Arg::Str(s)) => s.clone(),
+                    Some(Arg::Str(s)) => s.to_string(),
                     Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
                     _ => "dump.vcd".to_string(),
                 };
@@ -2392,9 +2418,9 @@ impl Interp {
                 let f = if self.quiet && write_mode {
                     Ok(FSlot::Sink)
                 } else if write_mode {
-                    std::fs::File::create(&path).map(FSlot::File)
+                    std::fs::File::create(&*path).map(FSlot::File)
                 } else {
-                    std::fs::File::open(&path).map(FSlot::File)
+                    std::fs::File::open(&*path).map(FSlot::File)
                 };
                 match f {
                     Ok(f) => {
@@ -2426,7 +2452,7 @@ impl Interp {
             // prefix match against the registered +args (bk_match_argument)
             "$test$plusargs" => {
                 let name = match args.first() {
-                    Some(Arg::Str(s)) => s.clone(),
+                    Some(Arg::Str(s)) => s.to_string(),
                     Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
                     _ => String::new(),
                 };

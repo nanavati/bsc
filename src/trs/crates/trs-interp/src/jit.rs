@@ -400,6 +400,12 @@ impl JitPlans {
     /// bakes cell addresses).  Failure leaves the node walk in place.
     pub(crate) fn try_fuse(&self) {
         if std::env::var_os("TRS_NO_FUSION").is_some() {
+            // still resolve the OnceLock: leaving it empty made the
+            // dispatch guard re-enter here — a getenv PER EDGE for the
+            // whole run, the trs/14 bug pattern (per-event-tax audit,
+            // finding 1).  Zero entries = "nothing fused", the same
+            // state the no-jit build uses.
+            let _ = self.fused.get_or_init(|| vec![0; self.comp_nodes.len()]);
             return;
         }
         // no compile tier without `jit`: artifact-provided fused fns
@@ -494,12 +500,18 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
         &lz.scheds[ordinal].foreign_stmts[local]
     };
     let (inst, func, ret_width) = (fs.inst, fs.func, fs.ret_width);
-    let mut argv = Vec::with_capacity(fs.args.len());
+    // per-Interp scratch: the argv spine survives across calls (its
+    // element drops still run — Value buffers go with A3)
+    let mut argv = std::mem::take(&mut interp.foreign_argv);
+    argv.clear();
+    argv.reserve(fs.args.len());
     let mut off = 0usize;
     for a in &fs.args {
         match *a {
             FArgSpec::Str(sid) => {
-                argv.push(Arg::Str(interp.s(sid).to_string()));
+                // Arc-interned once per distinct string id: a clone is
+                // a refcount bump, not a heap copy
+                argv.push(Arg::Str(interp.arg_str(sid)));
             }
             FArgSpec::Num { width, signed } => {
                 let w = width;
@@ -520,9 +532,10 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             }
             FArgSpec::StrDyn => {
                 // one word of string id (static or runtime-interned)
-                // -> the interp's Arg::Str
+                // -> the interp's Arg::Str, through the same Arc cache
+                // (dyn ids are stable once interned)
                 let word = *args.add(off);
-                argv.push(Arg::Str(interp.s(word as u32).to_string()));
+                argv.push(Arg::Str(interp.arg_str(word as u32)));
                 off += 1;
             }
         }
@@ -539,6 +552,8 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
         }
         let id = interp.intern_dyn(text);
         *out = id as u64;
+        argv.clear();
+        interp.foreign_argv = argv;
         if let Some(t0) = _t0 {
             prof::add(&prof::FOREIGN_NS, t0);
             prof::FOREIGN_CALLS
@@ -546,8 +561,20 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
         }
         return 0;
     }
-    let fname = interp.s(func).to_string();
-    let loc = interp.loc_of(inst);
+    // task name + %m location through reused per-Interp buffers: no
+    // per-call allocation (loc is "top[.path]", fname a table borrow —
+    // both copied into scratch because foreign_action takes &mut self)
+    let mut fname = std::mem::take(&mut interp.fname_buf);
+    fname.clear();
+    fname.push_str(interp.s(func));
+    let mut loc = std::mem::take(&mut interp.loc_buf);
+    loc.clear();
+    loc.push_str("top");
+    let p = &interp.insts[inst].path;
+    if !p.is_empty() {
+        loc.push('.');
+        loc.push_str(p);
+    }
     if ret_width == 0 {
         interp.foreign_action(&fname, &argv, &loc);
     } else {
@@ -558,6 +585,13 @@ pub(crate) unsafe extern "C" fn jit_foreign_cb(
             *d = v.limbs64().get(i).copied().unwrap_or(0);
         }
     }
+    // return the scratch (the task may have re-entered and taken fresh
+    // buffers — mem::take left valid empties, so this only upgrades
+    // capacity back)
+    argv.clear();
+    interp.foreign_argv = argv;
+    interp.fname_buf = fname;
+    interp.loc_buf = loc;
     if let Some(t0) = _t0 {
         prof::add(&prof::FOREIGN_NS, t0);
         prof::FOREIGN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
