@@ -729,6 +729,22 @@ def main():
     for cls, n in by_class.most_common():
         print(f"  {cls:14} {n}")
 
+    # An --aot sweep run with a jit-less trs binary passes byte parity
+    # on every design while measuring nothing about the compiled
+    # engine (the top-level `make install` builds trs without the jit
+    # feature unless LLVM_SYS_181_PREFIX is set).  That is never a
+    # legitimate census: fail loudly instead of printing an all-interp
+    # engine column.
+    if AOT:
+        nojit = sum(1 for r in results
+                    if "built_without_JIT" in (r[3] or ""))
+        if nojit:
+            print(f"\nFATAL: {nojit} designs ran interpreted because "
+                  f"this trs was built without the `jit` feature; "
+                  f"rebuild with `cargo build --release --features jit` "
+                  f"(or set LLVM_SYS_181_PREFIX for make) and re-sweep.")
+            sys.exit(2)
+
     print("\n=== top interpreter/export work items ===")
     reasons = collections.Counter(
         r[3] for r in results if r[2] in ("INTERP_PANIC", "EXPORT_FAIL")
