@@ -34,7 +34,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260712-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260821-2"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -547,6 +547,9 @@ instance Bin MsgListFlag where
 
 -- should automatically verify no typos at compile-time XXX
 instance Bin Flags where
+    -- The 135-field serialization is split into NOINLINE chunks so
+    -- that GHC optimizes bounded pieces: compiling it as a single
+    -- monadic chain needs more than 15GB of heap.
     writeBytes (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
@@ -561,13 +564,10 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133) =
+                a_130 a_131 a_132 a_133 a_134) =
        do wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4;
           wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8
       where
-        -- The 135-field serialization is split into NOINLINE chunks so
-        -- that GHC optimizes bounded pieces: compiling it as a single
-        -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
         wr_chunk0 =
           do toBin a_000; toBin a_001; toBin a_002; toBin a_003; toBin a_004;
@@ -612,9 +612,10 @@ instance Bin Flags where
         wr_chunk8 =
           do toBin a_120; toBin a_121; toBin a_122; toBin a_123; toBin a_124;
              toBin a_125; toBin a_126; toBin a_127; toBin a_128; toBin a_129;
-             toBin a_130; toBin a_131; toBin a_132; toBin a_133
+             toBin a_130; toBin a_131; toBin a_132; toBin a_133; toBin a_134
     readBytes =
-       do (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
+       do
+          (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
            a_008, a_009, a_010, a_011, a_012, a_013, a_014) <- rd_chunk0
           (a_015, a_016, a_017, a_018, a_019, a_020, a_021, a_022,
            a_023, a_024, a_025, a_026, a_027, a_028, a_029) <- rd_chunk1
@@ -631,7 +632,7 @@ instance Bin Flags where
           (a_105, a_106, a_107, a_108, a_109, a_110, a_111, a_112,
            a_113, a_114, a_115, a_116, a_117, a_118, a_119) <- rd_chunk7
           (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
-           a_128, a_129, a_130, a_131, a_132, a_133) <- rd_chunk8
+           a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
           return (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
@@ -646,7 +647,7 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133)
+                a_130 a_131 a_132 a_133 a_134)
       where
         {-# NOINLINE rd_chunk0 #-}
         rd_chunk0 =
@@ -708,10 +709,9 @@ instance Bin Flags where
         rd_chunk8 =
           do a_120 <- fromBin; a_121 <- fromBin; a_122 <- fromBin; a_123 <- fromBin; a_124 <- fromBin;
              a_125 <- fromBin; a_126 <- fromBin; a_127 <- fromBin; a_128 <- fromBin; a_129 <- fromBin;
-             a_130 <- fromBin; a_131 <- fromBin; a_132 <- fromBin; a_133 <- fromBin
+             a_130 <- fromBin; a_131 <- fromBin; a_132 <- fromBin; a_133 <- fromBin; a_134 <- fromBin
              return (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
-                     a_128, a_129, a_130, a_131, a_132, a_133)
-
+                     a_128, a_129, a_130, a_131, a_132, a_133, a_134)
 -- ----------
 
 instance Bin VProgram where
@@ -725,10 +725,11 @@ instance Bin VModule where
                    body <-fromBin; return (VModule name c ports body)
 
 instance Bin VDPI where
-    writeBytes (VDPI name ret args) =
-        do toBin name; toBin ret; toBin args
-    readBytes = do name <- fromBin; ret <- fromBin; args <- fromBin;
-                   return (VDPI name ret args)
+    writeBytes (VDPI name mclink cfn ret args) =
+        do toBin name; toBin mclink; toBin cfn; toBin ret; toBin args
+    readBytes = do name <- fromBin; mclink <- fromBin; cfn <- fromBin;
+                   ret <- fromBin; args <- fromBin;
+                   return (VDPI name mclink cfn ret args)
 
 instance Bin VDPIType where
     writeBytes (VDT_void)    = do putI 0
@@ -759,7 +760,7 @@ instance Bin VArg where
     writeBytes (VAInput i r)       = do putI 0; toBin i; toBin r
     writeBytes (VAInout i i' r)    = do putI 1; toBin i; toBin i'; toBin r
     writeBytes (VAOutput i r)      = do putI 2; toBin i; toBin r
-    writeBytes (VAParameter i r d) = do putI 3; toBin i; toBin r; toBin d
+    writeBytes (VAParameter i r d b) = do putI 3; toBin i; toBin r; toBin d; toBin b
     readBytes = do
       i <- getI
       case i of
@@ -767,8 +768,8 @@ instance Bin VArg where
         1 -> do i <- fromBin; i' <- fromBin; r <- fromBin;
                 return (VAInout i i' r)
         2 -> do i <- fromBin; r <- fromBin; return (VAOutput i r)
-        3 -> do i <- fromBin; r <- fromBin; d <- fromBin;
-                return (VAParameter i r d)
+        3 -> do i <- fromBin; r <- fromBin; d <- fromBin; b <- fromBin;
+                return (VAParameter i r d b)
         n -> internalError $ "GenABin(VArg).readBytes: " ++ show n
 
 instance Bin VExpr where
@@ -835,6 +836,7 @@ instance Bin VMItem where
                                          toBin m
     writeBytes (VMGroup a body)     = do putI 6; toBin a; toBin body
     writeBytes (VMFunction f)       = do putI 7; toBin f
+    writeBytes (VMDPI dpi)          = do putI 8; toBin dpi
     readBytes = do
       i <- getI
       case i of
@@ -848,6 +850,7 @@ instance Bin VMItem where
                 return (VMRegGroup i s c m)
         6 -> do a <- fromBin; body <- fromBin; return (VMGroup a body)
         7 -> do f <- fromBin; return (VMFunction f)
+        8 -> do dpi <- fromBin; return (VMDPI dpi)
         n -> internalError $ "GenABin(VMItem).readBytes: " ++ show n
 
 instance Bin VVDecl where
