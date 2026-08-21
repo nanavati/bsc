@@ -1,5 +1,7 @@
 // Top-level driver for "verilated" objects (Verilog compiled with verilator)
 
+#include <stdlib.h>
+
 #include <verilated.h>
 
 #ifdef BSV_POSITIVE_RESET
@@ -158,10 +160,21 @@ int main (int argc, char **argv, char **env) {
     // never see the assertion.  Evaluate once with the reset
     // deasserted, then assert it, so the assertion is an edge here
     // too (both evaluations are at time 0).
-    TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+    //
+    // The cost of that extra evaluation: latches that an event-driven
+    // simulator would leave holding X until reset propagates (e.g.
+    // the gate latch in the gated-clock primitives) instead capture
+    // the design's out-of-reset state, which can pass one extra clock
+    // edge into a gated domain at startup.  Setting the environment
+    // variable BSC_VLT_NO_RESET_EDGE at run time skips the deasserted
+    // evaluation (reset is then never seen as an edge, so designs
+    // relying on asynchronous reset assertion at time 0 will not
+    // reset).
     TOP->CLK = 0;
-    eval_now (TOP);
-
+    if (!getenv("BSC_VLT_NO_RESET_EDGE")) {
+        TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+        eval_now (TOP);
+    }
     TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
     eval_now (TOP);
 
