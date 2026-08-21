@@ -84,7 +84,9 @@ impl ForeignEnv {
     pub(crate) fn write_fd(&mut self, key: u64, text: &str) {
         use std::io::Write;
         if self.quiet {
-            return; // oracle secondary: every write sink suppressed
+            // oracle secondary: every write sink suppressed
+            crate::prim::note_window_effect();
+            return;
         }
         let write_slot = |s: &mut FSlot| match s {
             FSlot::Stdout => print!("{text}"),
@@ -200,6 +202,7 @@ impl ForeignEnv {
                     | "$dumpflush"
             )
         {
+            crate::prim::note_window_effect();
             return true;
         }
         if self.finished.is_some()
@@ -359,6 +362,8 @@ impl ForeignEnv {
                     let mut errs = Vec::new();
                     self.write_display(rest, 10, now, loc, true, &mut errs);
                     emit_output_errors(&errs);
+                } else {
+                    crate::prim::note_window_effect();
                 }
                 self.fataled = true;
                 self.finished = Some(1);
@@ -397,6 +402,9 @@ impl ForeignEnv {
                 Value::from_u64(w.max(1), now.wrapping_mul(self.timescale))
             }
             "$fopen" => {
+                // any window-time file open is a run-time effect the
+                // skipped window cannot reproduce (truncation, reads)
+                crate::prim::note_window_effect();
                 let path = match args.first() {
                     Some(Arg::Str(s)) => s.clone(),
                     _ => return Some(Value::zero(w.max(1))),
@@ -445,6 +453,8 @@ impl ForeignEnv {
             }
             // prefix match against the registered +args (bk_match_argument)
             "$test$plusargs" => {
+                // plusargs differ between link (none) and run
+                crate::prim::note_window_effect();
                 let name = match args.first() {
                     Some(Arg::Str(s)) => s.to_string(),
                     Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
@@ -455,6 +465,8 @@ impl ForeignEnv {
             }
             "$fgetc" => {
                 use std::io::Read;
+                // consumes stdin/file position — a run-time effect
+                crate::prim::note_window_effect();
                 let fd = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64(),
                     _ => return Some(Value::from_u64(w.max(32), u32::MAX as u64)),
@@ -485,6 +497,7 @@ impl ForeignEnv {
             "$ungetc" => {
                 // args: (char, fd); pushes back for the next $fgetc and
                 // returns the char (C ungetc semantics)
+                crate::prim::note_window_effect();
                 let c = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64() as u8,
                     _ => 0,

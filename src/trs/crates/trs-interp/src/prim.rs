@@ -44,10 +44,27 @@ pub(crate) fn load_memfiles() -> bool {
     LOAD_MEMFILES.with(|c| c.get())
 }
 
+/// RunCore window bake: counts effects the skipped reset window
+/// would have had at run time — suppressed prints, file/stdin/
+/// plusarg/rng consults.  The link's bake reads the delta across its
+/// one-cycle advance; any delta = the window is not skippable and
+/// the design boots classic.  Never read on normal runs.
+pub(crate) static WINDOW_EFFECTS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) fn note_window_effect() {
+    WINDOW_EFFECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// qprintln! that a QUIET oracle engine suppresses (the primary's
 /// print is the byte-parity one; a secondary's would duplicate it).
 macro_rules! qprintln {
-    ($($t:tt)*) => { if !crate::prim::quiet_engine() { println!($($t)*) } };
+    ($($t:tt)*) => {
+        if !crate::prim::quiet_engine() {
+            println!($($t)*)
+        } else {
+            crate::prim::note_window_effect()
+        }
+    };
 }
 
 /// One debug-tier sub-symbol of a primitive (the reference's
@@ -1248,6 +1265,7 @@ pub(crate) fn bram_warn_rows() -> std::collections::HashMap<usize, (String, u32)
 /// prim diagnostic).
 fn bram_warn_hook(block: usize, addr: u64) {
     if quiet_engine() {
+        note_window_effect();
         return;
     }
     if let Some((name, bits)) = BRAM_WARN_NAMES.lock().unwrap().get(&block) {

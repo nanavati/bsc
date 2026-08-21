@@ -2012,11 +2012,15 @@ impl Interp {
             "rand32" => {
                 // rand32.cxx: return (unsigned int)random(); ours is
                 // the same glibc stream, per-engine (see GlibcRandom)
+                // — a window-time draw desyncs the stream a skipped
+                // window leaves untouched
+                prim::note_window_effect();
                 let v = self.rng.next() as u64;
                 return Some(Value::from_u64(w.max(1), v));
             }
             "srand" => {
                 // glibc srand is an alias of srandom, seeding random()
+                prim::note_window_effect();
                 let seed = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64() as u32,
                     _ => 0,
@@ -4549,6 +4553,9 @@ pub(crate) fn emit_output_errors(errs: &[String]) {
     // quiet oracle engines suppress these like every output sink
     // ($fdisplay-family arms reach here even when write_fd is gated)
     if prim::quiet_engine() {
+        if !errs.is_empty() {
+            prim::note_window_effect();
+        }
         return;
     }
     for e in errs.iter().rev() {
