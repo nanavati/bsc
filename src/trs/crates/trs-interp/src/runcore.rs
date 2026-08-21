@@ -48,7 +48,9 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
     let rd = |k: usize| {
         u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap())
     };
-    if rd(0) != 2 || rd(1) != abi::AOT_LAYOUT_REV {
+    // version 3 = current eligibility semantics; older versions'
+    // eligible flags were computed under weaker gates — classic boot
+    if rd(0) != 3 || rd(1) != abi::AOT_LAYOUT_REV {
         return None;
     }
     let hash = rd(2);

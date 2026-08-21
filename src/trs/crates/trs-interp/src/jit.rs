@@ -2053,8 +2053,13 @@ impl Interp {
         w64(&mut p, r.len() as u64);
         p.extend_from_slice(r.as_bytes());
         sect(&mut img, RC_SEC_ELIG, &p);
-        // bump the header version: sections present
-        img[8..16].copy_from_slice(&2u64.to_le_bytes());
+        // bump the header version: sections present.  3 = the
+        // eligibility-semantics revision (prim-site + lib-BDPI gates):
+        // a driver must never trust an eligible flag computed under
+        // older gate rules, so the version IS the semantics rev — bump
+        // it whenever eligibility logic changes (panel stale-pair
+        // finding).
+        img[8..16].copy_from_slice(&3u64.to_le_bytes());
         self.runcore_pending = Some(img);
     }
 
@@ -2093,8 +2098,9 @@ impl Interp {
         let salted =
             self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
         let version = rd(0);
-        if version != 1 && version != 2 {
-            fail("unknown version");
+        if version != 1 && version != 3 {
+            // 2 = the pre-prim-gate eligibility semantics: stale
+            fail("unknown or stale version");
             return None;
         }
         if rd(1) != trs_codegen::abi::AOT_LAYOUT_REV {
@@ -2154,6 +2160,7 @@ impl Interp {
         if version == 1 {
             return None;
         }
+        let _ = version;
         // -- v2 boot-descriptor sections --
         // every take is bounds-checked and every failure REPORTS: a
         // truncated or corrupt descriptor must never be a silent None

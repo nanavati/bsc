@@ -122,3 +122,28 @@ mode that adopts slot state instead is prerequisite work.
 
 Dividers ~1.8-2.2ms, CFL ~5-8ms, TrafficBRAM at-or-under Verilator,
 8-9/10 bench-pool designs boot RunCore (mem-file + traced classic).
+
+## The driver's parity contract (rung 3a, landed)
+
+Confirmed by the adversarial panel as the items the boot must state,
+not assume:
+
+- **Exit code**: 1 iff `$fatal` fired; `$finish(n)`'s status NEVER
+  surfaces as the process exit code; `$stop` is a yield and the batch
+  run then exits 0.  (`runcore::try_boot` returns exactly
+  `fataled as i32`; witnessed by the regress battery under
+  `TRS_RUNCORE=1` — FinishEdge et al. compare exit codes.)
+- **Routing**: any selfcheck (flag or `TRS_SELFCHECK`), any wave
+  request (`-V`, `+bscvcd`/`+bscfst`, link formats), `TRS_JIT`, and
+  the interactive/exe tiers all boot classic; the slim binary's
+  dispatch execs the full binary for selfcheck/jit before run_file is
+  ever reached.
+- **Eligibility semantics revision**: the sidecar VERSION is the
+  eligibility-semantics revision.  Any change to the gate rules bumps
+  it (2 = pre-prim-gate, refused as stale; 3 = current), so a newer
+  driver never trusts an `eligible` flag computed under older rules.
+- **Known witness blind spots (minor, ledgered)**: the inverse
+  eligibility witness triggers only on `$finish`-terminated runs
+  (cycle-limit and event-exhaustion endings are unwitnessed), and
+  `central_engaged` is monotone per Interp — refine when the witness
+  next changes shape.
