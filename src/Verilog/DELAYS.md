@@ -190,3 +190,28 @@ same design is unaffected).  Conversely `--timing` fixes the
 timing runs; under the shipped `--no-timing` flow, several
 divided-clock tests hang until killed (never-propagating reset) and
 one previously filled the disk with an unbounded VCD.
+
+
+## Complete failure ledger (composed tree: main + verilator queue + timing)
+
+Every one of the 400 `--timing` failures (Verilator 5.051) is classified;
+none are unexplained, and none beyond the 14 noted are caused by the
+timing work:
+
+| class | ~checks | notes |
+|---|---|---|
+| Inout-port designs fail to link | 88 | verilator tristate limitation; plain port rendering does not fix it |
+| foreign/BDPI links | 101 | tests hit the use-`-use-dpi` gate; flipping them is a testsuite policy change |
+| custom-testbench links (portRenaming, pong, MacTestBench, Amba, options) | ~72 | the no-`main.v` link path; `.ba` foreign in sysGCD |
+| `$dumpvar`-warning stdout pollution | ~28 | designs call `$dumpvars` without `$dumpfile`; verilator (both versions) emits a runtime warning line that breaks goldens — fixable with one filter line in `clean_verilator_output` |
+| startup X-artifact / never-X lines | ~35 | missing 1-2 pre-reset lines (Hierarchy, positivereset/ClockDividers, mcd Misc/NullCrossing, OVL NeverUnknown, b898); two-state cannot reproduce |
+| two-state value semantics | ~7 | divide-by-zero prints 0 not x (divmod), SquareRoot, real/string formatting (parameters/string, DisplayRealLiteral) |
+| post-`$finish` activity in `$fwrite` files | 10 | verilator runs one more firing after `$finish`; stdout is truncated by the test driver but `.dat` files are not (all of bsc.misc/fwrite) |
+| same-time display ordering | ~5 | interfacecalls, BypassFIFO, plus the slice-verified cases |
+| post-5.020 Verilator regressions | ~14 | pass on 5.020, fail on 5.050/5.051 in BOTH modes: the `$signed`-slice display defect (b925, Complex, ArithShift, splitports, sysDivMod, FP ArithPipe, bluesim_vcd), a new runtime `parallel_case` assertion (mutually_exclusive — arguably a real find: the pragma is emitted for non-exclusive rules), and an abnormal exit in `$dumpoff/$dumpon` (verilog/vcd) |
+| timing-new: reset-edge startup latching | 11 | gated-clock domains; runtime opt-out `BSC_VLT_NO_RESET_EDGE` |
+| timing-new: `--trace --timing` `#0`-init loss | 3 | Verilator regression; avoided by `-dump-formats none` |
+| root-run environment (chmod tests) | 3 | known |
+
+Under `--no-timing` the same classes apply plus the ~400 checks that
+timing fixes (divided-clock/derived-reset designs and ClockGen builds).
