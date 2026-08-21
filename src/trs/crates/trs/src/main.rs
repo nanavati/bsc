@@ -17,6 +17,130 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
+/// argv[0] artifact dispatch: `trs link -o art` emits `art` as a
+/// SYMLINK to the runner with `art.bir`/`.so`/`.opts` beside it.
+/// Invoked under a name with a sibling .bir, this binary IS the
+/// artifact and recovers the run IN-PROCESS — the sh wrapper this
+/// replaces cost ~5ms per exec (sh startup + two command-substitution
+/// forks + an exec), more than binary load and design boot combined
+/// on small designs.  Returns the synthesized `run` argv, or None for
+/// a normal CLI invocation; the routed tiers (Tcl -c/-f, $TRS
+/// override, slim-to-full selfcheck) exec away and never return.
+#[cfg(unix)]
+fn artifact_dispatch(user_args: &[String]) -> Option<Vec<String>> {
+    use std::os::unix::process::CommandExt;
+    let arg0 = std::env::args_os().next()?;
+    let p = std::path::PathBuf::from(&arg0);
+    let name = p.file_name()?.to_str()?.to_string();
+    if name == "trs" || name == "trs-run" {
+        return None;
+    }
+    // the artifact directory, like the wrapper's dirname "$0"; a bare
+    // name (PATH lookup) falls back to the working directory
+    let dir = match p.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    };
+    let bir = dir.join(format!("{name}.bir"));
+    if !bir.is_file() {
+        return None;
+    }
+    // baked link options — what the wrapper carried as script text
+    let mut top = String::new();
+    let mut formats = "vcd".to_string();
+    let mut split = String::new();
+    if let Ok(s) = std::fs::read_to_string(dir.join(format!("{name}.opts"))) {
+        for line in s.lines() {
+            if let Some(v) = line.strip_prefix("top=") {
+                top = v.to_string();
+            } else if let Some(v) = line.strip_prefix("formats=") {
+                formats = v.to_string();
+            } else if let Some(v) = line.strip_prefix("split=") {
+                split = v.to_string();
+            }
+        }
+    }
+    // -c/-f: the debug/script tier — stock bluetcl + the capi shim
+    // (bluesim.tcl), exactly the wrapper's dispatch
+    let capi = dir.join(format!("{name}.capi.so"));
+    if user_args.iter().any(|a| a == "-c" || a == "-f")
+        && capi.is_file()
+        && !top.is_empty()
+    {
+        let bsdir = std::process::Command::new("bluetcl")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .ok()
+            .and_then(|mut c| {
+                use std::io::Write;
+                c.stdin
+                    .take()?
+                    .write_all(b"puts $env(BLUESPECDIR)\n")
+                    .ok()?;
+                let out = c.wait_with_output().ok()?;
+                out.status
+                    .success()
+                    .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            });
+        if let Some(bsdir) = bsdir.filter(|b| !b.is_empty()) {
+            let e = std::process::Command::new(format!(
+                "{bsdir}/tcllib/bluespec/bluesim.tcl"
+            ))
+            .arg(&capi)
+            .arg(&top)
+            .arg("--script_name")
+            .arg(&name)
+            .args(user_args)
+            .env("TRS_CAPI_FORMATS", &formats)
+            .exec();
+            eprintln!("trs: bluesim.tcl: {e}");
+            std::process::exit(2);
+        }
+        // bluetcl absent: fall through to the fast runner, like the
+        // wrapper's test -f guard did
+    }
+    let mut synth = vec!["run".to_string(), bir.to_str()?.to_string()];
+    let so = dir.join(format!("{name}.so"));
+    if so.is_file() {
+        synth.push("--code".into());
+        synth.push(so.to_str()?.into());
+    }
+    if !split.is_empty() {
+        synth.push("--split".into());
+        synth.push(split);
+    }
+    synth.push("--formats".into());
+    synth.push(formats);
+    synth.extend(user_args.iter().cloned());
+    // $TRS points the run at a specific build (the testsuite's hook)
+    if let Some(t) = std::env::var_os("TRS") {
+        let e = std::process::Command::new(&t).args(&synth).exec();
+        eprintln!("trs: exec {}: {e}", std::path::Path::new(&t).display());
+        std::process::exit(2);
+    }
+    // slim build: selfcheck/jit modes need the FULL binary beside the
+    // real runner (arm_jit is a no-op here — it would silently label a
+    // second interp shadow "jit" and weaken the 3-way oracle)
+    #[cfg(not(feature = "jit"))]
+    {
+        let wants_full = user_args.iter().any(|a| a == "--selfcheck")
+            || std::env::var_os("TRS_SELFCHECK").is_some()
+            || std::env::var_os("TRS_JIT").is_some();
+        if wants_full {
+            if let Ok(me) = std::env::current_exe() {
+                let full = me.with_file_name("trs");
+                if full.is_file() {
+                    let e = std::process::Command::new(&full).args(&synth).exec();
+                    eprintln!("trs: exec {}: {e}", full.display());
+                    std::process::exit(2);
+                }
+            }
+        }
+    }
+    Some(synth)
+}
+
 fn main() -> ExitCode {
     // reference parity for `./model | head`: Rust starts with SIGPIPE
     // ignored, so a $display into a closed pipe returned EPIPE and the
@@ -27,7 +151,12 @@ fn main() -> ExitCode {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    #[allow(unused_mut)]
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(unix)]
+    if let Some(synth) = artifact_dispatch(&args) {
+        args = synth;
+    }
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         // trs features: print the compiled-in feature set, one per line
         // (the testsuite probes for "jit" to decide whether link-artifact
@@ -368,20 +497,63 @@ fn main() -> ExitCode {
             // temp+rename: a crash mid-write must never leave a
             // truncated-but-executable wrapper (a script missing its
             // exec line runs and exits 0 doing nothing)
-            let base_tmp = format!("{base}.tmp");
-            if let Err(e) = std::fs::write(&base_tmp, script)
-                .and_then(|()| std::fs::rename(&base_tmp, &base))
+            // baked link options for the argv[0] dispatch (one ~60-byte
+            // read replaces the wrapper's two command-substitution
+            // forks); written for both artifact forms
+            let opts = format!("top={top}\nformats={fmt_arg}\nsplit={split}\n");
+            let opts_tmp = format!("{base}.opts.tmp");
+            if let Err(e) = std::fs::write(&opts_tmp, opts)
+                .and_then(|()| std::fs::rename(&opts_tmp, format!("{base}.opts")))
             {
-                eprintln!("trs link: {base}: {e}");
+                eprintln!("trs link: {base}.opts: {e}");
                 return ExitCode::FAILURE;
             }
+            // the artifact itself: a SYMLINK to the runner — main()'s
+            // argv[0] dispatch recovers <base>.bir/.so/.opts from the
+            // link NAME and runs IN-PROCESS (no sh, no forks, no
+            // second exec; the wrapper cost ~5ms per invocation).
+            // Compiled artifacts point at the slim runner; the
+            // non-compiled form keeps the full binary (TRS_JIT=1
+            // hybrid runs need it).  The sh script remains the
+            // fallback where symlinks fail — and for output names
+            // that would defeat the dispatch's own-name guard.
             #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &base,
-                    std::fs::Permissions::from_mode(0o755),
-                );
+            let linked = {
+                let bname = std::path::Path::new(&base)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                let runner = if compiled {
+                    slim_exe.clone().unwrap_or_else(|| self_exe.clone())
+                } else {
+                    self_exe.clone()
+                };
+                bname != "trs" && bname != "trs-run" && {
+                    let tmp = format!("{base}.lnk.tmp");
+                    let _ = std::fs::remove_file(&tmp);
+                    std::os::unix::fs::symlink(&runner, &tmp)
+                        .and_then(|()| std::fs::rename(&tmp, &base))
+                        .is_ok()
+                }
+            };
+            #[cfg(not(unix))]
+            let linked = false;
+            if !linked {
+                let base_tmp = format!("{base}.tmp");
+                if let Err(e) = std::fs::write(&base_tmp, script)
+                    .and_then(|()| std::fs::rename(&base_tmp, &base))
+                {
+                    eprintln!("trs link: {base}: {e}");
+                    return ExitCode::FAILURE;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &base,
+                        std::fs::Permissions::from_mode(0o755),
+                    );
+                }
             }
             ExitCode::SUCCESS
         }
