@@ -125,9 +125,13 @@ with a minimal reproducer (kept out of the repo; see the branch notes):
    reset.
 
 Net guidance: use Verilator >= 5.050 for `--timing` (5.020 crashes on
-any BSC-generated design with system tasks); expect the two data
-regressions (four affected checks in the full testsuite) until they
-are fixed upstream.
+any BSC-generated design with system tasks); expect the post-5.020
+regressions until they are fixed upstream — a 5.020-vs-5.051 sweep
+attributes ~14 checks to them, in BOTH modes (see the failure ledger
+below), spanning defect (2), defect (3), a new runtime
+`parallel_case` assertion (a behavior change, not a bug — it fires on
+BSC's pragma when rules are not actually exclusive), and an abnormal
+exit in `$dumpoff`/`$dumpon` handling.
 
 ## Validation summary
 
