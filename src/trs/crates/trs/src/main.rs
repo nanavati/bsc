@@ -305,6 +305,20 @@ fn main() -> ExitCode {
                 .ok()
                 .and_then(|p| p.to_str().map(String::from))
                 .unwrap_or_else(|| "trs".into());
+            // slim runner: an LLVM-free `trs-run` installed beside
+            // this binary execs ~6ms cheaper (no static-LLVM
+            // constructors/relocations; Dividers exe 14.2 -> 7.9ms).
+            // Baked as the wrapper's default runner when present.
+            // Selfcheck runs (--selfcheck, or TRS_SELFCHECK/TRS_JIT
+            // in the env) route back to the FULL binary: the slim
+            // build's arm_jit is a no-op, which would silently label
+            // a second interp shadow "jit" and weaken the 3-way
+            // oracle.  TRS= in the env still overrides both.
+            let slim_exe = std::env::current_exe()
+                .ok()
+                .map(|p| p.with_file_name("trs-run"))
+                .filter(|p| p.is_file())
+                .and_then(|p| p.to_str().map(String::from));
             // debug/script tier: -c/-f are Tcl (while/foreach/expr —
             // bluesim.tcl's `source`/`eval`), so those runs go through
             // stock bluetcl + the capi shim, not the fast runner.  The
@@ -333,9 +347,17 @@ fn main() -> ExitCode {
                 String::new()
             };
             let script = if compiled {
+                let pick = match &slim_exe {
+                    Some(slim) => format!(
+                        "r=\"{slim}\"\n\
+                         case \" $* \" in *\" --selfcheck\"*) r=\"{self_exe}\";; esac\n\
+                         if [ -n \"${{TRS_SELFCHECK}}${{TRS_JIT}}\" ]; then r=\"{self_exe}\"; fi\n"
+                    ),
+                    None => format!("r=\"{self_exe}\"\n"),
+                };
                 format!(
-                    "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n{dispatch}\
-                     exec \"${{TRS:-{self_exe}}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} --formats {fmt_arg} ${{1+\"$@\"}}\n"
+                    "#!/bin/sh\nd=`dirname \"$0\"`\nb=`basename \"$0\"`\n{pick}{dispatch}\
+                     exec \"${{TRS:-$r}}\" run \"$d/$b.bir\" --code \"$d/$b.so\"{split_arg} --formats {fmt_arg} ${{1+\"$@\"}}\n"
                 )
             } else {
                 format!(
