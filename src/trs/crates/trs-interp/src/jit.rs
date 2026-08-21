@@ -1737,12 +1737,16 @@ pub(crate) struct RunCoreStageA {
     /// lives in structs a RunCore boot doesn't have — ineligible
     /// until lazy Reflect (adversarial-panel finding)
     pub(crate) boxed: bool,
-    /// any compiled prim CALL SITE exists (sched or exec prim
-    /// tables): even an arena'd prim can bounce through jit_prim_cb
-    /// (guarded warn paths, value methods) — the boot has no prims to
-    /// service it, so sites gate eligibility until lazy Reflect
-    /// (panel run-path finding; witnessed by RegFileWarnCone)
-    pub(crate) prim_sites: bool,
+    /// per bounce-reachable prim inst (any inst named by a sched or
+    /// exec PrimCallSpec): (inst, slot, tag, words, strings) seed rows
+    /// for the sidecar PRIMS section — the boot restores exactly these
+    /// prims, adopts their live slots, and services bounces natively
+    /// (rung 3b; the rows replace 3a's blanket prim-site gate).
+    /// Err = why native servicing is impossible (unattached target,
+    /// unseedable kind) — the design then boots classic.
+    #[allow(clippy::type_complexity)]
+    pub(crate) prim_rows:
+        Result<Vec<(u64, u64, u64, Vec<u64>, Vec<String>)>, String>,
     /// BRAM warn registry rows keyed back to relative arena slots:
     /// (slot, addr_bits, full name)
     pub(crate) warns: Vec<(u64, u32, String)>,
@@ -1784,6 +1788,11 @@ pub(crate) const RC_SEC_ELIG: u64 = 6;
 // loop engage point — the state a RunCore boot starts from
 pub(crate) const RC_SEC_WARENA: u64 = 7;
 pub(crate) const RC_SEC_WSTATE: u64 = 8;
+// bounce-reachable prim seeds (rung 3b): per row [inst, slot, tag,
+// nwords, words..., nstrs, (len, bytes)...] — the boot restores these
+// prims over their live slots and services compiled prim call sites
+// natively (runcore_prim_cb)
+pub(crate) const RC_SEC_PRIMS: u64 = 9;
 
 /// RLE-encode `words` as (value, run) LE u64 pairs onto `out`.
 fn rle_push(words: &[u64], out: &mut Vec<u8>) {
@@ -1921,12 +1930,18 @@ impl Interp {
         if sa.boxed {
             ineligible(&mut r_reason, "boxed prims (lazy Reflect pending)");
         }
-        if sa.prim_sites {
-            ineligible(
-                &mut r_reason,
-                "compiled prim call sites (lazy Reflect pending)",
-            );
-        }
+        // rung 3b: prim call sites no longer gate eligibility — the
+        // PRIMS section bakes a native servicer seed for every
+        // bounce-reachable prim instead.  Only a site whose target
+        // cannot be seeded (unattached, unseedable kind) boots classic.
+        let prim_rows: &[(u64, u64, u64, Vec<u64>, Vec<String>)] =
+            match &sa.prim_rows {
+                Ok(rows) => rows,
+                Err(e) => {
+                    ineligible(&mut r_reason, e);
+                    &[]
+                }
+            };
         if !driver_clock.is_empty() {
             ineligible(&mut c_reason, "driver clocks");
         }
@@ -1998,7 +2013,7 @@ impl Interp {
         };
         let mut p = Vec::new();
         img.extend_from_slice(b"TRSBOOTD");
-        w64(&mut img, 6);
+        w64(&mut img, 7);
         // strings: the full design table (StrDyn tokens may select any)
         p.clear();
         w64(&mut p, self.d.strings.len() as u64);
@@ -2053,13 +2068,31 @@ impl Interp {
         w64(&mut p, r.len() as u64);
         p.extend_from_slice(r.as_bytes());
         sect(&mut img, RC_SEC_ELIG, &p);
-        // bump the header version: sections present.  3 = the
-        // eligibility-semantics revision (prim-site + lib-BDPI gates):
-        // a driver must never trust an eligible flag computed under
-        // older gate rules, so the version IS the semantics rev — bump
-        // it whenever eligibility logic changes (panel stale-pair
-        // finding).
-        img[8..16].copy_from_slice(&3u64.to_le_bytes());
+        // bounce-reachable prim seeds (empty for site-free designs)
+        p.clear();
+        w64(&mut p, prim_rows.len() as u64);
+        for (inst, slot, tag, ws, ss) in prim_rows {
+            w64(&mut p, *inst);
+            w64(&mut p, *slot);
+            w64(&mut p, *tag);
+            w64(&mut p, ws.len() as u64);
+            for w in ws {
+                w64(&mut p, *w);
+            }
+            w64(&mut p, ss.len() as u64);
+            for s in ss {
+                w64(&mut p, s.len() as u64);
+                p.extend_from_slice(s.as_bytes());
+            }
+        }
+        sect(&mut img, RC_SEC_PRIMS, &p);
+        // bump the header version: sections present.  The version IS
+        // the eligibility-semantics revision — bump it whenever the
+        // gate rules change, so a driver never trusts an `eligible`
+        // flag computed under older rules (panel stale-pair finding).
+        // 2 = pre-prim-gate; 3 = prim-site + lib-BDPI gates; 4 =
+        // native prim servicing (sites eligible via PRIMS seeds).
+        img[8..16].copy_from_slice(&4u64.to_le_bytes());
         self.runcore_pending = Some(img);
     }
 
@@ -2098,8 +2131,8 @@ impl Interp {
         let salted =
             self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
         let version = rd(0);
-        if version != 1 && version != 3 {
-            // 2 = the pre-prim-gate eligibility semantics: stale
+        if version != 1 && version != 4 {
+            // 2, 3 = older eligibility-semantics revisions: stale
             fail("unknown or stale version");
             return None;
         }
@@ -2350,6 +2383,110 @@ impl Interp {
                         want!(take8(&mut p), "window cycle"),
                     ));
                 }
+                RC_SEC_PRIMS => {
+                    // recompute the bounce-reachable set from the live
+                    // plan and compare each baked seed against the
+                    // live prim's own serialization + attachment
+                    let Some(lz) = self.jit_shared.as_ref() else {
+                        fail("descriptor: prim seeds without a live plan");
+                        return None;
+                    };
+                    let mut want_insts: std::collections::BTreeSet<usize> =
+                        Default::default();
+                    for pr in lz.protos.iter() {
+                        for pc in
+                            pr.sched_prims.iter().chain(pr.exec_prims.iter())
+                        {
+                            want_insts.insert(pc.inst);
+                        }
+                    }
+                    // mirror the encoder: if ANY bounce-reachable inst
+                    // is unattached or unseedable, desc_finish encoded
+                    // ZERO rows (and an ineligible reason) — expecting
+                    // the full set there made the witness cry wolf on
+                    // every such design (panel finding)
+                    let seedable = want_insts.iter().all(|&i| {
+                        matches!(&self.insts[i].kind, InstKind::Prim(pm)
+                            if pm.runcore_seed().is_some()
+                                && pm.runcore_slot().is_some())
+                    });
+                    let expect = if seedable { want_insts.len() } else { 0 };
+                    let n = want!(take8(&mut p), "prim seed count");
+                    if n != expect as u64 {
+                        fail(&format!(
+                            "descriptor: {n} prim seeds baked vs {expect} \
+                             expected live"
+                        ));
+                        return None;
+                    }
+                    let mut seen_insts = std::collections::HashSet::new();
+                    for _ in 0..n {
+                        let inst =
+                            want!(take8(&mut p), "prim seed inst") as usize;
+                        let slot = want!(take8(&mut p), "prim seed slot");
+                        let tag = want!(take8(&mut p), "prim seed tag");
+                        let nw = want!(take8(&mut p), "prim seed words");
+                        if nw > 64 {
+                            fail("descriptor: absurd prim seed words");
+                            return None;
+                        }
+                        let mut ws = Vec::with_capacity(nw as usize);
+                        for _ in 0..nw {
+                            ws.push(want!(take8(&mut p), "prim seed word"));
+                        }
+                        let ns = want!(take8(&mut p), "prim seed strings");
+                        if ns > 8 {
+                            fail("descriptor: absurd prim seed strings");
+                            return None;
+                        }
+                        let mut ss = Vec::with_capacity(ns as usize);
+                        for _ in 0..ns {
+                            ss.push(
+                                want!(take_str(&mut p), "prim seed string")
+                                    .to_string(),
+                            );
+                        }
+                        if !want_insts.contains(&inst) {
+                            fail(&format!(
+                                "descriptor: prim seed for inst {inst} \
+                                 which no live call site reaches"
+                            ));
+                            return None;
+                        }
+                        if !seen_insts.insert(inst) {
+                            fail(&format!(
+                                "descriptor: duplicate prim seed for \
+                                 inst {inst}"
+                            ));
+                            return None;
+                        }
+                        let InstKind::Prim(pm) = &self.insts[inst].kind
+                        else {
+                            fail("descriptor: prim seed on non-prim inst");
+                            return None;
+                        };
+                        if pm.runcore_seed() != Some((tag, ws, ss)) {
+                            fail(&format!(
+                                "descriptor: prim seed drift at inst \
+                                 {inst} ({})",
+                                self.insts[inst].path
+                            ));
+                            return None;
+                        }
+                        let live = pm.runcore_slot().and_then(|ptr| {
+                            (ptr as usize)
+                                .checked_sub(self.jit_arena_ptr as usize)
+                                .map(|d| d / 8)
+                        });
+                        if live != Some(slot as usize) {
+                            fail(&format!(
+                                "descriptor: prim slot drift at inst \
+                                 {inst}: baked {slot}, live {live:?}"
+                            ));
+                            return None;
+                        }
+                    }
+                }
                 _ => {
                     fail(&format!("descriptor: unknown section {tag}"));
                     return None;
@@ -2357,8 +2494,8 @@ impl Interp {
             }
             pos = end;
         }
-        // required sections: 1-6 always; window sections travel as a
-        // pair or not at all
+        // required sections: 1-6 + 9 always; window sections travel
+        // as a pair or not at all
         for t in [
             RC_SEC_STRINGS,
             RC_SEC_PATHS,
@@ -2366,6 +2503,7 @@ impl Interp {
             RC_SEC_COMPS,
             RC_SEC_WARNS,
             RC_SEC_ELIG,
+            RC_SEC_PRIMS,
         ] {
             if seen_tags & (1 << t) == 0 {
                 fail("descriptor: missing required section");
@@ -4997,16 +5135,58 @@ impl Interp {
                         .iter()
                         .filter(|i| matches!(i.kind, InstKind::Prim(_)))
                         .count();
+                    // bounce-reachable prims: every inst a compiled
+                    // prim call site can name.  BTreeSet: the sidecar
+                    // rows must be deterministic (byte-stable sidecars
+                    // are a witness invariant).
+                    let slot_of: HashMap<usize, u64> = attach
+                        .iter()
+                        .map(|&(ci, slot)| (ci, slot as u64))
+                        .collect();
+                    let mut sites: std::collections::BTreeSet<usize> =
+                        Default::default();
+                    for p in &protos {
+                        for pc in
+                            p.sched_prims.iter().chain(p.exec_prims.iter())
+                        {
+                            sites.insert(pc.inst);
+                        }
+                    }
+                    let prim_rows = sites
+                        .iter()
+                        .map(|&ci| {
+                            let Some(&slot) = slot_of.get(&ci) else {
+                                return Err(
+                                    "prim call site on an unattached prim"
+                                        .to_string(),
+                                );
+                            };
+                            let InstKind::Prim(p) = &self.insts[ci].kind
+                            else {
+                                return Err(
+                                    "prim call site on a non-prim inst"
+                                        .to_string(),
+                                );
+                            };
+                            match p.runcore_seed() {
+                                Some((tag, words, strs)) => {
+                                    Ok((ci as u64, slot, tag, words, strs))
+                                }
+                                None => Err(format!(
+                                    "prim call site without a native \
+                                     servicer ({})",
+                                    self.insts[ci].path
+                                )),
+                            }
+                        })
+                        .collect::<Result<Vec<_>, String>>();
                     self.runcore_stage_a = Some(RunCoreStageA {
                         covered,
                         edge_ssa: std::env::var("TRS_EDGE_SSA").as_deref()
                             != Ok("0"),
                         // attach lists exactly the slot-allocated prims
                         boxed: nprims != attach.len(),
-                        prim_sites: protos.iter().any(|p| {
-                            !p.sched_prims.is_empty()
-                                || !p.exec_prims.is_empty()
-                        }),
+                        prim_rows,
                         warns,
                     });
                 }

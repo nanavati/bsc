@@ -222,6 +222,203 @@ pub trait Prim {
     /// written to the slot(s), which become the single source of truth
     /// for both the interpreter paths and compiled code.
     fn arena_attach(&mut self, _slot: *mut u64) {}
+    /// RunCore native bounce servicing (rung 3b): the prim's STATIC
+    /// config as (kind tag, words, strings) — enough for
+    /// runcore_restore to rebuild an equivalent prim whose DYNAMIC
+    /// state is entirely the adopted arena slots (attach makes the
+    /// slots the single source of truth, and the boot's window image
+    /// carries their live values).  None = no native servicer; a
+    /// bounce-reachable prim returning None keeps the design on the
+    /// classic boot.
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        None
+    }
+    /// arena_attach's adopting twin: point at LIVE slots and write
+    /// NOTHING (attach pushes the boxed pre-attach image over the
+    /// slots — exactly what adopting a live arena must not do).
+    /// Implemented only by kinds that return a runcore_seed.
+    fn arena_adopt(&mut self, _slot: *mut u64) {
+        unreachable!("arena_adopt on a prim kind without a RunCore seed")
+    }
+    /// The attached arena base (RunCore load-time witness: baked slot
+    /// offsets are compared against the live attachment).
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        None
+    }
+}
+
+// RunCore seed kind tags (sidecar PRIMS section): stable wire values
+// — renumbering is a sidecar-version bump.
+pub(crate) const RC_PRIM_REG: u64 = 1;
+pub(crate) const RC_PRIM_WIRE: u64 = 2;
+pub(crate) const RC_PRIM_CONFIGREG: u64 = 3;
+pub(crate) const RC_PRIM_CREG5: u64 = 4;
+pub(crate) const RC_PRIM_COUNTER: u64 = 5;
+pub(crate) const RC_PRIM_REGFILE: u64 = 6;
+pub(crate) const RC_PRIM_FIFO: u64 = 7;
+pub(crate) const RC_PRIM_BRAM: u64 = 8;
+
+/// Rebuild a native bounce servicer from its baked seed: the prim
+/// (dynamic state = the live slots it will adopt) plus its arena
+/// FOOTPRINT in words, computed with the same layout arithmetic the
+/// prim's methods use, so the boot can bounds-check the baked base
+/// slot before any pointer arithmetic.  Every field of the seed is
+/// file data: any arity, width, or size anomaly is None and the boot
+/// falls back classic before producing a byte of output.
+pub(crate) fn runcore_restore(
+    tag: u64,
+    words: &[u64],
+    strs: &[String],
+) -> Option<(Box<dyn Prim>, usize)> {
+    let vw = |w: u32| (w.max(1) as usize).div_ceil(64);
+    let width_of = |x: u64| u32::try_from(x).ok().filter(|&w| w <= 1 << 20);
+    // constructors re-derive full_name as "top" / "top.<path>", so the
+    // baked full name round-trips through its path suffix
+    fn path_of(full: &str) -> &str {
+        full.strip_prefix("top.").unwrap_or("")
+    }
+    match (tag, words, strs) {
+        (RC_PRIM_REG, &[w], []) => {
+            let w = width_of(w)?;
+            let p = Reg {
+                reset_value: Value::undet(w),
+                width: w,
+                prev: Value::undet(w),
+                value: Value::undet(w),
+                in_reset: false,
+                async_rst: false,
+                suppress: false,
+                crossing: false,
+                written_at: u64::MAX,
+                slot: None,
+                vcd_id: 0,
+                vcd_back: None,
+            };
+            Some((Box::new(p), vw(w)))
+        }
+        (RC_PRIM_WIRE, &[w], []) => {
+            let w = width_of(w)?;
+            let p = if w == 0 {
+                RWire::new(&[], true)
+            } else {
+                RWire::new(&[Value::from_u64(32, w as u64)], false)
+            };
+            Some((Box::new(p), 1 + vw(w)))
+        }
+        (RC_PRIM_CONFIGREG, &[w], []) => {
+            let w = width_of(w)?;
+            let p = ConfigReg::new(&[Value::from_u64(32, w as u64)], false, false);
+            Some((Box::new(p), 2 * vw(w) + 1))
+        }
+        (RC_PRIM_CREG5, &[w], []) => {
+            let w = width_of(w)?;
+            let p = CReg::new(&[Value::from_u64(32, w as u64)], false, false);
+            Some((Box::new(p), 2 * vw(w)))
+        }
+        (RC_PRIM_COUNTER, &[w], []) => {
+            let w = width_of(w)?;
+            let p = Counter::new(&[Value::from_u64(32, w as u64)]);
+            Some((Box::new(p), 4 * vw(w) + 4))
+        }
+        (RC_PRIM_REGFILE, &[w, ab, lo, hi], [mem_name, full_name]) => {
+            let w = width_of(w)?;
+            let ab = u32::try_from(ab).ok().filter(|&b| b <= 64)?;
+            if hi < lo {
+                return None;
+            }
+            let entries = hi.checked_sub(lo)?.checked_add(1)?;
+            let fp = usize::try_from(
+                2u64.checked_add(
+                    (vw(w) as u64).checked_mul(entries.checked_add(1)?)?,
+                )?,
+            )
+            .ok()
+            .filter(|&f| f <= 1 << 20)?;
+            let p = RegFile {
+                data: Default::default(),
+                slot: None,
+                mem_name: mem_name.clone(),
+                full_name: full_name.clone(),
+                addr_bits: ab,
+                width: w,
+                lo,
+                hi,
+                upd_at: u64::MAX,
+                upd_addr: 0,
+                upd_prev: Value::undet(w.max(1)),
+            };
+            Some((Box::new(p), fp))
+        }
+        (RC_PRIM_FIFO, &[w, size, ftype, guard, zw], [full_name]) => {
+            let w = width_of(w)?;
+            if size == 0 {
+                return None; // live fifos are depth>=1 by construction
+            }
+            let ftype = match ftype {
+                0 => FifoType::Simple,
+                1 => FifoType::Loopy,
+                _ => return None, // Bypass never seeds (stays boxed)
+            };
+            let fp = usize::try_from(
+                7u64.checked_add(size.checked_mul(vw(w) as u64)?)?,
+            )
+            .ok()
+            .filter(|&f| f <= 1 << 20)?;
+            let p = Fifo::new(
+                w,
+                size,
+                guard != 0,
+                ftype,
+                zw != 0,
+                path_of(full_name),
+            );
+            Some((Box::new(p), fp))
+        }
+        (
+            RC_PRIM_BRAM,
+            &[pipelined, dual, ab, w, hi_addr, chunk, nwens],
+            [full_name],
+        ) => {
+            let w = width_of(w)?;
+            let ab = u32::try_from(ab).ok().filter(|&b| b <= 64)?;
+            let chunk = u32::try_from(chunk).ok()?;
+            let nwens = u32::try_from(nwens).ok()?;
+            let dual = dual != 0;
+            let port_words = 3u64
+                .checked_add((nwens.max(1) as u64).div_ceil(64))?
+                .checked_add(4 * vw(w) as u64)?;
+            // footprint claims BOTH ports unconditionally: a b-port
+            // method on a corrupt dual=0 seed would otherwise access
+            // past the declared extent (panel finding).  For a real
+            // single-port BRAM this over-claims by port_words, which
+            // can only make the boot's bounds check conservatively
+            // refuse (classic boot) — never admit an overrun.
+            let fp = usize::try_from(
+                port_words
+                    .checked_mul(2)?
+                    .checked_add(
+                        hi_addr
+                            .checked_add(1)?
+                            .checked_mul(vw(w) as u64)?,
+                    )?,
+            )
+            .ok()
+            .filter(|&f| f <= 1 << 20)?;
+            let p = Bram::new(
+                pipelined != 0,
+                dual,
+                ab,
+                w,
+                chunk,
+                nwens,
+                hi_addr.checked_add(1)?,
+                path_of(full_name),
+                None,
+            );
+            Some((Box::new(p), fp))
+        }
+        _ => None,
+    }
 }
 
 /// Arena layouts a prim can expose (see Prim::arena_kind).
@@ -986,6 +1183,19 @@ impl Prim for Counter {
         self.arena_word_set(4 * w + 2, self.b_at);
         self.arena_word_set(4 * w + 3, self.suppress as u64);
     }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        // c/f/c_at/f_at stay boxed even when attached, but they are
+        // write-only outside VCD dumps (setC folds a_at/b_at from the
+        // SLOTS) — a fresh restore is exact for batch bounces
+        self.arena_kind()?;
+        Some((RC_PRIM_COUNTER, vec![self.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
 }
 
 // ===============
@@ -1684,6 +1894,20 @@ impl Prim for RegFile {
             self.arena_write(self.data_off(a), v.as_ref().unwrap_or(&undet));
         }
     }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((
+            RC_PRIM_REGFILE,
+            vec![self.width as u64, self.addr_bits as u64, self.lo, self.hi],
+            vec![self.mem_name.clone(), self.full_name.clone()],
+        ))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
 }
 
 /// MOD_LatchCrossingReg (bs_prim_mod_synchronizers.h): a register written
@@ -2102,6 +2326,16 @@ impl Prim for Reg {
         }
         self.slot = Some(slot);
     }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_REG, vec![self.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
 }
 
 // ===============
@@ -2378,6 +2612,16 @@ impl Prim for ConfigReg {
         self.slot = Some(slot);
         self.mirror();
     }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_CONFIGREG, vec![self.value.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
+    }
 }
 
 // ===============
@@ -2566,6 +2810,16 @@ impl Prim for RWire {
             *d = self.value.limbs64().get(i).copied().unwrap_or(0);
         }
         self.slot = Some(slot);
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_WIRE, vec![self.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -2867,6 +3121,16 @@ impl Prim for CReg {
         let (v, vr) = (self.value.clone(), self.value_reg.clone());
         self.arena_set(false, &v);
         self.arena_set(true, &vr);
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((RC_PRIM_CREG5, vec![self.value.width as u64], Vec::new()))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -3459,6 +3723,26 @@ impl Prim for Fifo {
         for i in 0..self.size {
             self.mirror_data(i);
         }
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((
+            RC_PRIM_FIFO,
+            vec![
+                self.width as u64,
+                self.size as u64,
+                (self.ftype == FifoType::Loopy) as u64,
+                self.guard as u64,
+                self.zero_width as u64,
+            ],
+            vec![self.full_name.clone()],
+        ))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 
@@ -5841,6 +6125,35 @@ impl Prim for Bram {
             self.mem_set(addr, v.unwrap_or_else(|| undet.clone()));
         }
         self.data = Default::default();
+    }
+    fn runcore_seed(&self) -> Option<(u64, Vec<u64>, Vec<String>)> {
+        self.arena_kind()?;
+        Some((
+            RC_PRIM_BRAM,
+            vec![
+                self.pipelined as u64,
+                self.dual as u64,
+                self.addr_bits as u64,
+                self.width as u64,
+                self.hi_addr,
+                self.chunk_size as u64,
+                self.num_wens as u64,
+            ],
+            vec![self.full_name.clone()],
+        ))
+    }
+    fn arena_adopt(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        // same registration half as arena_attach (idempotent: pointer
+        // key + identical name), no state writes — the slots are live
+        BRAM_WARN_NAMES
+            .lock()
+            .unwrap()
+            .insert(slot as usize, (self.full_name.clone(), self.addr_bits));
+        let _ = trs_codegen::abi::BRAM_WARN.set(bram_warn_hook);
+    }
+    fn runcore_slot(&self) -> Option<*mut u64> {
+        self.slot
     }
 }
 

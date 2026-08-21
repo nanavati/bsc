@@ -13,12 +13,22 @@
 //! foreign surface is exactly the ForeignEnv split: what ForeignEnv
 //! declines cannot occur on an eligible design, and reaching it here
 //! is a loud panic, never a wrong byte.
+//!
+//! Compiled prim call sites (rung 3b) are serviced NATIVELY: the
+//! sidecar bakes each bounce-reachable prim's static config, the boot
+//! restores the identical prim.rs struct and adopt-attaches it to the
+//! live arena slots (which attach makes the single source of truth —
+//! the window image carries their live values), and runcore_prim_cb
+//! dispatches the same trait methods jit_prim_cb would.  No design
+//! decode, no Interp, no reflection: precisely the prims the compiled
+//! code can bounce on, nothing else.
 
 use std::collections::HashMap;
 
 use crate::foreign::ForeignEnv;
 use crate::format::Arg;
-use crate::jit::{rle_decode, RC_SEC_CLOCK, RC_SEC_COMPS, RC_SEC_ELIG, RC_SEC_PATHS, RC_SEC_STRINGS, RC_SEC_WARENA, RC_SEC_WARNS, RC_SEC_WSTATE};
+use crate::jit::{rle_decode, RC_SEC_CLOCK, RC_SEC_COMPS, RC_SEC_ELIG, RC_SEC_PATHS, RC_SEC_PRIMS, RC_SEC_STRINGS, RC_SEC_WARENA, RC_SEC_WARNS, RC_SEC_WSTATE};
+use crate::prim::Prim;
 use crate::value::Value;
 use trs_codegen::abi::{self, FArgSpec, FnProtos, TOKEN_KIND_EXEC};
 
@@ -35,6 +45,8 @@ struct Boot {
     eligible: bool,
     /// (post-window arena, tp, cycle)
     window: Option<(Vec<u64>, u64, u64)>,
+    /// bounce-reachable prim seeds: (inst, slot, tag, words, strings)
+    prims: Vec<(usize, usize, u64, Vec<u64>, Vec<String>)>,
 }
 
 /// Strict sidecar parse for the boot path: every field is hostile,
@@ -48,9 +60,10 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
     let rd = |k: usize| {
         u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap())
     };
-    // version 3 = current eligibility semantics; older versions'
-    // eligible flags were computed under weaker gates — classic boot
-    if rd(0) != 3 || rd(1) != abi::AOT_LAYOUT_REV {
+    // version 4 = current eligibility semantics (native prim
+    // servicing); older versions' eligible flags were computed under
+    // different gate rules — classic boot
+    if rd(0) != 4 || rd(1) != abi::AOT_LAYOUT_REV {
         return None;
     }
     let hash = rd(2);
@@ -100,6 +113,7 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
         warns: Vec::new(),
         eligible: false,
         window: None,
+        prims: Vec::new(),
     };
     let mut warena = None;
     let mut wstate = None;
@@ -171,6 +185,49 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
                 let cyc = take8(&mut p)?;
                 wstate = Some((tp, cyc));
             }
+            RC_SEC_PRIMS => {
+                let n = usize::try_from(take8(&mut p)?).ok()?;
+                if n > 1 << 16 {
+                    return None;
+                }
+                let mut seen_insts = std::collections::HashSet::new();
+                for _ in 0..n {
+                    let inst = usize::try_from(take8(&mut p)?).ok()?;
+                    let slot = usize::try_from(take8(&mut p)?).ok()?;
+                    let tag = take8(&mut p)?;
+                    let nw = usize::try_from(take8(&mut p)?).ok()?;
+                    if nw > 64 {
+                        return None;
+                    }
+                    let mut ws = Vec::with_capacity(nw);
+                    for _ in 0..nw {
+                        ws.push(take8(&mut p)?);
+                    }
+                    let ns = usize::try_from(take8(&mut p)?).ok()?;
+                    if ns > 8 {
+                        return None;
+                    }
+                    let mut ss = Vec::with_capacity(ns);
+                    for _ in 0..ns {
+                        ss.push(take_str(&mut p)?);
+                    }
+                    // slot extent (footprint) is checked at restore
+                    // time; the base at least must be in the arena
+                    if slot >= b.nslots {
+                        return None;
+                    }
+                    // duplicate rows would silently collapse in the
+                    // boot's map, masking a missing seed
+                    if !seen_insts.insert(inst) {
+                        return None;
+                    }
+                    b.prims.push((inst, slot, tag, ws, ss));
+                }
+                // the rows must not have walked past this section
+                if p > end {
+                    return None;
+                }
+            }
             _ => return None,
         }
         pos = end;
@@ -180,7 +237,12 @@ fn parse_sidecar(bytes: &[u8]) -> Option<Boot> {
         || seen & (1 << RC_SEC_CLOCK) == 0
         || seen & (1 << RC_SEC_COMPS) == 0
         || seen & (1 << RC_SEC_ELIG) == 0
+        || seen & (1 << RC_SEC_PRIMS) == 0
     {
+        return None;
+    }
+    // prim seed insts index the instance-path table
+    if b.prims.iter().any(|(inst, ..)| *inst >= b.paths.len()) {
         return None;
     }
     if let (Some(a), Some((tp, cyc))) = (warena, wstate) {
@@ -204,6 +266,12 @@ struct RunCore {
     /// eligibility gate, so fresh-at-boot is exact
     rng: crate::GlibcRandom,
     now: u64,
+    /// native bounce servicers (rung 3b), keyed by global inst index:
+    /// the SAME prim.rs structs the interp uses, restored from their
+    /// baked static config and adopt-attached to the live arena slots
+    /// (post-attach, slots are the single source of truth — the
+    /// restored prim is indistinguishable from a classic-boot one)
+    prims: HashMap<usize, Box<dyn Prim>>,
 }
 
 impl RunCore {
@@ -323,15 +391,72 @@ unsafe extern "C" fn runcore_foreign_cb(
     0
 }
 
-/// Prim bounces cannot occur on an eligible design (boxed prims are
-/// an eligibility gate) — a call proves the gate wrong.
+/// jit_prim_cb's twin over the restored prims (rung 3b): same token
+/// decode, same marshaling, same trait methods — the prim is the
+/// identical prim.rs struct over the identical slots, so a bounce
+/// here is byte-for-byte the classic bounce.  An inst without a
+/// restored prim is an eligibility-gate bug: panic loudly rather
+/// than produce a wrong byte.
 unsafe extern "C" fn runcore_prim_cb(
-    _env: *mut core::ffi::c_void,
-    _token: u64,
-    _args: *const u64,
-    _out: *mut u64,
+    env: *mut core::ffi::c_void,
+    token: u64,
+    args: *const u64,
+    out: *mut u64,
 ) {
-    panic!("trs runcore: prim bounce reached the boot (eligibility-gate bug)");
+    let rc = &mut *(env as *mut RunCore);
+    let ordinal = (token >> 17) as usize;
+    let is_exec = token & TOKEN_KIND_EXEC != 0;
+    let local = (token & 0xffff) as usize;
+    let pc = if is_exec {
+        &rc.protos[ordinal].exec_prims[local]
+    } else {
+        &rc.protos[ordinal].sched_prims[local]
+    };
+    // marshal exactly as jit_prim_cb: w.max(1) words per argument on
+    // both sides of the ABI, TRUE logical width on the Value
+    let mut argv = Vec::with_capacity(pc.arg_widths.len());
+    let mut off = 0usize;
+    for &w in &pc.arg_widths {
+        let words = ((w.max(1) as usize) + 63) / 64;
+        argv.push(if (1..=64).contains(&w) {
+            Value::from_u64(w, *args.add(off))
+        } else {
+            let limbs = std::slice::from_raw_parts(args.add(off), words).to_vec();
+            Value::from_limbs64(w, limbs)
+        });
+        off += words;
+    }
+    let Some(p) = rc.prims.get_mut(&pc.inst) else {
+        panic!(
+            "trs runcore: prim bounce on an unseeded inst \
+             (eligibility-gate bug)"
+        );
+    };
+    crate::prim::FROM_COMPILED.with(|c| c.set(token));
+    if pc.method == trs_codegen::abi::GATE_OUT_METHOD {
+        // sentinel first: GATE_OUT is NOT a string id (panel finding —
+        // resolving it through the table panics on every gate bounce)
+        *out = p.gate_out() as u64;
+    } else if pc.is_action {
+        // method ids name design strings (never dyn); alloc-free
+        let name: &str = rc
+            .strings
+            .get(pc.method as usize)
+            .expect("prim method id outside the design string table");
+        p.action_method(name, &argv, rc.now);
+    } else {
+        let name: &str = rc
+            .strings
+            .get(pc.method as usize)
+            .expect("prim method id outside the design string table");
+        let v = p.value_method(name, &argv, rc.now);
+        let words = ((pc.ret_width.max(1) as usize) + 63) / 64;
+        let dst = std::slice::from_raw_parts_mut(out, words);
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
+    crate::prim::FROM_COMPILED.with(|c| c.set(u64::MAX));
 }
 
 /// Attempt a RunCore boot for `so` + its `.arena` sidecar.  Some(rc)
@@ -467,6 +592,41 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             );
         }
         let _ = abi::BRAM_WARN.set(crate::prim::bram_warn_hook);
+        // native bounce servicers (rung 3b): restore every baked prim
+        // seed UP FRONT and adopt its live slots — all hostile-file
+        // failure modes surface here, before a byte of output, where
+        // a classic boot is still a sound fallback.  The footprint
+        // bound comes from the restored prim's own layout arithmetic.
+        let mut prims: HashMap<usize, Box<dyn Prim>> = HashMap::new();
+        for (inst, slot, tag, ws, ss) in &boot.prims {
+            let Some((mut p, fp)) = crate::prim::runcore_restore(*tag, ws, ss)
+            else {
+                bail("prim seed unsupported or malformed");
+                return None;
+            };
+            if slot.checked_add(fp).is_none_or(|end| end > boot.nslots) {
+                bail("prim seed footprint out of range");
+                return None;
+            }
+            p.arena_adopt(ap.add(*slot));
+            prims.insert(*inst, p);
+        }
+        // coverage against the TRUSTED tables: every prim call site
+        // the .so can reach must have a seed, or a bounce would panic
+        // mid-run — bail to classic now, before any output (panel
+        // finding).  Byte-integrity of the seeds themselves is trust-
+        // rooted with the rest of the sidecar: the window arena IS
+        // state, so a crafted sidecar could already alter bytes; the
+        // checks here are against corruption and version skew.
+        if protos.iter().any(|pr| {
+            pr.sched_prims
+                .iter()
+                .chain(pr.exec_prims.iter())
+                .any(|pc| !prims.contains_key(&pc.inst))
+        }) {
+            bail("prim call site without a baked seed");
+            return None;
+        }
         let mut rc = RunCore {
             fe: ForeignEnv::new(),
             strings: boot.strings,
@@ -476,6 +636,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             protos,
             rng: crate::GlibcRandom::new(),
             now: 0,
+            prims,
         };
         rc.fe.plusargs = plusargs.to_vec();
         let envp = &mut rc as *mut RunCore as *mut core::ffi::c_void;

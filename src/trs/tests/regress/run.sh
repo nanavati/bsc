@@ -51,6 +51,10 @@ check FinishEdge sysFinishEdge
 # byte-compare whose out-of-bounds arms exercise the fixed Write/Read
 # warning discriminator on both engines.
 check BramWideBE sysBramWideBE
+# guarded-FIFO warn arms: enq-to-full / deq-from-empty warn and drop
+# on both engines; under TRS_RUNCORE=1 they exercise the boot's
+# natively restored Fifo servicer (rung 3b)
+check FifoWarn sysFifoWarn
 # A RegFile load file is an input to the simulation, not to the build.
 # The reference opens one when the model object is constructed, which is
 # run time, so link -- both the reference's and ours -- must complete
