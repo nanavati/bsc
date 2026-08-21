@@ -1,4 +1,4 @@
-# trs-only golden-compared sweep design (see sysTopParam.trsonly).
+# trs-only golden-compared sweep design (see sysTopParam.trsonly.expected).
 refuse=G0062
 bind=setStep.v=2
 engine=interp
