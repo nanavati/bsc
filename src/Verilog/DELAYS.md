@@ -95,14 +95,71 @@ Verilator build, where `sim_main.cpp` provides the same schedule.)
 
 ## Verilator version note
 
-Verilator 5.020 (Debian/apt, 2024-01) crashes (SIGSEGV destroying
-coroutine handles) under `--timing` on a process that suspends twice
-in one activation with an intervening conditional — e.g.
-`begin #0; ...; if (c) begin ...; #0; end ... end` — which is exactly
-the shape of the `always@(negedge CLK)` system-task blocks in
-BSC-generated Verilog.  A single `#0` in the same position is fine.
-Newer Verilator releases fix this (verified on a 5.051-devel source
-build); use a recent Verilator for `--timing`.
+Three Verilator defects were found while validating `--timing`, each
+with a minimal reproducer (kept out of the repo; see the branch notes):
+
+1. **Coroutine crash on double `#0`** — a process that suspends twice
+   in one activation with an intervening conditional, e.g.
+   `begin #0; ...; if (c) begin ...; #0; end ... end`, which is
+   exactly the shape of the `always@(negedge CLK)` system-task blocks
+   in BSC-generated Verilog, SIGSEGVs at runtime.  Broken in 5.020
+   (Debian/apt, 2024-01) — making 5.020's `--timing` unusable for BSC
+   output — and fixed by the 5.050 release.
+
+2. **`$signed(sig[msb:0])` display argument mis-evaluation** —
+   `$display("%0d", $signed(v[7:0]))` prints the unsliced value in
+   some design shapes.  Correct in 5.020; regressed by 5.050 and
+   still present in 5.051-devel.  Hits one testsuite check
+   (bsc.verilog/tasks sysModuleDisplay, timing build only).
+
+3. **`--trace --timing` loses `#0`-initial writes** — with tracing
+   compiled in (even when not enabled at run time), a register written
+   by an `initial begin #0; r = ...; end` block reads back as its
+   pre-initialization value in clocked logic.  A 12-line reproducer
+   exists.  Correct in 5.020; regressed by 5.050 and still present in
+   5.051-devel.  This silently defeats the primitive library's
+   init-#0 idiom wherever the initialization value differs from zero —
+   visible in the testsuite only under `BSV_POSITIVE_RESET`
+   (InitialReset), because elsewhere the init values coincide with
+   Verilator's zero-initialization or are immediately overwritten by
+   reset.
+
+Net guidance: use Verilator >= 5.050 for `--timing` (5.020 crashes on
+any BSC-generated design with system tasks); expect the two data
+regressions (four affected checks in the full testsuite) until they
+are fixed upstream.
+
+## Validation summary
+
+Slice-level (seven directories, 826 checks — bsc.mcd/{ClockDividers,
+MakeClock, Synchronizers, SyncReset, LevelFifo, ClockMux},
+bsc.verilog/tasks): iverilog reference 825/0; the new harness under
+`--no-timing` is per-test identical to the shipped flow on both
+Verilator 5.020 and 5.051.
+
+Full testsuite (`make checkparallel`, 862 test files, ~20,400 checks,
+Verilator 5.051-devel, every simulator/compiler invocation under a
+timeout and a file-size ulimit):
+
+| run | pass | fail | xfail |
+|---|---|---|---|
+| verilator `--no-timing` | 19,451 | 800 | 129 |
+| verilator `--timing` | 19,851 | 400 | 129 |
+
+Per-test attribution: `--timing` fixes 414 checks (generated clocks,
+divided-clock/derived-reset designs that previously failed to build or
+hung un-reset) and newly fails 14: 11 are the reset-assertion-edge
+startup difference (gated-clock domains can pass one extra clock edge
+at time 0 because latches capture out-of-reset state where an event
+simulator holds X; runtime opt-out: `BSC_VLT_NO_RESET_EDGE`), and 3
+are Verilator defect (3) above.  The 386 failures common to both
+modes are pre-existing flow gaps, dominated by Inout-port designs
+(~88), foreign-function/BDPI links (~101), and custom-testbench links
+in bsc.names/portRenaming (~50), plus known environmental failures
+(chmod tests run as root).  `--timing` additionally fixes
+sysErrorTest's `$error` exit-status behavior and eliminates every
+hang: under `--no-timing`, several divided-clock tests run forever
+until killed (one formerly filled the disk with an unbounded VCD).
 
 ## Validation summary (testsuite slices, 2026-08)
 
