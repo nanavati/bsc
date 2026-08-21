@@ -1721,6 +1721,135 @@ fn aot_load(
     }
 }
 
+impl Interp {
+    /// RunCore arena sidecar, validation form (self-sufficient AOT
+    /// init, rung 1): encode the freshly built post-attach arena as
+    /// header + RLE runs.  Format: b"TRSARENA", then LE u64s
+    /// [version=1, AOT_LAYOUT_REV, salted bir hash, nslots], then
+    /// (value, run) u64 pairs covering nslots.  Mem-file designs
+    /// (RegFileLoad / BRAM*Load) return None: their arena content
+    /// tracks files that may legitimately change between link and
+    /// run.
+    fn runcore_image_encode(&self) -> Option<Vec<u8>> {
+        if self.jit_arena_ptr.is_null()
+            || self.jit_arena_len == 0
+            // traced artifacts boot classic (their rec_inits land
+            // after this hook, and the wave engine needs the interp)
+            || self.vcd_trace
+        {
+            return None;
+        }
+        for m in &self.d.modules {
+            for i in &m.instances {
+                if let ir::InstanceKind::Prim(ir::Primitive::Other { name }) =
+                    &i.kind
+                {
+                    if self.d.strings[*name as usize].contains("Load") {
+                        return None;
+                    }
+                }
+            }
+        }
+        let words = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+        };
+        let salted =
+            self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
+        let mut out = Vec::with_capacity(64 + words.len() / 4);
+        out.extend_from_slice(b"TRSARENA");
+        for v in [
+            1u64,
+            trs_codegen::abi::AOT_LAYOUT_REV,
+            salted,
+            self.jit_arena_len as u64,
+        ] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut i = 0;
+        while i < words.len() {
+            let v = words[i];
+            let mut j = i + 1;
+            while j < words.len() && words[j] == v {
+                j += 1;
+            }
+            out.extend_from_slice(&v.to_le_bytes());
+            out.extend_from_slice(&((j - i) as u64).to_le_bytes());
+            i = j;
+        }
+        Some(out)
+    }
+
+    /// TRS_RUNCORE_CHECK=1: compare this load's freshly built arena
+    /// against the artifact's sidecar image.  A mismatch means the
+    /// determinism claim failed — loud, never fatal (this is the
+    /// witness, not the boot).  Match reports under TRS_STARTUP_TIME.
+    fn runcore_image_check(&self, sidecar: &std::path::Path) {
+        let Ok(bytes) = std::fs::read(sidecar) else {
+            eprintln!(
+                "trs runcore: check requested but {} is unreadable",
+                sidecar.display()
+            );
+            return;
+        };
+        let fail = |what: &str| {
+            eprintln!(
+                "trs runcore: MISMATCH vs {}: {what}",
+                sidecar.display()
+            );
+        };
+        if bytes.len() < 8 + 32 || &bytes[..8] != b"TRSARENA" {
+            return fail("bad header");
+        }
+        let rd = |k: usize| {
+            u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap())
+        };
+        let salted =
+            self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
+        if rd(0) != 1 {
+            return fail("unknown version");
+        }
+        if rd(1) != trs_codegen::abi::AOT_LAYOUT_REV {
+            return fail("layout revision");
+        }
+        if rd(2) != salted {
+            return fail("design hash");
+        }
+        if rd(3) != self.jit_arena_len as u64 {
+            return fail("arena length");
+        }
+        let words = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+        };
+        let mut pos = 8 + 32;
+        let mut slot = 0usize;
+        while pos + 16 <= bytes.len() && slot < words.len() {
+            let v = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+            let run =
+                u64::from_le_bytes(bytes[pos + 8..pos + 16].try_into().unwrap())
+                    as usize;
+            pos += 16;
+            for k in slot..(slot + run).min(words.len()) {
+                if words[k] != v {
+                    return fail(&format!(
+                        "slot {k}: image {v:#x}, rebuilt {:#x}",
+                        words[k]
+                    ));
+                }
+            }
+            slot += run;
+        }
+        if slot != words.len() {
+            return fail("image shorter than arena");
+        }
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            eprintln!(
+                "trs runcore: image MATCH ({} slots)",
+                self.jit_arena_len
+            );
+        }
+    }
+}
+
 /// Worker-thread count for compile fan-out (TRS_JIT_THREADS caps).
 fn jit_workers(n: usize) -> usize {
     std::env::var("TRS_JIT_THREADS")
@@ -2690,6 +2819,18 @@ impl Interp {
     /// fully interpreted.  Called once from prime().
     pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
         let request = std::mem::take(&mut self.jit_request);
+        // RunCore sidecar bookkeeping (validation form): an Emit plan
+        // encodes its post-attach arena image at the tail for the
+        // linker CLI to write beside the artifact; a Path load under
+        // TRS_RUNCORE_CHECK=1 cross-checks its freshly built arena
+        // against that image bit-for-bit
+        let runcore_emit = matches!(request, JitRequest::Emit { .. });
+        let runcore_sidecar: Option<std::path::PathBuf> = match &request {
+            JitRequest::Load { src: ArtifactSource::Path(p) } => {
+                Some(p.with_extension("arena"))
+            }
+            _ => None,
+        };
         // early (clock-crossing) rules run interpreted in the PG_FINAL
         // pass and read compiled CF/eager slots — edge-SSA store
         // elision must keep those stores (see edge_ssa_plan)
@@ -4150,6 +4291,38 @@ impl Interp {
                     other => break other,
                 }
             };
+            // RunCore sidecar (validation form): build the arena the
+            // link would hand a boot — the SAME four steps as the load
+            // tail below (alloc, attach, reset levels, memo stamps;
+            // drift between the two sites is exactly what the
+            // TRS_RUNCORE_CHECK load comparison exists to catch) — and
+            // stash its encoding for the linker CLI.  The box is
+            // leaked: prims are now slot-aware and the link process
+            // exits without touching them again.
+            if result.is_ok() {
+                let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
+                let arena_ptr = arena.as_mut_ptr();
+                for (ci, slot) in attach {
+                    if let InstKind::Prim(p) = &mut self.insts[ci].kind {
+                        p.arena_attach(unsafe {
+                            arena_ptr.add(slot as usize)
+                        });
+                    }
+                }
+                for (node, &slot) in reset_node_slot.iter().enumerate() {
+                    unsafe {
+                        *arena_ptr.add(slot as usize) =
+                            (!self.rst_asserted[node]) as u64
+                    };
+                }
+                for &slot in &memo_stamp_slots {
+                    unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
+                }
+                self.jit_arena_ptr = arena_ptr;
+                self.jit_arena_len = nslots as usize;
+                self.runcore_pending = self.runcore_image_encode();
+                std::mem::forget(arena);
+            }
             self.jit_emit_result = Some(match result {
                 Ok(()) => crate::AotEmit::Compiled,
                 Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
@@ -4314,6 +4487,7 @@ impl Interp {
             unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
         }
         self.jit_arena_ptr = arena_ptr;
+        self.jit_arena_len = nslots as usize;
         self.jit_reset_slots = reset_node_slot;
         if trace {
             eprintln!(
@@ -4416,6 +4590,19 @@ impl Interp {
                         }
                     }
                 }
+            }
+        }
+        // RunCore sidecar, validation form: the post-attach image is
+        // deterministic (the slot walk is process-stable — AOT dedup
+        // depends on it — and prim constructors write fixed state).
+        // The Emit branch above stashed its own construction's
+        // encoding; a checked load rebuilds classically HERE and
+        // compares bit-for-bit.  The boot path that TRUSTS the image
+        // lands on top of this witness.
+        let _ = runcore_emit;
+        if std::env::var_os("TRS_RUNCORE_CHECK").is_some() {
+            if let Some(p) = &runcore_sidecar {
+                self.runcore_image_check(p);
             }
         }
         sl.lap("arena+flatmaps+workers");

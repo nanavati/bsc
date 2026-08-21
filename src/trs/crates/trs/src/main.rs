@@ -508,6 +508,26 @@ fn main() -> ExitCode {
                 eprintln!("trs link: {base}.opts: {e}");
                 return ExitCode::FAILURE;
             }
+            // RunCore arena sidecar (validation form): the plan's
+            // deterministic post-attach arena image, cross-checked by
+            // loads under TRS_RUNCORE_CHECK=1; None (interp-only link
+            // or a mem-file design) removes any stale sidecar
+            match interp.take_runcore_image() {
+                Some(img) => {
+                    let t = format!("{base}.arena.tmp");
+                    if std::fs::write(&t, img)
+                        .and_then(|()| {
+                            std::fs::rename(&t, format!("{base}.arena"))
+                        })
+                        .is_err()
+                    {
+                        eprintln!("trs link: note: {base}.arena not written");
+                    }
+                }
+                None => {
+                    let _ = std::fs::remove_file(format!("{base}.arena"));
+                }
+            }
             // the artifact itself: a SYMLINK to the runner — main()'s
             // argv[0] dispatch recovers <base>.bir/.so/.opts from the
             // link NAME and runs IN-PROCESS (no sh, no forks, no

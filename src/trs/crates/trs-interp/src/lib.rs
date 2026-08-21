@@ -281,6 +281,13 @@ pub struct Interp {
     /// raw view of the JIT arena for reset mirroring (null = JIT off);
     /// the owning allocation lives in Stepper::jit
     jit_arena_ptr: *mut u64,
+    /// arena length in slots (0 = JIT off); with jit_arena_ptr this
+    /// gives the RunCore image encoder a safe slice view
+    pub(crate) jit_arena_len: usize,
+    /// RunCore arena image encoded at plan tail on an Emit request —
+    /// the linker CLI writes it beside the artifact (see
+    /// jit::Interp::runcore_image_encode)
+    pub(crate) runcore_pending: Option<Vec<u8>>,
     /// reset node -> arena slot holding the port level (1 = deasserted)
     jit_reset_slots: Vec<u32>,
     /// TRACED artifact only: (instance, VCD-declared def) -> recording
@@ -758,6 +765,8 @@ impl Interp {
             jit_emit_result: None,
             bir_hash: 0,
             jit_arena_ptr: std::ptr::null_mut(),
+            jit_arena_len: 0,
+            runcore_pending: None,
             jit_reset_slots: Vec::new(),
             jit_rec_defs: HashMap::new(),
             jit_rec_meths: HashMap::new(),
@@ -5004,6 +5013,13 @@ impl Interp {
             jit::JitRequest::Load { src: jit::ArtifactSource::Path(so) };
     }
 
+    /// Take the RunCore arena image encoded by an Emit plan; the
+    /// linker CLI writes it beside the artifact as `<base>.arena`
+    /// (see jit — RunCore sidecar, validation form).
+    pub fn take_runcore_image(&mut self) -> Option<Vec<u8>> {
+        self.runcore_pending.take()
+    }
+
     /// Artifact-as-executable: the design objects are linked into THIS
     /// process image — resolve compiled functions from ourselves.
     pub fn aot_request_code_self(&mut self) {
@@ -5027,6 +5043,9 @@ impl Interp {
     ) {
     }
     pub fn aot_request_code_self(&mut self) {}
+    pub fn take_runcore_image(&mut self) -> Option<Vec<u8>> {
+        None
+    }
     pub fn aot_request_code(&mut self, _so: std::path::PathBuf) {
         // the strict contract holds even without the aot feature: a
         // run that MUST be compiled cannot silently interpret
