@@ -376,6 +376,10 @@ pub(crate) struct JitPlans {
     /// preconditions ignore them.  Empty unless an artifact with
     /// trs_edge_wire_ticks=1 loaded.
     pub(crate) covered_ticks: Vec<std::collections::HashSet<usize>>,
+    /// the artifact's RunCore boot descriptor (sidecar v2 sections),
+    /// parsed under TRS_RUNCORE_CHECK for the central-loop engage
+    /// witness; None when unchecked, absent, or v1
+    pub(crate) runcore_desc: Option<RunCoreDesc>,
     /// fused per-composition edge fns (task #17): compiled once all
     /// bodies are warm; 0 = composition not fused (fall back to the
     /// node walk).  fn(arena, env, now) -> i32 (nonzero = abort;
@@ -1721,15 +1725,55 @@ fn aot_load(
     }
 }
 
+/// Stage-A capture for the RunCore boot descriptor: what only the
+/// Emit arm can see.  prime's runcore_desc_finish consumes it.
+pub(crate) struct RunCoreStageA {
+    /// per-comp rc.ticks indices the emitted edge fns cover
+    pub(crate) covered: Vec<std::collections::HashSet<usize>>,
+    /// edge-SSA emission was on (off = no compiled ticks = central
+    /// loop never engages = ineligible)
+    pub(crate) edge_ssa: bool,
+    /// BRAM warn registry rows keyed back to relative arena slots:
+    /// (slot, addr_bits, full name)
+    pub(crate) warns: Vec<(u64, u32, String)>,
+}
+
+/// Parsed sidecar-v2 boot descriptor (clock + comp order +
+/// eligibility), stashed in JitPlans for the engage-time witness and,
+/// later, consumed by the RunCore boot driver.
+#[derive(PartialEq, Debug)]
+pub(crate) struct RunCoreDesc {
+    pub(crate) hi: u64,
+    pub(crate) lo: u64,
+    pub(crate) delay: u64,
+    pub(crate) init_high: bool,
+    pub(crate) has_init: bool,
+    pub(crate) pos: Vec<usize>,
+    pub(crate) neg: Vec<usize>,
+    pub(crate) eligible: bool,
+    pub(crate) reason: String,
+}
+
+// Boot-descriptor section tags (sidecar v2, after the RLE runs:
+// b"TRSBOOTD", u64 section count, then per section u64 tag + u64
+// payload byte length + payload padded to 8).
+const RC_SEC_STRINGS: u64 = 1;
+const RC_SEC_PATHS: u64 = 2;
+const RC_SEC_CLOCK: u64 = 3;
+const RC_SEC_COMPS: u64 = 4;
+const RC_SEC_WARNS: u64 = 5;
+const RC_SEC_ELIG: u64 = 6;
+
 impl Interp {
     /// RunCore arena sidecar, validation form (self-sufficient AOT
     /// init, rung 1): encode the freshly built post-attach arena as
     /// header + RLE runs.  Format: b"TRSARENA", then LE u64s
-    /// [version=1, AOT_LAYOUT_REV, salted bir hash, nslots], then
-    /// (value, run) u64 pairs covering nslots.  Mem-file designs
-    /// (RegFileLoad / BRAM*Load) return None: their arena content
-    /// tracks files that may legitimately change between link and
-    /// run.
+    /// [version, AOT_LAYOUT_REV, salted bir hash, nslots], then
+    /// (value, run) u64 pairs covering nslots.  Version 1 ends there;
+    /// runcore_desc_finish appends the boot-descriptor sections and
+    /// bumps the version to 2.  Mem-file designs (RegFileLoad /
+    /// BRAM*Load) return None: their arena content tracks files that
+    /// may legitimately change between link and run.
     fn runcore_image_encode(&self) -> Option<Vec<u8>> {
         if self.jit_arena_ptr.is_null()
             || self.jit_arena_len == 0
@@ -1779,17 +1823,176 @@ impl Interp {
         Some(out)
     }
 
+    /// prime's post-plan hook for an Emit run: assemble the boot
+    /// descriptor (sidecar v2 sections) from stage A plus the clock
+    /// and comp state prime just built, mirroring try_central's
+    /// eligibility so the engage-time witness can compare decisions.
+    pub(crate) fn runcore_desc_finish(
+        &mut self,
+        rcomps: &[RComp],
+        sources: &[crate::ClockSource],
+        clocks: &[StrId],
+        driver_clock: &HashMap<usize, usize>,
+    ) {
+        let Some(mut img) = self.runcore_pending.take() else { return };
+        let Some(sa) = self.runcore_stage_a.take() else {
+            self.runcore_pending = Some(img);
+            return;
+        };
+        // -- eligibility, in try_central's bail order --
+        let mut reason: Option<String> = None;
+        let mut ineligible = |r: &mut Option<String>, s: &str| {
+            if r.is_none() {
+                *r = Some(s.to_string());
+            }
+        };
+        if !sa.edge_ssa {
+            ineligible(&mut reason, "edge-SSA emission off");
+        }
+        if self.needs_user_bdpi() {
+            ineligible(&mut reason, "user BDPI imports");
+        }
+        if !driver_clock.is_empty() {
+            ineligible(&mut reason, "driver clocks");
+        }
+        if !self.rstgen_out.is_empty() {
+            ineligible(&mut reason, "reset generators");
+        }
+        let mut wave = None;
+        for (ci, src) in sources.iter().enumerate() {
+            if let crate::ClockSource::Wave(w) = src {
+                if wave.is_some() {
+                    ineligible(&mut reason, "multiple wave clocks");
+                }
+                wave = Some((ci, *w));
+            }
+        }
+        let (wci, wv) = match wave {
+            Some((ci, w)) => (ci, Some(w)),
+            None => {
+                ineligible(&mut reason, "no wave clock");
+                (usize::MAX, None)
+            }
+        };
+        if wci != usize::MAX && Some(clocks[wci]) != self.d.default_clock {
+            ineligible(&mut reason, "wave clock is not the default clock");
+        }
+        let mut pos: Vec<usize> = Vec::new();
+        let mut neg: Vec<usize> = Vec::new();
+        for (rci, rc) in rcomps.iter().enumerate() {
+            if rc.clk != wci {
+                ineligible(&mut reason, "composition on a non-wave clock");
+                continue;
+            }
+            let uncovered = rc.ticks.iter().enumerate().any(|(ti, t)| {
+                !t.2 && !sa.covered.get(rci).is_some_and(|c| c.contains(&ti))
+            });
+            if rc.posedge {
+                if !rc.early.is_empty() {
+                    ineligible(&mut reason, "early rules");
+                }
+                if uncovered {
+                    ineligible(&mut reason, "uncovered prim tick");
+                }
+                pos.push(rci);
+            } else {
+                if rc.entries.iter().any(|e| !e.nodes.is_empty()) || uncovered
+                {
+                    ineligible(&mut reason, "negedge composition with work");
+                }
+                neg.push(rci);
+            }
+        }
+        if pos.is_empty() {
+            ineligible(&mut reason, "no posedge compositions");
+        }
+        // -- sections --
+        let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
+        let sect = |o: &mut Vec<u8>, tag: u64, payload: &[u8]| {
+            w64(o, tag);
+            w64(o, payload.len() as u64);
+            o.extend_from_slice(payload);
+            o.resize(o.len().next_multiple_of(8), 0);
+        };
+        let mut p = Vec::new();
+        img.extend_from_slice(b"TRSBOOTD");
+        w64(&mut img, 6);
+        // strings: the full design table (StrDyn tokens may select any)
+        p.clear();
+        w64(&mut p, self.d.strings.len() as u64);
+        for s in &self.d.strings {
+            w64(&mut p, s.len() as u64);
+            p.extend_from_slice(s.as_bytes());
+        }
+        sect(&mut img, RC_SEC_STRINGS, &p);
+        // instance paths (foreign %m locations)
+        p.clear();
+        w64(&mut p, self.insts.len() as u64);
+        for i in &self.insts {
+            w64(&mut p, i.path.len() as u64);
+            p.extend_from_slice(i.path.as_bytes());
+        }
+        sect(&mut img, RC_SEC_PATHS, &p);
+        // clock
+        p.clear();
+        let cvals = wv.map_or([0u64; 5], |w| {
+            [w.hi, w.lo, w.delay, w.init_high as u64, w.has_init as u64]
+        });
+        for v in cvals {
+            w64(&mut p, v);
+        }
+        sect(&mut img, RC_SEC_CLOCK, &p);
+        // comp call order
+        p.clear();
+        w64(&mut p, pos.len() as u64);
+        for &o in &pos {
+            w64(&mut p, o as u64);
+        }
+        w64(&mut p, neg.len() as u64);
+        for &o in &neg {
+            w64(&mut p, o as u64);
+        }
+        sect(&mut img, RC_SEC_COMPS, &p);
+        // BRAM warn rows
+        p.clear();
+        w64(&mut p, sa.warns.len() as u64);
+        for (slot, bits, name) in &sa.warns {
+            w64(&mut p, *slot);
+            w64(&mut p, *bits as u64);
+            w64(&mut p, name.len() as u64);
+            p.extend_from_slice(name.as_bytes());
+        }
+        sect(&mut img, RC_SEC_WARNS, &p);
+        // eligibility
+        p.clear();
+        w64(&mut p, reason.is_none() as u64);
+        let r = reason.unwrap_or_default();
+        w64(&mut p, r.len() as u64);
+        p.extend_from_slice(r.as_bytes());
+        sect(&mut img, RC_SEC_ELIG, &p);
+        // bump the header version: sections present
+        img[8..16].copy_from_slice(&2u64.to_le_bytes());
+        self.runcore_pending = Some(img);
+    }
+
     /// TRS_RUNCORE_CHECK=1: compare this load's freshly built arena
-    /// against the artifact's sidecar image.  A mismatch means the
-    /// determinism claim failed — loud, never fatal (this is the
-    /// witness, not the boot).  Match reports under TRS_STARTUP_TIME.
-    fn runcore_image_check(&self, sidecar: &std::path::Path) {
+    /// against the artifact's sidecar image, and (v2) validate the
+    /// boot-descriptor sections against live state — strings, inst
+    /// paths, and BRAM warn rows compare here; clock, comp order, and
+    /// eligibility parse into a RunCoreDesc for the central-loop
+    /// engage witness.  A mismatch means a determinism or descriptor
+    /// claim failed — loud, never fatal (this is the witness, not the
+    /// boot).  Match reports under TRS_STARTUP_TIME.
+    fn runcore_image_check(
+        &self,
+        sidecar: &std::path::Path,
+    ) -> Option<RunCoreDesc> {
         let Ok(bytes) = std::fs::read(sidecar) else {
             eprintln!(
                 "trs runcore: check requested but {} is unreadable",
                 sidecar.display()
             );
-            return;
+            return None;
         };
         let fail = |what: &str| {
             eprintln!(
@@ -1798,24 +2001,30 @@ impl Interp {
             );
         };
         if bytes.len() < 8 + 32 || &bytes[..8] != b"TRSARENA" {
-            return fail("bad header");
+            fail("bad header");
+            return None;
         }
         let rd = |k: usize| {
             u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap())
         };
         let salted =
             self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
-        if rd(0) != 1 {
-            return fail("unknown version");
+        let version = rd(0);
+        if version != 1 && version != 2 {
+            fail("unknown version");
+            return None;
         }
         if rd(1) != trs_codegen::abi::AOT_LAYOUT_REV {
-            return fail("layout revision");
+            fail("layout revision");
+            return None;
         }
         if rd(2) != salted {
-            return fail("design hash");
+            fail("design hash");
+            return None;
         }
         if rd(3) != self.jit_arena_len as u64 {
-            return fail("arena length");
+            fail("arena length");
+            return None;
         }
         let words = unsafe {
             std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
@@ -1830,16 +2039,18 @@ impl Interp {
             pos += 16;
             for k in slot..(slot + run).min(words.len()) {
                 if words[k] != v {
-                    return fail(&format!(
+                    fail(&format!(
                         "slot {k}: image {v:#x}, rebuilt {:#x}",
                         words[k]
                     ));
+                    return None;
                 }
             }
             slot += run;
         }
         if slot != words.len() {
-            return fail("image shorter than arena");
+            fail("image shorter than arena");
+            return None;
         }
         if std::env::var_os("TRS_STARTUP_TIME").is_some() {
             eprintln!(
@@ -1847,6 +2058,148 @@ impl Interp {
                 self.jit_arena_len
             );
         }
+        if version == 1 {
+            return None;
+        }
+        // -- v2 boot-descriptor sections --
+        let take8 = |pos: &mut usize| -> Option<u64> {
+            let v = bytes.get(*pos..*pos + 8)?;
+            *pos += 8;
+            Some(u64::from_le_bytes(v.try_into().unwrap()))
+        };
+        let take_str = |pos: &mut usize| -> Option<&str> {
+            let n = take8(pos)? as usize;
+            let s = bytes.get(*pos..*pos + n)?;
+            *pos += n;
+            std::str::from_utf8(s).ok()
+        };
+        if bytes.get(pos..pos + 8) != Some(b"TRSBOOTD") {
+            fail("missing boot descriptor");
+            return None;
+        }
+        pos += 8;
+        let nsect = take8(&mut pos)?;
+        let mut desc = RunCoreDesc {
+            hi: 0,
+            lo: 0,
+            delay: 0,
+            init_high: false,
+            has_init: false,
+            pos: Vec::new(),
+            neg: Vec::new(),
+            eligible: false,
+            reason: String::new(),
+        };
+        for _ in 0..nsect {
+            let tag = take8(&mut pos)?;
+            let len = take8(&mut pos)? as usize;
+            let end = (pos + len).next_multiple_of(8);
+            let mut p = pos;
+            match tag {
+                RC_SEC_STRINGS => {
+                    let n = take8(&mut p)? as usize;
+                    if n != self.d.strings.len() {
+                        fail("descriptor: string count");
+                        return None;
+                    }
+                    for want in &self.d.strings {
+                        if take_str(&mut p) != Some(want.as_str()) {
+                            fail("descriptor: string table drift");
+                            return None;
+                        }
+                    }
+                }
+                RC_SEC_PATHS => {
+                    let n = take8(&mut p)? as usize;
+                    if n != self.insts.len() {
+                        fail("descriptor: inst count");
+                        return None;
+                    }
+                    for i in &self.insts {
+                        if take_str(&mut p) != Some(i.path.as_str()) {
+                            fail("descriptor: inst path drift");
+                            return None;
+                        }
+                    }
+                }
+                RC_SEC_CLOCK => {
+                    desc.hi = take8(&mut p)?;
+                    desc.lo = take8(&mut p)?;
+                    desc.delay = take8(&mut p)?;
+                    desc.init_high = take8(&mut p)? != 0;
+                    desc.has_init = take8(&mut p)? != 0;
+                }
+                RC_SEC_COMPS => {
+                    let np = take8(&mut p)? as usize;
+                    for _ in 0..np {
+                        desc.pos.push(take8(&mut p)? as usize);
+                    }
+                    let nn = take8(&mut p)? as usize;
+                    for _ in 0..nn {
+                        desc.neg.push(take8(&mut p)? as usize);
+                    }
+                }
+                RC_SEC_WARNS => {
+                    let reg = crate::prim::bram_warn_rows();
+                    let n = take8(&mut p)? as usize;
+                    let mut seen = 0usize;
+                    for _ in 0..n {
+                        let slot = take8(&mut p)?;
+                        let bits = take8(&mut p)? as u32;
+                        let Some(name) = take_str(&mut p) else {
+                            fail("descriptor: warn row truncated");
+                            return None;
+                        };
+                        let key = unsafe {
+                            self.jit_arena_ptr.add(slot as usize)
+                        } as usize;
+                        match reg.get(&key) {
+                            Some((n2, b2)) if n2 == name && *b2 == bits => {
+                                seen += 1;
+                            }
+                            _ => {
+                                fail(&format!(
+                                    "descriptor: warn row drift at slot {slot} ({name})"
+                                ));
+                                return None;
+                            }
+                        }
+                    }
+                    // count only rows in THIS arena's slot range: the
+                    // registry is process-global and an earlier engine
+                    // in the same process (selfcheck) leaves its own
+                    let ours = reg
+                        .keys()
+                        .filter(|&&k| {
+                            let base = self.jit_arena_ptr as usize;
+                            k >= base && k < base + 8 * self.jit_arena_len
+                        })
+                        .count();
+                    if seen != ours {
+                        fail(&format!(
+                            "descriptor: warn rows {seen} baked vs {ours} live"
+                        ));
+                        return None;
+                    }
+                }
+                RC_SEC_ELIG => {
+                    desc.eligible = take8(&mut p)? != 0;
+                    desc.reason = take_str(&mut p)?.to_string();
+                }
+                _ => {
+                    fail(&format!("descriptor: unknown section {tag}"));
+                    return None;
+                }
+            }
+            pos = end;
+        }
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            eprintln!(
+                "trs runcore: descriptor sections MATCH (eligible={} {})",
+                desc.eligible, desc.reason
+            );
+        }
+        Some(desc)
     }
 }
 
@@ -4302,7 +4655,7 @@ impl Interp {
             if result.is_ok() {
                 let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
                 let arena_ptr = arena.as_mut_ptr();
-                for (ci, slot) in attach {
+                for &(ci, slot) in &attach {
                     if let InstKind::Prim(p) = &mut self.insts[ci].kind {
                         p.arena_attach(unsafe {
                             arena_ptr.add(slot as usize)
@@ -4321,6 +4674,35 @@ impl Interp {
                 self.jit_arena_ptr = arena_ptr;
                 self.jit_arena_len = nslots as usize;
                 self.runcore_pending = self.runcore_image_encode();
+                // Boot-descriptor stage A: capture what only the emit
+                // can see — per-comp tick coverage (needs inst_envs)
+                // and the BRAM warn-registry rows the attach loop just
+                // wrote (keyed back to relative slots).  prime's
+                // post-plan hook (runcore_desc_finish) assembles the
+                // full v2 descriptor from this plus its clock/comp
+                // state.
+                if self.runcore_pending.is_some() {
+                    let covered =
+                        self.prim_tick_coverage(&inst_envs, rcomps).covered_all;
+                    let reg = crate::prim::bram_warn_rows();
+                    let mut warns: Vec<(u64, u32, String)> = attach
+                        .iter()
+                        .filter_map(|&(_, slot)| {
+                            let key =
+                                unsafe { arena_ptr.add(slot as usize) } as usize;
+                            reg.get(&key).map(|(name, bits)| {
+                                (slot as u64, *bits, name.clone())
+                            })
+                        })
+                        .collect();
+                    warns.sort_by_key(|w| w.0);
+                    self.runcore_stage_a = Some(RunCoreStageA {
+                        covered,
+                        edge_ssa: std::env::var("TRS_EDGE_SSA").as_deref()
+                            != Ok("0"),
+                        warns,
+                    });
+                }
                 std::mem::forget(arena);
             }
             self.jit_emit_result = Some(match result {
@@ -4600,9 +4982,10 @@ impl Interp {
         // compares bit-for-bit.  The boot path that TRUSTS the image
         // lands on top of this witness.
         let _ = runcore_emit;
+        let mut runcore_desc = None;
         if std::env::var_os("TRS_RUNCORE_CHECK").is_some() {
             if let Some(p) = &runcore_sidecar {
-                self.runcore_image_check(p);
+                runcore_desc = self.runcore_image_check(p);
             }
         }
         sl.lap("arena+flatmaps+workers");
@@ -4623,6 +5006,7 @@ impl Interp {
             workers,
             exec_fallback,
             covered_ticks,
+            runcore_desc,
             fused: {
                 let cell = std::sync::OnceLock::new();
                 if let Some(fu) = fused_opt {

@@ -1236,6 +1236,13 @@ static BRAM_WARN_NAMES: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<usize, (String, u32)>>,
 > = std::sync::LazyLock::new(Default::default);
 
+/// RunCore sidecar: the warn-registry rows, for descriptor baking at
+/// link and load-side validation (cloned — both call sites are
+/// one-shots, not per-event paths).
+pub(crate) fn bram_warn_rows() -> std::collections::HashMap<usize, (String, u32)> {
+    BRAM_WARN_NAMES.lock().unwrap().clone()
+}
+
 /// abi::BRAM_WARN target: print the reference's dual-write collision
 /// warning for the block at `block` (quiet-engine gated, like every
 /// prim diagnostic).

@@ -262,6 +262,13 @@ pub struct Interp {
     /// the linker CLI writes it beside the artifact (see
     /// jit::Interp::runcore_image_encode)
     pub(crate) runcore_pending: Option<Vec<u8>>,
+    /// boot-descriptor stage A (tick coverage + warn rows), captured
+    /// by the Emit arm for prime's runcore_desc_finish
+    #[cfg(feature = "aot")]
+    pub(crate) runcore_stage_a: Option<jit::RunCoreStageA>,
+    /// the central loop engaged at least once this run — the inverse
+    /// half of the RunCore descriptor's eligibility witness
+    central_engaged: bool,
     /// reset node -> arena slot holding the port level (1 = deasserted)
     jit_reset_slots: Vec<u32>,
     /// TRACED artifact only: (instance, VCD-declared def) -> recording
@@ -718,6 +725,9 @@ impl Interp {
             jit_arena_ptr: std::ptr::null_mut(),
             jit_arena_len: 0,
             runcore_pending: None,
+            #[cfg(feature = "aot")]
+            runcore_stage_a: None,
+            central_engaged: false,
             jit_reset_slots: Vec::new(),
             jit_rec_defs: HashMap::new(),
             jit_rec_meths: HashMap::new(),
@@ -3698,6 +3708,14 @@ impl Interp {
         #[cfg(not(feature = "aot"))]
         let jit = None;
 
+        // RunCore sidecar v2: an Emit plan stashed the arena image and
+        // stage A; append the boot-descriptor sections (clock, comp
+        // order, eligibility — needs the clock state built above)
+        #[cfg(feature = "aot")]
+        if was_emit && self.runcore_pending.is_some() {
+            self.runcore_desc_finish(&rcomps, &sources, &clocks, &driver_clock);
+        }
+
         // TRS_REQUIRE_AOT: strict-execution contract for validation
         // runs — a design about to RUN interpreted is a hard failure,
         // never a silent degrade.  Emit requests are exempt (the link
@@ -3911,6 +3929,27 @@ impl Interp {
                 { CENTRAL_BAIL[14].fetch_add(1, std::sync::atomic::Ordering::Relaxed); break 'central; }
             }
             heap.clear();
+            self.central_engaged = true;
+            // RunCore descriptor witness (desc is parsed only under
+            // TRS_RUNCORE_CHECK): the engage decision and shape must
+            // match the baked claim
+            if let Some(d) = j.runcore_desc.as_ref() {
+                if !d.eligible {
+                    eprintln!(
+                        "trs runcore: MISMATCH: central loop engaged but \
+                         descriptor says ineligible ({})",
+                        d.reason
+                    );
+                } else if d.hi != hi || d.lo != lo || d.pos != pos_rcis {
+                    eprintln!(
+                        "trs runcore: MISMATCH: engaged hi={hi} lo={lo} \
+                         pos={pos_rcis:?} vs descriptor hi={} lo={} pos={:?}",
+                        d.hi, d.lo, d.pos
+                    );
+                } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                    eprintln!("trs runcore: descriptor MATCH (central engage)");
+                }
+            }
             if std::env::var_os("TRS_JIT_TRACE").is_some() {
                 eprintln!("trs jit: central loop engaged (clock {wci})");
             }
@@ -4420,6 +4459,32 @@ impl Interp {
             });
             if (self.cycle >= max_cycles || edge_hit) && !same_time {
                 break;
+            }
+        }
+        // RunCore descriptor witness, inverse half: a batch run that
+        // FINISHED without the central loop ever engaging contradicts
+        // a baked eligible=1 claim (desc is parsed only under
+        // TRS_RUNCORE_CHECK; wave runs and interactive stop conditions
+        // never engage by design, so they are out of scope)
+        #[cfg(feature = "aot")]
+        if cond.trivial()
+            && self.fe.finished.is_some()
+            && !self.central_engaged
+            && !self.wave_engine
+            && !self.vcd.is_active()
+            // a run that finished inside the reset window (t <= 2)
+            // never reaches the engage point — legitimately
+            && self.now > 2
+        {
+            if let Some(d) =
+                jit.as_ref().and_then(|j| j.runcore_desc.as_ref())
+            {
+                if d.eligible {
+                    eprintln!(
+                        "trs runcore: MISMATCH: descriptor says eligible but \
+                         the central loop never engaged"
+                    );
+                }
             }
         }
         self.stepper = Some(Stepper {
