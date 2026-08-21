@@ -264,6 +264,14 @@ pub enum ArenaKind {
     /// end-of-edge tick copies value into value_reg.  The per-port
     /// VCD bookkeeping stays boxed (trampoline write path).
     CReg5 { width: u32 },
+    /// Counter (bs_prim_mod_counter.h): value/addA/addB compile
+    /// inline; setC/setF and reset stay on the trampoline (the boxed
+    /// prim is slot-aware).  Layout: val, saved_val (w words each),
+    /// then saved_at, a (w words), a_at, b (w words), b_at, suppress
+    /// (1 word each); w = ceil(width/64).  c/f and their stamps stay
+    /// struct-only ONLY while every reader and writer of them is
+    /// boxed (setC/setF/vcd_dump); inlining either moves them here.
+    Counter { width: u32 },
 }
 
 /// Construct a primitive by BSV name.  `width` and other shape facts are
@@ -532,6 +540,12 @@ struct Counter {
     f_at: u64,
     in_reset: bool,
     suppress: bool,
+    /// arena base when attached (see ArenaKind::Counter): the semantic
+    /// core (val, saved_val, saved_at, a, a_at, b, b_at, suppress)
+    /// moves to the arena so inline addA/addB stay visible to the
+    /// boxed setC/rst_tick/sym_read paths; c/f/c_at/f_at and the VCD
+    /// state stay in fields (traced plans keep Counter fully boxed)
+    slot: Option<*mut u64>,
     vcd_base: u32,
     vcd_back: Option<CounterVcdBack>,
 }
@@ -569,14 +583,145 @@ impl Counter {
             f_at: u64::MAX,
             in_reset: false,
             suppress: false,
+            slot: None,
             vcd_base: 0,
             vcd_back: None,
         }
     }
+    fn words(&self) -> usize {
+        (self.width.max(1) as usize).div_ceil(64)
+    }
+    fn arena_get(&self, off: usize) -> Value {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let src = unsafe { std::slice::from_raw_parts(slot.add(off), w) };
+        Value::from_limbs64(self.width.max(1), src.to_vec())
+    }
+    // masks to width: compiled stores are always width-masked, and the
+    // arena words must decode as valid limbs
+    fn arena_set(&self, off: usize, v: &Value) {
+        let slot = self.slot.unwrap();
+        let w = self.words();
+        let dst = unsafe { std::slice::from_raw_parts_mut(slot.add(off), w) };
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+        let rem = self.width.max(1) % 64;
+        if rem != 0 {
+            dst[w - 1] &= (1u64 << rem) - 1;
+        }
+    }
+    fn arena_word(&self, off: usize) -> u64 {
+        unsafe { *self.slot.unwrap().add(off) }
+    }
+    fn arena_word_set(&self, off: usize, x: u64) {
+        unsafe { *self.slot.unwrap().add(off) = x }
+    }
+    fn load_val(&self) -> Value {
+        if self.slot.is_some() { self.arena_get(0) } else { self.val.clone() }
+    }
+    fn store_val(&mut self, v: Value) {
+        if self.slot.is_some() { self.arena_set(0, &v) } else { self.val = v }
+    }
+    fn load_saved(&self) -> Value {
+        if self.slot.is_some() {
+            self.arena_get(self.words())
+        } else {
+            self.saved_val.clone()
+        }
+    }
+    fn store_saved(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(self.words(), &v);
+        } else {
+            self.saved_val = v;
+        }
+    }
+    fn get_saved_at(&self) -> u64 {
+        if self.slot.is_some() {
+            self.arena_word(2 * self.words())
+        } else {
+            self.saved_at
+        }
+    }
+    fn set_saved_at(&mut self, t: u64) {
+        self.saved_at = t;
+        if self.slot.is_some() {
+            self.arena_word_set(2 * self.words(), t);
+        }
+    }
+    fn load_a(&self) -> Value {
+        if self.slot.is_some() {
+            self.arena_get(2 * self.words() + 1)
+        } else {
+            self.a.clone()
+        }
+    }
+    fn store_a(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(2 * self.words() + 1, &v);
+        } else {
+            self.a = v;
+        }
+    }
+    fn get_a_at(&self) -> u64 {
+        if self.slot.is_some() {
+            self.arena_word(3 * self.words() + 1)
+        } else {
+            self.a_at
+        }
+    }
+    fn set_a_at(&mut self, t: u64) {
+        self.a_at = t;
+        if self.slot.is_some() {
+            self.arena_word_set(3 * self.words() + 1, t);
+        }
+    }
+    fn load_b(&self) -> Value {
+        if self.slot.is_some() {
+            self.arena_get(3 * self.words() + 2)
+        } else {
+            self.b.clone()
+        }
+    }
+    fn store_b(&mut self, v: Value) {
+        if self.slot.is_some() {
+            self.arena_set(3 * self.words() + 2, &v);
+        } else {
+            self.b = v;
+        }
+    }
+    fn get_b_at(&self) -> u64 {
+        if self.slot.is_some() {
+            self.arena_word(4 * self.words() + 2)
+        } else {
+            self.b_at
+        }
+    }
+    fn set_b_at(&mut self, t: u64) {
+        self.b_at = t;
+        if self.slot.is_some() {
+            self.arena_word_set(4 * self.words() + 2, t);
+        }
+    }
+    fn suppressed(&self) -> bool {
+        if self.slot.is_some() {
+            self.arena_word(4 * self.words() + 3) != 0
+        } else {
+            self.suppress
+        }
+    }
+    fn set_suppress(&mut self, on: bool) {
+        self.suppress = on;
+        if self.slot.is_some() {
+            self.arena_word_set(4 * self.words() + 3, on as u64);
+        }
+    }
     fn save(&mut self, now: u64) {
-        if self.saved_at != now {
-            self.saved_at = now;
-            self.saved_val = self.val.clone();
+        if self.get_saved_at() != now {
+            self.set_saved_at(now);
+            let v = self.load_val();
+            self.store_saved(v);
         }
     }
 }
@@ -589,8 +734,9 @@ impl Prim for Counter {
         vec![PrimSym { key: "", width: self.width, range: None }]
     }
     fn sym_read(&mut self, key: &str, _now: u64) -> Option<Value> {
-        // the registered value (ticks have run at any stop boundary)
-        (key.is_empty()).then(|| self.val.clone())
+        // the registered value (ticks have run at any stop boundary);
+        // arena-authoritative when attached (the oracle compares this)
+        (key.is_empty()).then(|| self.load_val())
     }
     fn vcd_defs(
         &mut self,
@@ -732,50 +878,53 @@ impl Prim for Counter {
     fn value_method(&mut self, method: &str, _args: &[Value], now: u64) -> Value {
         match method {
             "value" | "_read" => {
-                if self.saved_at == now {
-                    self.saved_val.clone()
+                if self.get_saved_at() == now {
+                    self.load_saved()
                 } else {
-                    self.val.clone()
+                    self.load_val()
                 }
             }
             m => panic!("Counter: unknown value method {m:?}"),
         }
     }
     fn action_method(&mut self, method: &str, args: &[Value], now: u64) {
-        if self.suppress {
+        if self.suppressed() {
             return;
         }
         let w = self.width;
         match method {
             "addA" | "incrA" => {
                 self.save(now);
-                self.a_at = now;
-                self.a = args[0].clone();
-                self.val = self.val.add(&args[0], w);
+                self.set_a_at(now);
+                self.store_a(args[0].clone());
+                let v = self.load_val().add(&args[0], w);
+                self.store_val(v);
             }
             "addB" | "incrB" => {
                 self.save(now);
-                self.b_at = now;
-                self.b = args[0].clone();
-                self.val = self.val.add(&args[0], w);
+                self.set_b_at(now);
+                self.store_b(args[0].clone());
+                let v = self.load_val().add(&args[0], w);
+                self.store_val(v);
             }
             "setC" | "update" => {
                 self.save(now);
                 self.c_at = now;
                 self.c = args[0].clone();
-                self.val = args[0].clone();
-                if self.a_at == now {
-                    self.val = self.val.add(&self.a.clone(), w);
+                let mut v = args[0].clone();
+                if self.get_a_at() == now {
+                    v = v.add(&self.load_a(), w);
                 }
-                if self.b_at == now {
-                    self.val = self.val.add(&self.b.clone(), w);
+                if self.get_b_at() == now {
+                    v = v.add(&self.load_b(), w);
                 }
+                self.store_val(v);
             }
             "setF" | "_write" => {
                 self.save(now);
                 self.f_at = now;
                 self.f = args[0].clone();
-                self.val = args[0].clone();
+                self.store_val(args[0].clone());
             }
             m => panic!("Counter: unknown action method {m:?}"),
         }
@@ -783,20 +932,42 @@ impl Prim for Counter {
     fn tick(&mut self, _port: &str, _now: u64, _clk_val: bool, _gate: bool) {}
     fn rst_tick(&mut self, _now: u64) {
         if self.in_reset {
-            self.val = self.init.clone();
-            self.saved_at = u64::MAX;
-            self.a_at = u64::MAX;
-            self.b_at = u64::MAX;
+            let init = self.init.clone();
+            self.store_val(init);
+            self.set_saved_at(u64::MAX);
+            self.set_a_at(u64::MAX);
+            self.set_b_at(u64::MAX);
             self.c_at = u64::MAX;
             self.f_at = u64::MAX;
-            self.suppress = true;
+            self.set_suppress(true);
         }
     }
     fn set_in_reset(&mut self, asserted: bool) {
         self.in_reset = asserted;
         if !asserted {
-            self.suppress = false;
+            self.set_suppress(false);
         }
+    }
+
+    fn arena_kind(&self) -> Option<ArenaKind> {
+        // >64-bit counters stay boxed (the compiled adds are single-
+        // word); the gate is a shape fact, so bake- and load-time
+        // planning walks agree on the layout
+        (self.width <= 64).then_some(ArenaKind::Counter { width: self.width })
+    }
+    fn arena_attach(&mut self, slot: *mut u64) {
+        self.slot = Some(slot);
+        let w = self.words();
+        let (v, sv, a, b) =
+            (self.val.clone(), self.saved_val.clone(), self.a.clone(), self.b.clone());
+        self.arena_set(0, &v);
+        self.arena_set(w, &sv);
+        self.arena_word_set(2 * w, self.saved_at);
+        self.arena_set(2 * w + 1, &a);
+        self.arena_word_set(3 * w + 1, self.a_at);
+        self.arena_set(3 * w + 2, &b);
+        self.arena_word_set(4 * w + 2, self.b_at);
+        self.arena_word_set(4 * w + 3, self.suppress as u64);
     }
 }
 

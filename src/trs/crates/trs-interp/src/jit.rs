@@ -2870,6 +2870,9 @@ impl Interp {
                         Some(ArenaKind::Bram { .. }) => ChildClass::Other,
                         // live port-chained reads: never stable
                         Some(ArenaKind::CReg5 { .. }) => ChildClass::Other,
+                        // begin-of-instant reads, but keep the
+                        // conservative class (no stability claim yet)
+                        Some(ArenaKind::Counter { .. }) => ChildClass::Other,
                         None => ChildClass::Other,
                     }),
                     InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
@@ -2975,6 +2978,7 @@ impl Interp {
             let mut regfile_slot = HashMap::new();
             let mut bram_slot = HashMap::new();
             let mut creg5_slot = HashMap::new();
+            let mut counter_slot = HashMap::new();
             // sorted iteration: slot assignment must be deterministic
             // across processes so an AOT artifact's baked slot numbers
             // match a fresh planning walk at load time
@@ -3022,6 +3026,16 @@ impl Interp {
                         let base =
                             alloc(&mut nslots, 2 * width.max(1).div_ceil(64));
                         creg5_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    // traced plans keep Counters boxed: the port VCD
+                    // bookkeeping (a/b/c/f values + stamps) lives in
+                    // the boxed action path, which inline adds bypass
+                    Some(ArenaKind::Counter { .. }) if self.vcd_trace => {}
+                    Some(ArenaKind::Counter { width }) => {
+                        let w = width.max(1).div_ceil(64);
+                        let base = alloc(&mut nslots, 4 * w + 4);
+                        counter_slot.insert(name, (base, width));
                         attach.push((ci, base));
                     }
                     Some(ArenaKind::Bram {
@@ -3277,6 +3291,7 @@ impl Interp {
                     regfile_slot,
                     bram_slot,
                     creg5_slot,
+                    counter_slot,
                     reset_slot,
                     en_slot,
                     cfwf_slot,
@@ -3431,6 +3446,13 @@ impl Interp {
                     .collect();
                 m19.sort_unstable();
                 m19.hash(&mut h);
+                let mut m20: Vec<_> = e
+                    .counter_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (k, b - r0, w))
+                    .collect();
+                m20.sort_unstable();
+                m20.hash(&mut h);
                 let mut m18: Vec<_> = e
                     .bram_slot
                     .iter()
