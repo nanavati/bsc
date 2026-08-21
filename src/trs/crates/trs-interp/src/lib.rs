@@ -3956,6 +3956,11 @@ impl Interp {
                     prim::WINDOW_EFFECTS
                         .load(std::sync::atomic::Ordering::Relaxed),
                 ));
+                // the bake wants the BOUNDARY, not simulation: stop
+                // the advance here — no steady cycle executes at link
+                // (stop_request is cleared at the next advance; the
+                // bake interp is discarded anyway)
+                self.fe.stop_request = true;
             }
             // RunCore descriptor witness (desc is parsed only under
             // TRS_RUNCORE_CHECK): the engage decision and shape must
