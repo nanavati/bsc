@@ -43,27 +43,14 @@ check BdpiMin sysBdpiMin ops.c
 # must vanish); the state half is peeked by the interactive
 # FinishPeek witness (same shape, jit engine)
 check FinishEdge sysFinishEdge
-# expected-file variant: designs the REFERENCE cannot express — the
-# .out.expected is the contract instead of a ref build
-check_expected() { # name top
-    name=$1; top=$2
-    cp "$SRC/$name.bsv" .
-    $BSC -sim -bir -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc)"; fail=1; return; }
-    # the .bir exports during the -e link, BEFORE the C++ compile that
-    # fails for these designs — ignore the exit code, require the .bir
-    $BSC -sim -bir -e "$top" -o ref.exe >/dev/null 2>&1
-    [ -f "$top.bir" ] || { echo "FAIL $name (no .bir)"; fail=1; return; }
-    "$TRS" link "$top.bir" -o art >/dev/null 2>&1 || { echo "FAIL $name (trs link)"; fail=1; return; }
-    TRS="$TRS" ./art > got.out 2>&1
-    if ! cmp -s "$SRC/$name.out.expected" got.out; then echo "FAIL $name (stdout)"; diff "$SRC/$name.out.expected" got.out | head -3; fail=1; return; fi
-    echo "PASS $name"
-}
-# BRAM byte enables past lane 63 (128 lanes on 1024-bit data): the
-# reference's generated C++ does not compile at these widths
-# (bs_wide_data.h operator!= overload miss), so the expected file is
-# the contract — top byte AND low byte zeroed by the lane-127|lane-0
-# write, everything between stays 0xAA
-check_expected BramWideBE sysBramWideBE
+# BRAM byte enables past lane 63 (128 lanes on 1024-bit data), plus
+# out-of-bounds puts on both the write and the read side.  The
+# reference's generated C++ did not COMPILE at these widths before
+# the bs_prim_mod_bram.h is_zero fix (WideData has no operator!=
+# against int), so this used to be an expected-file test; now a live
+# byte-compare whose out-of-bounds arms exercise the fixed Write/Read
+# warning discriminator on both engines.
+check BramWideBE sysBramWideBE
 # A RegFile load file is an input to the simulation, not to the build.
 # The reference opens one when the model object is constructed, which is
 # run time, so link -- both the reference's and ours -- must complete
