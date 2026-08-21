@@ -145,18 +145,19 @@ check_vcd FifoVcd sysFifoVcd
 # port_consts (a single-u64 store once folded them to 0/1 and the run
 # went silently empty)
 check WideArgConst sysWideArgConst
-# dynamic scheduling v1 (G0100 single pair): no reference Bluesim exe
-# exists by design — the classic C++ backend refuses the design — so
-# stdout diffs against a hand-derived golden instead.  Also gates the
-# two refusals: plain -sim errors (G0100), and -sched-dynamic without
-# -trs errors at link.
-check_dyn() { # name top
-    name=$1; top=$2
+# dynamic scheduling (bsc G0096/G0100/G0101/G0116 family): no
+# reference Bluesim exe exists by design — the classic C++ backend
+# refuses these designs — so stdout diffs against a stored golden
+# whose values are hand-derived.  Also gates the two refusals: plain
+# -sim errors with the class's tag, and -sched-dynamic without -trs
+# errors at link.
+check_dyn() { # name top errtag
+    name=$1; top=$2; tag=$3
     cp "$SRC/$name.bsv" .
     if $BSC -sim -u -g "$top" "$name.bsv" >dyn_err1.out 2>&1; then
         echo "FAIL $name (static compile unexpectedly succeeded)"; fail=1; return
     fi
-    grep -q "G0100" dyn_err1.out || { echo "FAIL $name (expected G0100)"; fail=1; return; }
+    grep -q "$tag" dyn_err1.out || { echo "FAIL $name (expected $tag)"; fail=1; return; }
     $BSC -sim -sched-dynamic -u -g "$top" "$name.bsv" >/dev/null 2>&1 || { echo "FAIL $name (bsc -sched-dynamic)"; fail=1; return; }
     if $BSC -sim -sched-dynamic -bir -e "$top" -o dyn_ref.exe >dyn_err2.out 2>&1; then
         echo "FAIL $name (classic Bluesim link unexpectedly succeeded)"; fail=1; return
@@ -170,5 +171,8 @@ check_dyn() { # name top
     if ! cmp -s "$SRC/$name.expected" gota.out; then echo "FAIL $name (art stdout)"; diff "$SRC/$name.expected" gota.out | head -3; fail=1; return; fi
     echo "PASS $name"
 }
-check_dyn DynSched sysDynSched
+check_dyn DynSched sysDynSched G0100
+check_dyn DynSchedBoth sysDynSchedBoth G0101
+check_dyn DynSchedSelf sysDynSchedSelf G0096
+check_dyn DynSchedLoop sysDynSchedLoop G0116
 exit $fail

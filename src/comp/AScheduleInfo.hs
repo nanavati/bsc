@@ -94,12 +94,37 @@ data ADynSched = ADynSched
       ads_ruleE   :: ARuleId,  -- must precede the submodule rules between
       ads_guardE  :: AExpr,    -- ruleE's CAN_FIRE (registers/constants only)
       ads_ruleL   :: ARuleId,  -- must follow the submodule rules between
+      -- Nothing: only ruleE's direction is constrained (the static order
+      -- serves when ruleE cannot fire).  Just g: the pair is constrained
+      -- in BOTH directions (each rule's flagged call must precede the
+      -- other's, through different submodule rules); g is ruleL's
+      -- CAN_FIRE, selecting ruleL's direction, and neither ordering
+      -- constraint is active when both guards are false.
+      ads_guardL  :: Maybe AExpr,
       ads_meths   :: [(MethodId, MethodId)], -- flagged (early, late) calls
       ads_between :: [ARuleId] -- submodule rules between the method pairs
+    }
+  -- One rule calls both flagged methods (bsc G0096): the rule must
+  -- execute before the submodule rules for its early call and after
+  -- them for its late call.  The calls' conditions are disjoint
+  -- (verifySafeRuleActions), so per cycle at most one side's ordering
+  -- constraint is active; the guard (the rule's predicate AND the early
+  -- call's condition, inlined to registers/constants) selects it.
+  -- Unlike a rule pair, the rule executes either way, so only the
+  -- inactive call's fused edges may drop — the linker computes those
+  -- edge sets when the submodule's schedule merges in.
+  | ADynSchedSelf
+    {
+      adss_rule    :: ARuleId,
+      adss_guard   :: AExpr,    -- pred AND early call's condition
+      adss_early   :: MethodId, -- call that must precede the rules between
+      adss_late    :: MethodId, -- call that must follow them
+      adss_between :: [ARuleId]
     } deriving (Eq, Show)
 
 instance NFData ADynSched where
-  rnf (ADynSched re g rl ms bs) = rnf5 re g rl ms bs
+  rnf (ADynSched re g rl gl ms bs) = rnf6 re g rl gl ms bs
+  rnf (ADynSchedSelf r g me ml bs) = rnf5 r g me ml bs
 
 
 instance PPrint AScheduleInfo where
