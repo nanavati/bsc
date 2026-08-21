@@ -1226,6 +1226,31 @@ impl RegFile {
 /// wide_data.cxx dump_val for narrow values: the out-of-bounds warning's
 /// address rendering ("0x" prefix, width/4 zero-padded digits; width 1
 /// prints True/False).
+/// Arena-attached BRAM block base pointer -> (full name, addr width):
+/// the compiled tick's collision warning (abi::BRAM_WARN) resolves the
+/// printing prim through this map.  Keyed by pointer value — the arena
+/// Vec's buffer never moves once attached (engines move whole across
+/// threads; the buffer stays put).  Entries live for the process (the
+/// CLI leaks engines at exit by design).
+static BRAM_WARN_NAMES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<usize, (String, u32)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// abi::BRAM_WARN target: print the reference's dual-write collision
+/// warning for the block at `block` (quiet-engine gated, like every
+/// prim diagnostic).
+fn bram_warn_hook(block: usize, addr: u64) {
+    if quiet_engine() {
+        return;
+    }
+    if let Some((name, bits)) = BRAM_WARN_NAMES.lock().unwrap().get(&block) {
+        println!(
+            "Warning: BRAM '{name}' -- Write collision at address {}",
+            addr_dump_val(addr, *bits)
+        );
+    }
+}
+
 fn addr_dump_val(a: u64, width: u32) -> String {
     match width {
         0 => "()".to_string(),
@@ -5458,6 +5483,42 @@ impl Bram {
         if me.upd_addr > self.hi_addr {
             me.out = Value::undet(self.width);
         } else if is_write {
+            // dual-write collision warning (bs_prim_mod_bram.h:454-476):
+            // the reference warns when an OVERLAPPING lane of a same-
+            // instant same-address write on the other port carries an
+            // EQUAL chunk (chunks_eq is literal equality — an apparent
+            // !=-intent quirk upstream, replicated for byte parity);
+            // one line per port tick, printed by BOTH ports' ticks
+            if self.dual
+                && other.upd_at == now
+                && other.upd_addr == me.upd_addr
+                && !other.upd_wens.is_zero()
+            {
+                let mut collide = false;
+                for n in 0..self.num_wens {
+                    let on = |w: &Value| {
+                        w.limbs64()
+                            .get((n / 64) as usize)
+                            .is_some_and(|l| (l >> (n % 64)) & 1 != 0)
+                    };
+                    if on(&me.upd_wens) && on(&other.upd_wens) {
+                        let lo = (n * self.chunk_size) as u64;
+                        let hi = lo + self.chunk_size as u64 - 1;
+                        if me.upd_val.extract(hi, lo, self.chunk_size)
+                            == other.upd_val.extract(hi, lo, self.chunk_size)
+                        {
+                            collide = true;
+                        }
+                    }
+                }
+                if collide {
+                    qprintln!(
+                        "Warning: BRAM '{}' -- Write collision at address {}",
+                        self.full_name,
+                        self.addr_hex(me.upd_addr)
+                    );
+                }
+            }
             let cur = self.mem_get(me.upd_addr);
             // previous value: if the other port wrote the same address at
             // this instant, use its pre-write value
@@ -5729,6 +5790,14 @@ impl Prim for Bram {
     }
     fn arena_attach(&mut self, slot: *mut u64) {
         self.slot = Some(slot);
+        // collision warnings from the compiled tick resolve name and
+        // addr width through the block-pointer map; the hook installs
+        // once per process
+        BRAM_WARN_NAMES
+            .lock()
+            .unwrap()
+            .insert(slot as usize, (self.full_name.clone(), self.addr_bits));
+        let _ = trs_codegen::abi::BRAM_WARN.set(bram_warn_hook);
         let a = std::mem::replace(&mut self.a, BramPort::new(self.width));
         let b = std::mem::replace(&mut self.b, BramPort::new(self.width));
         self.store_port(false, a);
