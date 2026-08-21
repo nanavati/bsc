@@ -266,6 +266,15 @@ pub struct Interp {
     /// by the Emit arm for prime's runcore_desc_finish
     #[cfg(feature = "aot")]
     pub(crate) runcore_stage_a: Option<jit::RunCoreStageA>,
+    /// link-time window bake armed (jit::runcore_bake_window): the
+    /// central loop's engage point captures the post-window sections
+    /// plus the WINDOW_EFFECTS reading AT capture (the bake advances
+    /// one steady cycle past the boundary; its effects must not
+    /// pollute the window-clean gate)
+    #[cfg(feature = "aot")]
+    pub(crate) runcore_bake: bool,
+    #[cfg(feature = "aot")]
+    pub(crate) runcore_window: Option<(Vec<u8>, u64)>,
     /// the central loop engaged at least once this run — the inverse
     /// half of the RunCore descriptor's eligibility witness
     central_engaged: bool,
@@ -727,6 +736,10 @@ impl Interp {
             runcore_pending: None,
             #[cfg(feature = "aot")]
             runcore_stage_a: None,
+            #[cfg(feature = "aot")]
+            runcore_bake: false,
+            #[cfg(feature = "aot")]
+            runcore_window: None,
             central_engaged: false,
             jit_reset_slots: Vec::new(),
             jit_rec_defs: HashMap::new(),
@@ -3934,6 +3947,16 @@ impl Interp {
             }
             heap.clear();
             self.central_engaged = true;
+            // link-time window bake: this instant — reset just
+            // deasserted, no steady edge processed — is the state a
+            // RunCore boot starts from; capture it once
+            if self.runcore_bake && self.runcore_window.is_none() {
+                self.runcore_window = Some((
+                    self.runcore_window_encode(tp, tn),
+                    prim::WINDOW_EFFECTS
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ));
+            }
             // RunCore descriptor witness (desc is parsed only under
             // TRS_RUNCORE_CHECK): the engage decision and shape must
             // match the baked claim
@@ -3950,6 +3973,37 @@ impl Interp {
                          pos={pos_rcis:?} vs descriptor hi={} lo={} pos={:?}",
                         d.hi, d.lo, d.pos
                     );
+                } else if let Some((wa, wtp, wtn, wcyc)) = d.window.as_ref() {
+                    // post-window image witness: a classic run's state
+                    // at this exact instant must equal what the link
+                    // baked — this is the byte-level proof that a
+                    // RunCore boot starting here is indistinguishable
+                    let live = unsafe {
+                        std::slice::from_raw_parts(
+                            self.jit_arena_ptr,
+                            self.jit_arena_len,
+                        )
+                    };
+                    if (*wtp, *wtn, *wcyc) != (tp, tn, self.cycle) {
+                        eprintln!(
+                            "trs runcore: MISMATCH: window state tp/tn/cycle \
+                             {wtp}/{wtn}/{wcyc} vs live {tp}/{tn}/{}",
+                            self.cycle
+                        );
+                    } else if let Some(k) =
+                        (0..live.len()).find(|&k| live[k] != wa[k])
+                    {
+                        eprintln!(
+                            "trs runcore: MISMATCH: window slot {k}: baked \
+                             {:#x}, live {:#x}",
+                            wa[k], live[k]
+                        );
+                    } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                        eprintln!(
+                            "trs runcore: descriptor + window MATCH \
+                             (central engage)"
+                        );
+                    }
                 } else if std::env::var_os("TRS_STARTUP_TIME").is_some() {
                     eprintln!("trs runcore: descriptor MATCH (central engage)");
                 }

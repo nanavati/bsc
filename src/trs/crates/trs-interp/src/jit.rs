@@ -1752,6 +1752,9 @@ pub(crate) struct RunCoreDesc {
     pub(crate) neg: Vec<usize>,
     pub(crate) eligible: bool,
     pub(crate) reason: String,
+    /// window-bake sections, when the link's post-emit bake found the
+    /// reset window skippable: (post-window arena, tp, tn, cycle)
+    pub(crate) window: Option<(Vec<u64>, u64, u64, u64)>,
 }
 
 // Boot-descriptor section tags (sidecar v2, after the RLE runs:
@@ -1763,6 +1766,47 @@ const RC_SEC_CLOCK: u64 = 3;
 const RC_SEC_COMPS: u64 = 4;
 const RC_SEC_WARNS: u64 = 5;
 const RC_SEC_ELIG: u64 = 6;
+// window-bake sections (appended by the link's post-emit bake): the
+// post-reset-window arena image and the clock state at the central-
+// loop engage point — the state a RunCore boot starts from
+const RC_SEC_WARENA: u64 = 7;
+const RC_SEC_WSTATE: u64 = 8;
+
+/// RLE-encode `words` as (value, run) LE u64 pairs onto `out`.
+fn rle_push(words: &[u64], out: &mut Vec<u8>) {
+    let mut i = 0;
+    while i < words.len() {
+        let v = words[i];
+        let mut j = i + 1;
+        while j < words.len() && words[j] == v {
+            j += 1;
+        }
+        out.extend_from_slice(&v.to_le_bytes());
+        out.extend_from_slice(&((j - i) as u64).to_le_bytes());
+        i = j;
+    }
+}
+
+/// Decode (value, run) pairs into exactly `nslots` words; None on any
+/// truncation, overflow, or length mismatch (the boot path must treat
+/// every field of the file as hostile — adversarial-panel finding).
+fn rle_decode(bytes: &[u8], nslots: usize) -> Option<Vec<u64>> {
+    let mut out = Vec::with_capacity(nslots);
+    let mut pos = 0;
+    while out.len() < nslots {
+        let v = u64::from_le_bytes(bytes.get(pos..pos + 8)?.try_into().ok()?);
+        let run = u64::from_le_bytes(
+            bytes.get(pos + 8..pos + 16)?.try_into().ok()?,
+        );
+        pos += 16;
+        let run = usize::try_from(run).ok()?;
+        if run == 0 || run > nslots - out.len() {
+            return None;
+        }
+        out.extend(std::iter::repeat(v).take(run));
+    }
+    (pos == bytes.len()).then_some(out)
+}
 
 impl Interp {
     /// RunCore arena sidecar, validation form (self-sufficient AOT
@@ -1809,17 +1853,7 @@ impl Interp {
         ] {
             out.extend_from_slice(&v.to_le_bytes());
         }
-        let mut i = 0;
-        while i < words.len() {
-            let v = words[i];
-            let mut j = i + 1;
-            while j < words.len() && words[j] == v {
-                j += 1;
-            }
-            out.extend_from_slice(&v.to_le_bytes());
-            out.extend_from_slice(&((j - i) as u64).to_le_bytes());
-            i = j;
-        }
+        rle_push(words, &mut out);
         Some(out)
     }
 
@@ -2029,15 +2063,29 @@ impl Interp {
         let words = unsafe {
             std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
         };
+        // find where the RLE runs end (also validates them; every
+        // field is file data and must be treated as hostile)
         let mut pos = 8 + 32;
         let mut slot = 0usize;
-        while pos + 16 <= bytes.len() && slot < words.len() {
-            let v = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
-            let run =
-                u64::from_le_bytes(bytes[pos + 8..pos + 16].try_into().unwrap())
-                    as usize;
+        while slot < words.len() {
+            let (Some(vb), Some(rb)) =
+                (bytes.get(pos..pos + 8), bytes.get(pos + 8..pos + 16))
+            else {
+                fail("image truncated mid-run");
+                return None;
+            };
+            let v = u64::from_le_bytes(vb.try_into().unwrap());
+            let run = u64::from_le_bytes(rb.try_into().unwrap());
             pos += 16;
-            for k in slot..(slot + run).min(words.len()) {
+            let Ok(run) = usize::try_from(run) else {
+                fail("run length overflow");
+                return None;
+            };
+            if run == 0 || run > words.len() - slot {
+                fail("run length out of range");
+                return None;
+            }
+            for k in slot..slot + run {
                 if words[k] != v {
                     fail(&format!(
                         "slot {k}: image {v:#x}, rebuilt {:#x}",
@@ -2047,10 +2095,6 @@ impl Interp {
                 }
             }
             slot += run;
-        }
-        if slot != words.len() {
-            fail("image shorter than arena");
-            return None;
         }
         if std::env::var_os("TRS_STARTUP_TIME").is_some() {
             eprintln!(
@@ -2062,23 +2106,41 @@ impl Interp {
             return None;
         }
         // -- v2 boot-descriptor sections --
+        // every take is bounds-checked and every failure REPORTS: a
+        // truncated or corrupt descriptor must never be a silent None
+        // (this parser is destined for the unconditional boot path)
         let take8 = |pos: &mut usize| -> Option<u64> {
             let v = bytes.get(*pos..*pos + 8)?;
             *pos += 8;
             Some(u64::from_le_bytes(v.try_into().unwrap()))
         };
         let take_str = |pos: &mut usize| -> Option<&str> {
-            let n = take8(pos)? as usize;
-            let s = bytes.get(*pos..*pos + n)?;
+            let n = usize::try_from(take8(pos)?).ok()?;
+            let s = bytes.get(*pos..pos.checked_add(n)?)?;
             *pos += n;
             std::str::from_utf8(s).ok()
         };
-        if bytes.get(pos..pos + 8) != Some(b"TRSBOOTD") {
+        macro_rules! want {
+            ($e:expr, $what:literal) => {
+                match $e {
+                    Some(v) => v,
+                    None => {
+                        fail(concat!("descriptor truncated: ", $what));
+                        return None;
+                    }
+                }
+            };
+        }
+        if bytes.get(pos..pos + 8) != Some(&b"TRSBOOTD"[..]) {
             fail("missing boot descriptor");
             return None;
         }
         pos += 8;
-        let nsect = take8(&mut pos)?;
+        let nsect = want!(take8(&mut pos), "section count");
+        if nsect > 64 {
+            fail("absurd section count");
+            return None;
+        }
         let mut desc = RunCoreDesc {
             hi: 0,
             lo: 0,
@@ -2089,16 +2151,37 @@ impl Interp {
             neg: Vec::new(),
             eligible: false,
             reason: String::new(),
+            window: None,
         };
+        let mut seen_tags = 0u64;
+        let mut wstate = None;
+        let mut warena: Option<Vec<u64>> = None;
         for _ in 0..nsect {
-            let tag = take8(&mut pos)?;
-            let len = take8(&mut pos)? as usize;
-            let end = (pos + len).next_multiple_of(8);
+            let tag = want!(take8(&mut pos), "section tag");
+            let len = want!(
+                usize::try_from(want!(take8(&mut pos), "section length")).ok(),
+                "section length overflow"
+            );
+            let end = want!(
+                pos.checked_add(len).map(|e| e.next_multiple_of(8)),
+                "section length overflow"
+            );
+            if end > bytes.len() {
+                fail("section overruns file");
+                return None;
+            }
+            if tag >= 1 && tag <= 63 {
+                if seen_tags & (1 << tag) != 0 {
+                    fail("duplicate section");
+                    return None;
+                }
+                seen_tags |= 1 << tag;
+            }
             let mut p = pos;
             match tag {
                 RC_SEC_STRINGS => {
-                    let n = take8(&mut p)? as usize;
-                    if n != self.d.strings.len() {
+                    let n = want!(take8(&mut p), "string count");
+                    if n != self.d.strings.len() as u64 {
                         fail("descriptor: string count");
                         return None;
                     }
@@ -2110,8 +2193,8 @@ impl Interp {
                     }
                 }
                 RC_SEC_PATHS => {
-                    let n = take8(&mut p)? as usize;
-                    if n != self.insts.len() {
+                    let n = want!(take8(&mut p), "inst count");
+                    if n != self.insts.len() as u64 {
                         fail("descriptor: inst count");
                         return None;
                     }
@@ -2123,33 +2206,38 @@ impl Interp {
                     }
                 }
                 RC_SEC_CLOCK => {
-                    desc.hi = take8(&mut p)?;
-                    desc.lo = take8(&mut p)?;
-                    desc.delay = take8(&mut p)?;
-                    desc.init_high = take8(&mut p)? != 0;
-                    desc.has_init = take8(&mut p)? != 0;
+                    desc.hi = want!(take8(&mut p), "clock hi");
+                    desc.lo = want!(take8(&mut p), "clock lo");
+                    desc.delay = want!(take8(&mut p), "clock delay");
+                    desc.init_high = want!(take8(&mut p), "clock init") != 0;
+                    desc.has_init = want!(take8(&mut p), "clock has_init") != 0;
                 }
                 RC_SEC_COMPS => {
-                    let np = take8(&mut p)? as usize;
+                    let np = want!(take8(&mut p), "pos count");
                     for _ in 0..np {
-                        desc.pos.push(take8(&mut p)? as usize);
+                        desc.pos
+                            .push(want!(take8(&mut p), "pos ordinal") as usize);
                     }
-                    let nn = take8(&mut p)? as usize;
+                    let nn = want!(take8(&mut p), "neg count");
                     for _ in 0..nn {
-                        desc.neg.push(take8(&mut p)? as usize);
+                        desc.neg
+                            .push(want!(take8(&mut p), "neg ordinal") as usize);
                     }
                 }
                 RC_SEC_WARNS => {
                     let reg = crate::prim::bram_warn_rows();
-                    let n = take8(&mut p)? as usize;
+                    let n = want!(take8(&mut p), "warn count");
                     let mut seen = 0usize;
                     for _ in 0..n {
-                        let slot = take8(&mut p)?;
-                        let bits = take8(&mut p)? as u32;
-                        let Some(name) = take_str(&mut p) else {
-                            fail("descriptor: warn row truncated");
+                        let slot = want!(take8(&mut p), "warn slot");
+                        let bits = want!(take8(&mut p), "warn bits") as u32;
+                        let name = want!(take_str(&mut p), "warn name");
+                        // bounds BEFORE any pointer arithmetic: the
+                        // slot is file data (UB finding)
+                        if slot >= self.jit_arena_len as u64 {
+                            fail(&format!("warn slot {slot} out of range"));
                             return None;
-                        };
+                        }
                         let key = unsafe {
                             self.jit_arena_ptr.add(slot as usize)
                         } as usize;
@@ -2183,8 +2271,25 @@ impl Interp {
                     }
                 }
                 RC_SEC_ELIG => {
-                    desc.eligible = take8(&mut p)? != 0;
-                    desc.reason = take_str(&mut p)?.to_string();
+                    desc.eligible = want!(take8(&mut p), "elig flag") != 0;
+                    desc.reason =
+                        want!(take_str(&mut p), "elig reason").to_string();
+                }
+                RC_SEC_WARENA => {
+                    let Some(w) =
+                        rle_decode(&bytes[p..pos + len], self.jit_arena_len)
+                    else {
+                        fail("window arena malformed");
+                        return None;
+                    };
+                    warena = Some(w);
+                }
+                RC_SEC_WSTATE => {
+                    wstate = Some((
+                        want!(take8(&mut p), "window tp"),
+                        want!(take8(&mut p), "window tn"),
+                        want!(take8(&mut p), "window cycle"),
+                    ));
                 }
                 _ => {
                     fail(&format!("descriptor: unknown section {tag}"));
@@ -2193,13 +2298,136 @@ impl Interp {
             }
             pos = end;
         }
+        // required sections: 1-6 always; window sections travel as a
+        // pair or not at all
+        for t in [
+            RC_SEC_STRINGS,
+            RC_SEC_PATHS,
+            RC_SEC_CLOCK,
+            RC_SEC_COMPS,
+            RC_SEC_WARNS,
+            RC_SEC_ELIG,
+        ] {
+            if seen_tags & (1 << t) == 0 {
+                fail("descriptor: missing required section");
+                return None;
+            }
+        }
+        match (warena, wstate) {
+            (Some(a), Some((tp, tn, cyc))) => {
+                desc.window = Some((a, tp, tn, cyc));
+            }
+            (None, None) => {}
+            _ => {
+                fail("descriptor: window sections must travel as a pair");
+                return None;
+            }
+        }
+        // an eligible claim with a degenerate clock or no posedge
+        // comps is self-contradictory — refuse it before any boot
+        // path could trust it
+        if desc.eligible && (desc.hi + desc.lo == 0 || desc.pos.is_empty()) {
+            fail("descriptor: eligible with degenerate clock/comps");
+            return None;
+        }
         if std::env::var_os("TRS_STARTUP_TIME").is_some() {
             eprintln!(
-                "trs runcore: descriptor sections MATCH (eligible={} {})",
-                desc.eligible, desc.reason
+                "trs runcore: descriptor sections MATCH (eligible={} {}{})",
+                desc.eligible,
+                desc.reason,
+                if desc.window.is_some() { " +window" } else { "" }
             );
         }
         Some(desc)
+    }
+
+    /// Window-bake sections: the current (post-window) arena as RLE
+    /// plus the engage-point clock state.  Called from the central
+    /// loop's engage point when runcore_bake is armed.
+    pub(crate) fn runcore_window_encode(&self, tp: u64, tn: u64) -> Vec<u8> {
+        let words = unsafe {
+            std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len)
+        };
+        let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
+        let mut rle = Vec::new();
+        rle_push(words, &mut rle);
+        let mut out = Vec::with_capacity(rle.len() + 64);
+        w64(&mut out, RC_SEC_WARENA);
+        w64(&mut out, rle.len() as u64);
+        out.extend_from_slice(&rle);
+        // rle is 16-byte-granular, already 8-aligned
+        w64(&mut out, RC_SEC_WSTATE);
+        w64(&mut out, 24);
+        for v in [tp, tn, self.cycle] {
+            w64(&mut out, v);
+        }
+        out
+    }
+
+    /// Link-time window bake (called on a FRESH interp that has an
+    /// artifact Load request armed): run the reset window quiet on
+    /// the compiled engine, and if it was effect-free and reached the
+    /// central-loop engage point, splice the captured post-window
+    /// sections into the sidecar.  Returns whether the splice
+    /// happened; every non-clean outcome is a silent classic boot.
+    pub fn runcore_bake_window(
+        &mut self,
+        sidecar: &std::path::Path,
+    ) -> Result<bool, String> {
+        self.set_quiet();
+        self.runcore_bake = true;
+        let before =
+            crate::prim::WINDOW_EFFECTS.load(std::sync::atomic::Ordering::Relaxed);
+        // TWO cycles: advance(1) finishes cycle 1's timeslice and stops
+        // BEFORE the pop that deasserts reset — the engage point (and
+        // the capture) is only reached on the way to cycle 2.  The
+        // capture snapshots the effects counter, so the one steady
+        // cycle executed past the boundary cannot pollute the gate.
+        self.advance(2);
+        let captured = self.runcore_window.take();
+        let clean = captured
+            .as_ref()
+            .is_some_and(|(_, at_capture)| *at_capture == before);
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            let bails: Vec<String> = crate::CENTRAL_BAIL
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let n = c.load(std::sync::atomic::Ordering::Relaxed);
+                    (n > 0).then(|| format!("#{i}x{n}"))
+                })
+                .collect();
+            eprintln!(
+                "trs runcore: bake engaged={} clean={clean} (bails [{}])",
+                captured.is_some(),
+                bails.join(" ")
+            );
+        }
+        let Some((sections, _)) = captured else {
+            return Ok(false); // never engaged (bailed) — classic boot
+        };
+        if !clean {
+            return Ok(false);
+        }
+        let mut bytes =
+            std::fs::read(sidecar).map_err(|e| format!("{}: {e}", sidecar.display()))?;
+        // bump nsect (u64 right after TRSBOOTD) by 2 and append
+        let Some(td) = bytes
+            .windows(8)
+            .position(|w| w == b"TRSBOOTD")
+            .filter(|&i| i + 16 <= bytes.len())
+        else {
+            return Err("sidecar has no boot descriptor".into());
+        };
+        let nsect =
+            u64::from_le_bytes(bytes[td + 8..td + 16].try_into().unwrap());
+        bytes[td + 8..td + 16].copy_from_slice(&(nsect + 2).to_le_bytes());
+        bytes.extend_from_slice(&sections);
+        let tmp = sidecar.with_extension("arena.tmp");
+        std::fs::write(&tmp, &bytes)
+            .and_then(|()| std::fs::rename(&tmp, sidecar))
+            .map_err(|e| format!("{}: {e}", sidecar.display()))?;
+        Ok(true)
     }
 }
 

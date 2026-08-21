@@ -264,6 +264,11 @@ fn main() -> ExitCode {
             // constructed, so the artifact written here opens its own
             // when it runs (see prim::LOAD_MEMFILES)
             trs_interp::prim::set_load_memfiles(false);
+            // drop any stale RunCore sidecar BEFORE the new .so is
+            // emitted: a link that dies between the two writes must
+            // leave "no sidecar" (classic boot), never a new .so
+            // beside an old descriptor (adversarial-panel finding)
+            let _ = std::fs::remove_file(format!("{base}.arena"));
             // _fresh: link WRITES the snapshot, so it decodes the .bir
             // source of truth, never a prior sidecar (see startup.rs)
             let mut interp = match trs_interp::startup::load_file_fresh(path, &[], None) {
@@ -512,20 +517,45 @@ fn main() -> ExitCode {
             // deterministic post-attach arena image, cross-checked by
             // loads under TRS_RUNCORE_CHECK=1; None (interp-only link
             // or a mem-file design) removes any stale sidecar
-            match interp.take_runcore_image() {
+            let arena_written = match interp.take_runcore_image() {
                 Some(img) => {
                     let t = format!("{base}.arena.tmp");
-                    if std::fs::write(&t, img)
+                    let ok = std::fs::write(&t, img)
                         .and_then(|()| {
                             std::fs::rename(&t, format!("{base}.arena"))
                         })
-                        .is_err()
-                    {
+                        .is_ok();
+                    if !ok {
                         eprintln!("trs link: note: {base}.arena not written");
                     }
+                    ok
                 }
                 None => {
                     let _ = std::fs::remove_file(format!("{base}.arena"));
+                    false
+                }
+            };
+            // post-emit window bake (docs/RUNCORE.md): run the reset
+            // window on the just-written artifact — quiet, on the
+            // compiled engine, exactly as a run would — and bake the
+            // post-window state into the sidecar when the window is
+            // effect-free.  Every non-clean outcome is silent: the
+            // design simply boots classic.
+            if arena_written && compiled {
+                match trs_interp::startup::load_file(path, &[], None) {
+                    Ok(mut b) => {
+                        b.aot_request_code(format!("{base}.so").into());
+                        if let Err(e) = b.runcore_bake_window(
+                            std::path::Path::new(&format!("{base}.arena")),
+                        ) {
+                            eprintln!(
+                                "trs link: note: window bake skipped: {e}"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("trs link: note: window bake skipped: {e}")
+                    }
                 }
             }
             // the artifact itself: a SYMLINK to the runner — main()'s
