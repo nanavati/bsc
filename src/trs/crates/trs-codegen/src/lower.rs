@@ -512,11 +512,28 @@ fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
     let triple = TargetMachine::get_default_triple();
     let target = Target::from_triple(&triple)
         .map_err(|e| Ineligible(format!("LLVM target: {e}")))?;
+    // Artifact code generation targets a PORTABLE baseline by default:
+    // artifacts are cached and shipped (.so, trs link --exe), and the
+    // load gates check design identity, not CPU features — a
+    // host-native artifact from an AVX-512 box SIGILLs elsewhere with
+    // no fallback.  Measured on the bench pool, x86-64-v3 matches
+    // host-native runtime within noise (wide-value memcpy code is the
+    // only vector consumer); TRS_JIT_CPU overrides: "native" restores
+    // host tuning, or any LLVM cpu name (x86-64, x86-64-v4, znver4...).
+    let cpu_env = std::env::var("TRS_JIT_CPU").ok();
+    let (cpu, feats) = match cpu_env.as_deref() {
+        Some("native") => (
+            TargetMachine::get_host_cpu_name().to_string(),
+            TargetMachine::get_host_cpu_features().to_string(),
+        ),
+        Some(name) => (name.to_string(), String::new()),
+        None => ("x86-64-v3".to_string(), String::new()),
+    };
     target
         .create_target_machine(
             &triple,
-            &TargetMachine::get_host_cpu_name().to_string(),
-            &TargetMachine::get_host_cpu_features().to_string(),
+            &cpu,
+            &feats,
             opt_level(),
             RelocMode::PIC,
             CodeModel::Default,
