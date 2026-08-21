@@ -124,4 +124,12 @@ check_compiled StrCatBdpi sysStrCatBdpi slen.c
 # on this stack it still compiles (StrDyn marker values select among
 # interned ids at runtime), and the output must match the reference
 check_compiled StrDynSelect sysStrDynSelect slen.c
+# dual-port BE BRAM, same-instant same-address writes: collided-write
+# out takes disabled lanes from prev, memory resolves last-writer-wins
+# in clkA-then-clkB tick order (SimExportIR), read-during-write bypass
+check DualBE sysDualBE
+# the dual-write collision warning: fires on EQUAL overlapping chunks
+# (the reference's chunks_eq quirk), two lines per collision instant,
+# byte-positioned between the cycles' $display output
+check CollideEq sysCollideEq
 exit $fail
