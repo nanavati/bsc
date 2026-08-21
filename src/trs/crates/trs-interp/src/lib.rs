@@ -780,6 +780,13 @@ impl Interp {
 
     /// Intern a runtime-created string (StringConcat) into the arena.
     pub(crate) fn intern_dyn(&mut self, text: String) -> StrId {
+        // window-time interning shifts every later dyn string id and
+        // leaves baked slots holding ids a RunCore boot cannot resolve
+        // (adversarial-panel finding) — any bake-window intern makes
+        // the window unskippable
+        if prim::quiet_engine() {
+            prim::note_window_effect();
+        }
         self.dyn_strs.push(text);
         (self.d.strings.len() + self.dyn_strs.len() - 1) as StrId
     }
@@ -2027,13 +2034,17 @@ impl Interp {
                 // the same glibc stream, per-engine (see GlibcRandom)
                 // — a window-time draw desyncs the stream a skipped
                 // window leaves untouched
-                prim::note_window_effect();
+                if prim::quiet_engine() {
+                    prim::note_window_effect();
+                }
                 let v = self.rng.next() as u64;
                 return Some(Value::from_u64(w.max(1), v));
             }
             "srand" => {
                 // glibc srand is an alias of srandom, seeding random()
-                prim::note_window_effect();
+                if prim::quiet_engine() {
+                    prim::note_window_effect();
+                }
                 let seed = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64() as u32,
                     _ => 0,
@@ -3966,13 +3977,34 @@ impl Interp {
             // TRS_RUNCORE_CHECK): the engage decision and shape must
             // match the baked claim
             if let Some(d) = j.runcore_desc.as_ref() {
-                if !d.eligible {
+                // negedge comps and the full wave, for the extended
+                // shape compare (panel finding: neg/delay/init were
+                // baked but witnessed by nothing)
+                let live_neg: Vec<usize> = rcomps
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, rc)| rc.clk == wci && !rc.posedge)
+                    .map(|(i, _)| i)
+                    .collect();
+                let wv = match &sources[wci] {
+                    ClockSource::Wave(w) => Some(*w),
+                    _ => None,
+                };
+                if !d.central {
                     eprintln!(
                         "trs runcore: MISMATCH: central loop engaged but \
-                         descriptor says ineligible ({})",
+                         descriptor says central-ineligible ({})",
                         d.reason
                     );
-                } else if d.hi != hi || d.lo != lo || d.pos != pos_rcis {
+                } else if d.hi != hi
+                    || d.lo != lo
+                    || d.pos != pos_rcis
+                    || d.neg != live_neg
+                    || wv.is_none_or(|w| {
+                        (d.delay, d.init_high, d.has_init)
+                            != (w.delay, w.init_high, w.has_init)
+                    })
+                {
                     eprintln!(
                         "trs runcore: MISMATCH: engaged hi={hi} lo={lo} \
                          pos={pos_rcis:?} vs descriptor hi={} lo={} pos={:?}",
@@ -4542,10 +4574,10 @@ impl Interp {
             if let Some(d) =
                 jit.as_ref().and_then(|j| j.runcore_desc.as_ref())
             {
-                if d.eligible {
+                if d.central {
                     eprintln!(
-                        "trs runcore: MISMATCH: descriptor says eligible but \
-                         the central loop never engaged"
+                        "trs runcore: MISMATCH: descriptor says central-\
+                         eligible but the central loop never engaged"
                     );
                 }
             }

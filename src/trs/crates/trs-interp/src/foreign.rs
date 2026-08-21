@@ -261,6 +261,12 @@ impl ForeignEnv {
                 emit_output_errors(&errs);
             }
             "$fclose" => {
+                // fd/mcd table state is not in the baked arena — a
+                // window-time close is an effect the skipped window
+                // cannot replay (adversarial-panel finding)
+                if crate::prim::quiet_engine() {
+                    crate::prim::note_window_effect();
+                }
                 if let Some(Arg::Val(v, _)) = args.first() {
                     self.close_files(v.as_u64());
                 }
@@ -404,7 +410,9 @@ impl ForeignEnv {
             "$fopen" => {
                 // any window-time file open is a run-time effect the
                 // skipped window cannot reproduce (truncation, reads)
-                crate::prim::note_window_effect();
+                if crate::prim::quiet_engine() {
+                    crate::prim::note_window_effect();
+                }
                 let path = match args.first() {
                     Some(Arg::Str(s)) => s.clone(),
                     _ => return Some(Value::zero(w.max(1))),
@@ -454,7 +462,9 @@ impl ForeignEnv {
             // prefix match against the registered +args (bk_match_argument)
             "$test$plusargs" => {
                 // plusargs differ between link (none) and run
-                crate::prim::note_window_effect();
+                if crate::prim::quiet_engine() {
+                    crate::prim::note_window_effect();
+                }
                 let name = match args.first() {
                     Some(Arg::Str(s)) => s.to_string(),
                     Some(Arg::Val(v, _)) => format::unpack_str_pub(v),
@@ -466,7 +476,9 @@ impl ForeignEnv {
             "$fgetc" => {
                 use std::io::Read;
                 // consumes stdin/file position — a run-time effect
-                crate::prim::note_window_effect();
+                if crate::prim::quiet_engine() {
+                    crate::prim::note_window_effect();
+                }
                 let fd = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64(),
                     _ => return Some(Value::from_u64(w.max(32), u32::MAX as u64)),
@@ -497,7 +509,9 @@ impl ForeignEnv {
             "$ungetc" => {
                 // args: (char, fd); pushes back for the next $fgetc and
                 // returns the char (C ungetc semantics)
-                crate::prim::note_window_effect();
+                if crate::prim::quiet_engine() {
+                    crate::prim::note_window_effect();
+                }
                 let c = match args.first() {
                     Some(Arg::Val(v, _)) => v.as_u64() as u8,
                     _ => 0,
@@ -542,6 +556,9 @@ impl ForeignEnv {
                 }
             }
             "$fclose" => {
+                if crate::prim::quiet_engine() {
+                    crate::prim::note_window_effect();
+                }
                 if let Some(Arg::Val(v, _)) = args.first() {
                     self.close_files(v.as_u64());
                 }

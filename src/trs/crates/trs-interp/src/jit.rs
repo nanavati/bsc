@@ -1733,6 +1733,10 @@ pub(crate) struct RunCoreStageA {
     /// edge-SSA emission was on (off = no compiled ticks = central
     /// loop never engages = ineligible)
     pub(crate) edge_ssa: bool,
+    /// any prim stayed boxed (no arena slot): its window/steady state
+    /// lives in structs a RunCore boot doesn't have — ineligible
+    /// until lazy Reflect (adversarial-panel finding)
+    pub(crate) boxed: bool,
     /// BRAM warn registry rows keyed back to relative arena slots:
     /// (slot, addr_bits, full name)
     pub(crate) warns: Vec<(u64, u32, String)>,
@@ -1750,7 +1754,10 @@ pub(crate) struct RunCoreDesc {
     pub(crate) has_init: bool,
     pub(crate) pos: Vec<usize>,
     pub(crate) neg: Vec<usize>,
+    /// RunCore boot eligibility (central + the boot-only gates)
     pub(crate) eligible: bool,
+    /// central-loop mirror only — what the engage witness compares
+    pub(crate) central: bool,
     pub(crate) reason: String,
     /// window-bake sections, when the link's post-emit bake found the
     /// reset window skippable: (post-window arena, tp, tn, cycle)
@@ -1873,30 +1880,41 @@ impl Interp {
             self.runcore_pending = Some(img);
             return;
         };
-        // -- eligibility, in try_central's bail order --
-        let mut reason: Option<String> = None;
-        let mut ineligible = |r: &mut Option<String>, s: &str| {
+        // -- eligibility, two classes (adversarial-panel finding: the
+        // central loop's conditions are WIDER than RunCore's — BDPI
+        // and boxed prims engage the central loop just fine, so a
+        // single flag made the engage witness cry wolf on them) --
+        // central: mirrors try_central's bail conditions exactly; the
+        //   engage witness compares THIS flag.
+        // runcore: central + the boot-only gates; the driver boots on
+        //   THIS flag.
+        let mut c_reason: Option<String> = None;
+        let mut r_reason: Option<String> = None;
+        let ineligible = |r: &mut Option<String>, s: &str| {
             if r.is_none() {
                 *r = Some(s.to_string());
             }
         };
         if !sa.edge_ssa {
-            ineligible(&mut reason, "edge-SSA emission off");
+            ineligible(&mut r_reason, "edge-SSA emission off");
         }
         if self.needs_user_bdpi() {
-            ineligible(&mut reason, "user BDPI imports");
+            ineligible(&mut r_reason, "user BDPI imports");
+        }
+        if sa.boxed {
+            ineligible(&mut r_reason, "boxed prims (lazy Reflect pending)");
         }
         if !driver_clock.is_empty() {
-            ineligible(&mut reason, "driver clocks");
+            ineligible(&mut c_reason, "driver clocks");
         }
         if !self.rstgen_out.is_empty() {
-            ineligible(&mut reason, "reset generators");
+            ineligible(&mut c_reason, "reset generators");
         }
         let mut wave = None;
         for (ci, src) in sources.iter().enumerate() {
             if let crate::ClockSource::Wave(w) = src {
                 if wave.is_some() {
-                    ineligible(&mut reason, "multiple wave clocks");
+                    ineligible(&mut c_reason, "multiple wave clocks");
                 }
                 wave = Some((ci, *w));
             }
@@ -1904,42 +1922,49 @@ impl Interp {
         let (wci, wv) = match wave {
             Some((ci, w)) => (ci, Some(w)),
             None => {
-                ineligible(&mut reason, "no wave clock");
+                ineligible(&mut c_reason, "no wave clock");
                 (usize::MAX, None)
             }
         };
         if wci != usize::MAX && Some(clocks[wci]) != self.d.default_clock {
-            ineligible(&mut reason, "wave clock is not the default clock");
+            ineligible(&mut c_reason, "wave clock is not the default clock");
         }
         let mut pos: Vec<usize> = Vec::new();
         let mut neg: Vec<usize> = Vec::new();
         for (rci, rc) in rcomps.iter().enumerate() {
             if rc.clk != wci {
-                ineligible(&mut reason, "composition on a non-wave clock");
+                ineligible(&mut c_reason, "composition on a non-wave clock");
                 continue;
             }
+            // the central mirror honors the ARTIFACT's tick coverage:
+            // with edge-SSA off the emitted edge fns carry no ticks,
+            // so the load-side covered set is empty regardless of
+            // what coverage analysis would say
             let uncovered = rc.ticks.iter().enumerate().any(|(ti, t)| {
-                !t.2 && !sa.covered.get(rci).is_some_and(|c| c.contains(&ti))
+                !t.2 && !(sa.edge_ssa
+                    && sa.covered.get(rci).is_some_and(|c| c.contains(&ti)))
             });
             if rc.posedge {
                 if !rc.early.is_empty() {
-                    ineligible(&mut reason, "early rules");
+                    ineligible(&mut c_reason, "early rules");
                 }
                 if uncovered {
-                    ineligible(&mut reason, "uncovered prim tick");
+                    ineligible(&mut c_reason, "uncovered prim tick");
                 }
                 pos.push(rci);
             } else {
                 if rc.entries.iter().any(|e| !e.nodes.is_empty()) || uncovered
                 {
-                    ineligible(&mut reason, "negedge composition with work");
+                    ineligible(&mut c_reason, "negedge composition with work");
                 }
                 neg.push(rci);
             }
         }
         if pos.is_empty() {
-            ineligible(&mut reason, "no posedge compositions");
+            ineligible(&mut c_reason, "no posedge compositions");
         }
+        let central = c_reason.is_none();
+        let reason = c_reason.or(r_reason);
         // -- sections --
         let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
         let sect = |o: &mut Vec<u8>, tag: u64, payload: &[u8]| {
@@ -1997,9 +2022,10 @@ impl Interp {
             p.extend_from_slice(name.as_bytes());
         }
         sect(&mut img, RC_SEC_WARNS, &p);
-        // eligibility
+        // eligibility: [runcore flag, central-mirror flag, reason]
         p.clear();
-        w64(&mut p, reason.is_none() as u64);
+        w64(&mut p, (central && reason.is_none()) as u64);
+        w64(&mut p, central as u64);
         let r = reason.unwrap_or_default();
         w64(&mut p, r.len() as u64);
         p.extend_from_slice(r.as_bytes());
@@ -2150,6 +2176,7 @@ impl Interp {
             pos: Vec::new(),
             neg: Vec::new(),
             eligible: false,
+            central: false,
             reason: String::new(),
             window: None,
         };
@@ -2272,6 +2299,8 @@ impl Interp {
                 }
                 RC_SEC_ELIG => {
                     desc.eligible = want!(take8(&mut p), "elig flag") != 0;
+                    desc.central =
+                        want!(take8(&mut p), "central flag") != 0;
                     desc.reason =
                         want!(take_str(&mut p), "elig reason").to_string();
                 }
@@ -2326,14 +2355,22 @@ impl Interp {
         // an eligible claim with a degenerate clock or no posedge
         // comps is self-contradictory — refuse it before any boot
         // path could trust it
-        if desc.eligible && (desc.hi + desc.lo == 0 || desc.pos.is_empty()) {
+        if (desc.eligible || desc.central)
+            && (desc.hi + desc.lo == 0 || desc.pos.is_empty())
+        {
             fail("descriptor: eligible with degenerate clock/comps");
+            return None;
+        }
+        if desc.eligible && !desc.central {
+            fail("descriptor: runcore-eligible but not central-eligible");
             return None;
         }
         if std::env::var_os("TRS_STARTUP_TIME").is_some() {
             eprintln!(
-                "trs runcore: descriptor sections MATCH (eligible={} {}{})",
+                "trs runcore: descriptor sections MATCH (eligible={} \
+                 central={} {}{})",
                 desc.eligible,
+                desc.central,
                 desc.reason,
                 if desc.window.is_some() { " +window" } else { "" }
             );
@@ -4732,6 +4769,7 @@ impl Interp {
         sl.lap("aot load (dlopen+gates+dlsym)");
         // eligibility + call-site tables via trial lowering (link, run,
         // and artifact-fallback paths; skipped on successful loads)
+        let artifact_loaded = protos_opt.is_some();
         let protos: Vec<FnProtos> = match protos_opt {
             Some(p) => p,
             None => match self.trial_protos(&inst_envs, &specs, now_slot, &request, trace) {
@@ -4924,10 +4962,17 @@ impl Interp {
                         })
                         .collect();
                     warns.sort_by_key(|w| w.0);
+                    let nprims = self
+                        .insts
+                        .iter()
+                        .filter(|i| matches!(i.kind, InstKind::Prim(_)))
+                        .count();
                     self.runcore_stage_a = Some(RunCoreStageA {
                         covered,
                         edge_ssa: std::env::var("TRS_EDGE_SSA").as_deref()
                             != Ok("0"),
+                        // attach lists exactly the slot-allocated prims
+                        boxed: nprims != attach.len(),
                         warns,
                     });
                 }
@@ -5211,7 +5256,11 @@ impl Interp {
         // lands on top of this witness.
         let _ = runcore_emit;
         let mut runcore_desc = None;
-        if std::env::var_os("TRS_RUNCORE_CHECK").is_some() {
+        // gate on a SUCCESSFUL artifact load: fallback runs (trace-
+        // mode mismatch, layout drift) execute freshly compiled code,
+        // so the sidecar's claims are about a run that isn't happening
+        // — checking them there is witness noise (panel finding)
+        if artifact_loaded && std::env::var_os("TRS_RUNCORE_CHECK").is_some() {
             if let Some(p) = &runcore_sidecar {
                 runcore_desc = self.runcore_image_check(p);
             }
