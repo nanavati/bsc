@@ -5467,9 +5467,11 @@ impl Bram {
             } else {
                 cur.clone()
             };
-            let merged = {
-                let mut r = cur;
-                for n in 0..self.num_wens {
+            let (num_wens, chunk_size, width) =
+                (self.num_wens, self.chunk_size, self.width);
+            let merge_lanes = |base: Value, me: &BramPort| {
+                let mut r = base;
+                for n in 0..num_wens {
                     // lane test on the VALUE: enables can exceed 64 bits
                     let lane_on = me
                         .upd_wens
@@ -5477,10 +5479,9 @@ impl Bram {
                         .get((n / 64) as usize)
                         .is_some_and(|l| (l >> (n % 64)) & 1 != 0);
                     if lane_on {
-                        let lo = (n * self.chunk_size) as u64;
-                        let hi = lo + self.chunk_size as u64 - 1;
-                        let chunk = me.upd_val.extract(hi, lo, self.chunk_size);
-                        let width = self.width;
+                        let lo = (n * chunk_size) as u64;
+                        let hi = lo + chunk_size as u64 - 1;
+                        let chunk = me.upd_val.extract(hi, lo, chunk_size);
                         let mut nv = chunk;
                         if lo > 0 {
                             nv = nv.concat(&r.extract(lo - 1, 0, lo as u32), (hi + 1) as u32);
@@ -5496,8 +5497,14 @@ impl Bram {
                 }
                 r
             };
-            self.mem_set(me.upd_addr, merged.clone());
-            me.out = merged;
+            // memory merges into the CURRENT word (post any same-
+            // instant other-port write); out takes its DISABLED lanes
+            // from the just-latched prev — on a collided write that is
+            // the begin-of-instant value, not the merged memory word
+            // (bs_prim_mod_bram.h:487-501).  Without a collision
+            // prev == cur, so the two merges agree.
+            self.mem_set(me.upd_addr, merge_lanes(cur, &me));
+            me.out = merge_lanes(me.upd_prev.clone(), &me);
         } else {
             // read: if the other port wrote the same address at this
             // instant, read the pre-write value

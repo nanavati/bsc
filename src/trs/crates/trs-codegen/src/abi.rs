@@ -658,7 +658,13 @@ pub unsafe extern "C" fn trs_bram_tick(
                 }
                 let d = arena.add(daddr);
                 *d = *d & !m | *arena.add(me + o_val) & m;
-                *arena.add(me + o_out) = *d;
+                // out's disabled lanes come from the just-latched
+                // prev — on a collided write that is the begin-of-
+                // instant value, not the merged memory word
+                // (bs_prim_mod_bram.h:487-501); prev == memory
+                // otherwise, so the words agree
+                *arena.add(me + o_out) =
+                    *arena.add(me + o_prev) & !m | *arena.add(me + o_val) & m;
             } else {
                 *arena.add(me + o_out) = if other_hit {
                     *arena.add(other + o_prev)
@@ -713,6 +719,15 @@ pub unsafe extern "C" fn trs_bram_tick(
                     w,
                 );
             }
+            // out starts from the just-latched prev: its DISABLED
+            // lanes must show the begin-of-instant value on a collided
+            // write, not the merged memory word
+            // (bs_prim_mod_bram.h:487-501); prev == memory otherwise
+            std::ptr::copy_nonoverlapping(
+                arena.add(me + o_prev),
+                arena.add(me + o_out),
+                w,
+            );
             for n in 0..num_wens {
                 let lane = *arena.add(me + o_wens + (n / 64) as usize)
                     >> (n % 64)
@@ -725,8 +740,9 @@ pub unsafe extern "C" fn trs_bram_tick(
                 }
                 let lo = (n * chunk) as usize;
                 let len = chunk.min(width - n * chunk) as usize;
-                // word-level merge over [lo, lo+len): the bit-by-bit
-                // loop here was 35% of TrafficBRAM's model compute
+                // word-level merge over [lo, lo+len) into memory AND
+                // out: the bit-by-bit loop here was 35% of
+                // TrafficBRAM's model compute
                 let mut b = lo;
                 while b < lo + len {
                     let wi = b / 64;
@@ -737,16 +753,14 @@ pub unsafe extern "C" fn trs_bram_tick(
                     } else {
                         ((1u64 << take) - 1) << off
                     };
+                    let v = *arena.add(me + o_val + wi) & m;
                     let d = arena.add(daddr + wi);
-                    *d = *d & !m | *arena.add(me + o_val + wi) & m;
+                    *d = *d & !m | v;
+                    let o = arena.add(me + o_out + wi);
+                    *o = *o & !m | v;
                     b += take;
                 }
             }
-            std::ptr::copy_nonoverlapping(
-                arena.add(daddr),
-                arena.add(me + o_out),
-                w,
-            );
         } else {
             // read: bypassed pre-write value or the stored data
             let src = if other_hit { other + o_prev } else { daddr };
