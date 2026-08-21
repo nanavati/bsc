@@ -1263,7 +1263,13 @@ pub(crate) fn bram_warn_rows() -> std::collections::HashMap<usize, (String, u32)
 /// abi::BRAM_WARN target: print the reference's dual-write collision
 /// warning for the block at `block` (quiet-engine gated, like every
 /// prim diagnostic).
-fn bram_warn_hook(block: usize, addr: u64) {
+/// RunCore boot: registry insert without a Bram struct (names come
+/// from the sidecar's warn rows).
+pub(crate) fn bram_warn_register(block: usize, name: String, bits: u32) {
+    BRAM_WARN_NAMES.lock().unwrap().insert(block, (name, bits));
+}
+
+pub(crate) fn bram_warn_hook(block: usize, addr: u64) {
     if quiet_engine() {
         note_window_effect();
         return;

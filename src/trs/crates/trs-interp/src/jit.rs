@@ -1737,6 +1737,12 @@ pub(crate) struct RunCoreStageA {
     /// lives in structs a RunCore boot doesn't have — ineligible
     /// until lazy Reflect (adversarial-panel finding)
     pub(crate) boxed: bool,
+    /// any compiled prim CALL SITE exists (sched or exec prim
+    /// tables): even an arena'd prim can bounce through jit_prim_cb
+    /// (guarded warn paths, value methods) — the boot has no prims to
+    /// service it, so sites gate eligibility until lazy Reflect
+    /// (panel run-path finding; witnessed by RegFileWarnCone)
+    pub(crate) prim_sites: bool,
     /// BRAM warn registry rows keyed back to relative arena slots:
     /// (slot, addr_bits, full name)
     pub(crate) warns: Vec<(u64, u32, String)>,
@@ -1767,17 +1773,17 @@ pub(crate) struct RunCoreDesc {
 // Boot-descriptor section tags (sidecar v2, after the RLE runs:
 // b"TRSBOOTD", u64 section count, then per section u64 tag + u64
 // payload byte length + payload padded to 8).
-const RC_SEC_STRINGS: u64 = 1;
-const RC_SEC_PATHS: u64 = 2;
-const RC_SEC_CLOCK: u64 = 3;
-const RC_SEC_COMPS: u64 = 4;
-const RC_SEC_WARNS: u64 = 5;
-const RC_SEC_ELIG: u64 = 6;
+pub(crate) const RC_SEC_STRINGS: u64 = 1;
+pub(crate) const RC_SEC_PATHS: u64 = 2;
+pub(crate) const RC_SEC_CLOCK: u64 = 3;
+pub(crate) const RC_SEC_COMPS: u64 = 4;
+pub(crate) const RC_SEC_WARNS: u64 = 5;
+pub(crate) const RC_SEC_ELIG: u64 = 6;
 // window-bake sections (appended by the link's post-emit bake): the
 // post-reset-window arena image and the clock state at the central-
 // loop engage point — the state a RunCore boot starts from
-const RC_SEC_WARENA: u64 = 7;
-const RC_SEC_WSTATE: u64 = 8;
+pub(crate) const RC_SEC_WARENA: u64 = 7;
+pub(crate) const RC_SEC_WSTATE: u64 = 8;
 
 /// RLE-encode `words` as (value, run) LE u64 pairs onto `out`.
 fn rle_push(words: &[u64], out: &mut Vec<u8>) {
@@ -1797,7 +1803,7 @@ fn rle_push(words: &[u64], out: &mut Vec<u8>) {
 /// Decode (value, run) pairs into exactly `nslots` words; None on any
 /// truncation, overflow, or length mismatch (the boot path must treat
 /// every field of the file as hostile — adversarial-panel finding).
-fn rle_decode(bytes: &[u8], nslots: usize) -> Option<Vec<u64>> {
+pub(crate) fn rle_decode(bytes: &[u8], nslots: usize) -> Option<Vec<u64>> {
     let mut out = Vec::with_capacity(nslots);
     let mut pos = 0;
     while out.len() < nslots {
@@ -1898,11 +1904,28 @@ impl Interp {
         if !sa.edge_ssa {
             ineligible(&mut r_reason, "edge-SSA emission off");
         }
-        if self.needs_user_bdpi() {
-            ineligible(&mut r_reason, "user BDPI imports");
+        // rung 3a: the ONLY foreign imports the boot services natively
+        // are the two library ones (rand32/srand — a fresh GlibcRandom
+        // matches the classic engine's fresh stream, and any window-
+        // time draw already makes the window unskippable); anything
+        // else, or an aliased name, boots classic.  Exactness matters:
+        // the boot PANICS on an unexpected task rather than fall back,
+        // so this gate must make that unreachable.
+        let lib_only = self.d.foreign_funcs.iter().all(|f| {
+            let (n, c) = (self.s(f.name), self.s(f.c_name));
+            (n == "rand32" && c == "rand32") || (n == "srand" && c == "srand")
+        });
+        if !lib_only {
+            ineligible(&mut r_reason, "foreign (BDPI) imports");
         }
         if sa.boxed {
             ineligible(&mut r_reason, "boxed prims (lazy Reflect pending)");
+        }
+        if sa.prim_sites {
+            ineligible(
+                &mut r_reason,
+                "compiled prim call sites (lazy Reflect pending)",
+            );
         }
         if !driver_clock.is_empty() {
             ineligible(&mut c_reason, "driver clocks");
@@ -4973,6 +4996,10 @@ impl Interp {
                             != Ok("0"),
                         // attach lists exactly the slot-allocated prims
                         boxed: nprims != attach.len(),
+                        prim_sites: protos.iter().any(|p| {
+                            !p.sched_prims.is_empty()
+                                || !p.exec_prims.is_empty()
+                        }),
                         warns,
                     });
                 }

@@ -25,6 +25,8 @@ mod bdpi;
 mod foreign;
 #[cfg(feature = "aot")]
 mod jit;
+#[cfg(feature = "aot")]
+mod runcore;
 
 use foreign::ForeignEnv;
 use format::Arg;
@@ -67,20 +69,20 @@ fn is_lib_bdpi(c_name: &str) -> bool {
 /// stdout with divergent Randomize-fed state).  Verified word-exact
 /// against glibc for 1000 draws under the default seed and srandom(N)
 /// reseeding (scratch rngtest.c).
-struct GlibcRandom {
+pub(crate) struct GlibcRandom {
     state: [u32; 31],
     f: usize,
     r: usize,
 }
 
 impl GlibcRandom {
-    fn new() -> GlibcRandom {
+    pub(crate) fn new() -> GlibcRandom {
         // glibc's initial state is as if srandom(1)
         let mut g = GlibcRandom { state: [0; 31], f: 3, r: 0 };
         g.srandom(1);
         g
     }
-    fn srandom(&mut self, seed: u32) {
+    pub(crate) fn srandom(&mut self, seed: u32) {
         let seed = if seed == 0 { 1 } else { seed };
         self.state[0] = seed;
         for i in 1..31 {
@@ -101,7 +103,7 @@ impl GlibcRandom {
             self.next();
         }
     }
-    fn next(&mut self) -> u32 {
+    pub(crate) fn next(&mut self) -> u32 {
         self.state[self.f] = self.state[self.f].wrapping_add(self.state[self.r]);
         let res = (self.state[self.f] >> 1) & 0x7fff_ffff;
         self.f = (self.f + 1) % 31;
@@ -5358,6 +5360,19 @@ pub fn run_file(
     formats: Option<(bool, bool)>,
     selfcheck: Option<(u64, bool)>,
 ) -> Result<i32, String> {
+    // RunCore boot (TRS_RUNCORE=1, docs/RUNCORE.md): a wave-free,
+    // selfcheck-free artifact run whose sidecar carries an eligible
+    // descriptor + baked window boots here — no design decode, no
+    // Interp, no plan.  Every gate failure falls through silently to
+    // the classic boot below.
+    #[cfg(feature = "aot")]
+    if selfcheck.is_none() && wave.is_none() && vcd_file.is_none() {
+        if let Some(so) = code {
+            if let Some(rc) = runcore::try_boot(so, max_cycles, plusargs) {
+                return Ok(rc);
+            }
+        }
+    }
     let mut interp = startup::load_file_or_code(path, code, plusargs, vcd_file)?;
     if let Some((vcd, fst)) = formats {
         interp.set_allowed_wave_formats(vcd, fst);
