@@ -5570,6 +5570,26 @@ pub fn run_self(max_cycles: u64, plusargs: &[String]) -> Result<i32, String> {
     Ok(interp.run(max_cycles))
 }
 
+/// CLI teardown (tax-payment doctrine: exit pays nothing per run):
+/// run to completion, finalize the one sink that needs a real close
+/// (FST's tables are written by fstWriterClose in Drop; text waves
+/// are fully flushed by finish() inside run(); $fopen files are raw
+/// fds, closed by process exit), then LEAK the engine — the only
+/// caller is `trs run`, which _exit()s immediately, so dropping the
+/// whole design (measured 12.5M Ir on CrossingFIFOLoop, 16% of the
+/// small-run gap) buys nothing.  TRS_TEARDOWN=drop restores full
+/// drops (memcheck/leak hunting).  capi engines never come here —
+/// bk_shutdown owns their teardown.
+fn run_and_release(mut interp: Interp, max_cycles: u64) -> i32 {
+    let rc = interp.run(max_cycles);
+    if std::env::var_os("TRS_TEARDOWN").is_some_and(|v| v == "drop") {
+        return rc;
+    }
+    let _ = interp.vcd_set_file(None);
+    std::mem::forget(interp);
+    rc
+}
+
 pub fn run_file(
     path: &str,
     max_cycles: u64,
@@ -5598,7 +5618,7 @@ pub fn run_file(
     // they always print (a diverging suite test failing with the
     // report in its log is the point).
     let Some((every, announce)) = selfcheck else {
-        return Ok(interp.run(max_cycles));
+        return Ok(run_and_release(interp, max_cycles));
     };
     if interp.needs_user_bdpi() {
         // dlopen of one path is one refcounted image: user C globals
@@ -5614,7 +5634,7 @@ pub fn run_file(
                  skipped"
             );
         }
-        return Ok(interp.run(max_cycles));
+        return Ok(run_and_release(interp, max_cycles));
     }
     // lockstep selfcheck: quiet shadow engines ride beside the primary
     // — no console/file/VCD output, debug tier (a shadow is an oracle,
