@@ -264,56 +264,8 @@ impl IrTally {
             f = next;
         }
     }
-    /// (instructions, blocks) of the largest-by-instructions function
-    pub fn max_shape(&self) -> (u64, u64) {
-        self.per_fn
-            .iter()
-            .map(|&(_, i, b)| (i, b))
-            .max_by_key(|&(i, _)| i)
-            .unwrap_or((0, 0))
-    }
 }
 
-/// (instructions, blocks) of the module's largest-by-instructions
-/// function (see the O1 size tier in run_ir_passes).
-fn module_max_fn_shape(module: &Module) -> (u64, u64) {
-    let mut max = (0u64, 0u64);
-    let mut f = module.get_first_function();
-    while let Some(func) = f {
-        let mut n = 0u64;
-        let mut b = 0u64;
-        for bb in func.get_basic_blocks() {
-            b += 1;
-            let mut ins = bb.get_first_instruction();
-            while let Some(i) = ins {
-                n += 1;
-                ins = i.get_next_instruction();
-            }
-        }
-        if n > max.0 {
-            max = (n, b);
-        }
-        f = func.get_next_function();
-    }
-    max
-}
-
-/// Above this size (instructions in one function), a STRAIGHT-LINE
-/// giant drops the default AOT pipeline from O3 to O1.  LLVM's O2/O3
-/// function passes are superlinear in function size: a rule-heavy
-/// composition's fused edge fn (sysBRAM0Test: 67k insns / 3.4k blocks
-/// from 776 inlined rules, ~20 insns/block) measured 139.6s under
-/// default<O3> vs 24.8s under default<O1> — and the O1 artifact RAN
-/// faster too (24.5 vs 34.9ms; the over-optimized giant loses on
-/// I-cache), output byte-exact.  The tier is shape-gated: a BRANCH-
-/// LADDER giant (sysTb_v1's exec_i2_20: 24.3k insns over 24.0k
-/// blocks, ~1 insn/block) must KEEP O3 — only jump threading and
-/// aggressive SimplifyCFG collapse the ladder, and without them the
-/// backend's TailDuplicator (MachineSSAUpdater PHI search) runs for
-/// hours on the surviving block graph.  Straight-line = at least
-/// IR_PASS_LINE_RATIO instructions per block, on average.
-const IR_PASS_FN_SIZE_CAP: u64 = 20_000;
-const IR_PASS_LINE_RATIO: u64 = 8;
 
 /// Run the LLVM middle-end pipeline on a module when TRS_JIT_OPT
 /// asks for optimization.  The engine/object paths only apply BACKEND
@@ -322,47 +274,59 @@ const IR_PASS_LINE_RATIO: u64 = 8;
 /// `tracked`: the construction-time census, when the caller built one
 /// (the one-module design object) — the width cap and size tier then
 /// read tracked totals instead of re-walking the module.
+/// The AOT pipeline, pass by pass, each with a constructional reason
+/// (per Ravi: no generic levels — enable specific optimizations based
+/// on what we know about our output).  Our IR is loop-free straight-
+/// line arena load/store code, so the O-bundles' loop machinery is
+/// pure compile time; what pays is:
+///   inline           — flatten scheds/helpers into the fused edges
+///                      (the whole point of one-module emission)
+///   early-cse<memssa>— kill the redundant arena loads section
+///                      lowering emits back-to-back
+///   instcombine      — fold slot GEP chains, masks, extends
+///   simplifycfg      — collapse guard diamonds
+///   jump-threading   — collapse case-cone branch LADDERS (without
+///                      this, DFT64's 24k-block body reaches the
+///                      backend un-collapsed and TailDuplicator's
+///                      PHI search runs for minutes-to-hours:
+///                      default<O1> measured 772.8s vs 55.0s here)
+///   gvn, dse         — cross-section load/store redundancy the
+///                      edge-SSA plan's doctrine keeps conservative
+///   instcombine,
+///   simplifycfg      — clean up what gvn/jump-threading exposed
+/// Measured against default<O3> on the five witness shapes (all
+/// byte-exact): links 13.7->10.6s (FloatTest), 27.4->23.0
+/// (BRAM0Test), ties on the rest — and RUNTIME improves too
+/// (FloatTest 70.7->63.1ms); the giant-function O1 shape tier this
+/// replaces is obsolete (this list has no superlinear-in-size pass).
+/// instcombine must be spelled no-verify-fixpoint: the textual pass
+/// defaults to max-iterations=1 and ABORTS on non-convergence.
+const AOT_PIPELINE: &str = "cgscc(inline),function(early-cse<memssa>,\
+    instcombine<no-verify-fixpoint>,simplifycfg,jump-threading,gvn,dse,\
+    instcombine<no-verify-fixpoint>,simplifycfg)";
+
 fn run_ir_passes(
     module: &Module,
     tracked: Option<&IrTally>,
 ) -> Result<(), Ineligible> {
-    // mirror opt_level(): the AOT default is O1 even when the env var
-    // is unset (this silently skipping was why one-module emission
-    // showed zero inlining)
-    let lvl = match std::env::var("TRS_JIT_OPT").as_deref() {
-        Ok("1") => 1,
-        Ok("2") => 2,
-        Ok("3") => 3,
+    // TRS_JIT_OPT forces a generic level (A/B tool); the AOT default
+    // is the bespoke pipeline; the JIT engine path runs none (its
+    // backend codegen opts suffice for warm-up-bound sessions)
+    let pipeline = match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok(l @ ("1" | "2" | "3")) => format!("default<O{l}>"),
         Ok(_) => return Ok(()),
         Err(_) if AOT_MODE.with(|m| m.get()) => {
             // width cap on the DEFAULT pipeline only: LLVM's known-bits
             // reasoning is quadratic in integer width, and one i65536
-            // body wedges default<O1> for minutes (sysInit65536Bit AOT
-            // link timeout).  An explicit TRS_JIT_OPT still forces
-            // the pipeline.
+            // body wedges the pipeline for minutes (sysInit65536Bit
+            // AOT link timeout).  An explicit TRS_JIT_OPT still forces.
             let width = tracked
                 .map(|t| t.max_width)
                 .unwrap_or_else(|| module_max_int_width(module));
             if width > IR_PASS_WIDTH_CAP {
                 return Ok(());
             }
-            // O3 default (measured on the edge-SSA + outline-model
-            // IR: ~22% run for +1s link vs O1; reference ships -O3),
-            // tiered down to O1 for a huge STRAIGHT-LINE function
-            // (see IR_PASS_FN_SIZE_CAP — faster to compile AND to
-            // run; branch-ladder giants must keep O3)
-            {
-                let (insns, blocks) = tracked
-                    .map(|t| t.max_shape())
-                    .unwrap_or_else(|| module_max_fn_shape(module));
-                if insns > IR_PASS_FN_SIZE_CAP
-                    && insns >= blocks.saturating_mul(IR_PASS_LINE_RATIO)
-                {
-                    1
-                } else {
-                    3
-                }
-            }
+            AOT_PIPELINE.to_string()
         }
         Err(_) => return Ok(()),
     };
@@ -374,8 +338,8 @@ fn run_ir_passes(
     }
     // debugging escape: run an arbitrary pipeline string instead
     // (miscompile bisection — e.g. "default<O1>,gvn")
-    let pipeline = std::env::var("TRS_JIT_PIPELINE")
-        .unwrap_or_else(|_| format!("default<O{lvl}>"));
+    let pipeline =
+        std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
     module
         .run_passes(&pipeline, &tm, opts)
         .map_err(|e| Ineligible(format!("IR passes: {e}")))
