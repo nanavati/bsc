@@ -70,8 +70,8 @@
       </contassign>
     </module>
     <typetable loc="a,0,0,0,0">
-      <basicdtype loc="c,50,22,50,24" id="1" name="logic"/>
-      <voiddtype loc="c,51,21,51,30" id="4"/>
+      <basicdtype loc="c,43,22,43,24" id="1" name="logic"/>
+      <voiddtype loc="c,45,18,45,27" id="4"/>
       <basicdtype loc="d,9,10,9,11" id="2" name="logic" left="7" right="0"/>
       <basicdtype loc="d,14,34,14,35" id="3" name="logic" left="31" right="0"/>
     </typetable>

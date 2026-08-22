@@ -27,9 +27,9 @@ def build(vlt, contract, workdir):
     (work / "meta.json").write_text(json.dumps(meta, indent=2))
 
     if meta["has_delay"]:
-        raise SystemExit(f"REFUSE(delay): {top} contains delays")
+        raise SystemExit(f"REFUSE(delay): {top} contains delay constructs")
     if meta["has_dpi"]:
-        raise SystemExit(f"REFUSE(dpi): {top} contains DPI")
+        raise SystemExit(f"REFUSE(dpi): {top} imports/exports DPI")
 
     chash = shimgen.gen(contract, meta, work / "shim.cpp")
 
@@ -43,6 +43,10 @@ def build(vlt, contract, workdir):
         capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit(f"verilate failed:\n{r.stderr}")
+    # DPI backstop: verilator emits V<top>__Dpi.h iff DPI is present --
+    # deterministic on every version (5.020's XML has no DPI marker).
+    if (obj / f"V{top}__Dpi.h").exists():
+        raise SystemExit(f"REFUSE(dpi): {top} imports/exports DPI (V{top}__Dpi.h emitted)")
     r = subprocess.run(
         ["make", "-s", "-C", str(obj), "-f", f"V{top}.mk",
          f"V{top}__ALL.a", "verilated.o", "verilated_threads.o"],

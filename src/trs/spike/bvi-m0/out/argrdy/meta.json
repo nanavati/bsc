@@ -46,6 +46,6 @@
   ],
   "params": {},
   "has_delay": false,
-  "has_dpi": false,
+  "has_dpi": null,
   "timeprecision": null
 }

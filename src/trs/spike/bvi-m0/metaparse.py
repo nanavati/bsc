@@ -30,7 +30,11 @@ def pick_format(vlt):
 
 
 def run_dump(vlt, top, sources, ydirs, defines, mdir, fmt):
-    cmd = [vlt, "--cc", "--no-timing", f"--{fmt}-only",
+    # NOTE (M0 discovery): the inspection dump runs with --timing so
+    # delay constructs SURVIVE into the AST -- under --no-timing
+    # verilator discards them before dumping and no warning fires,
+    # so a --no-timing dump cannot power a delay refusal.
+    cmd = [vlt, "--cc", "--timing", f"--{fmt}-only",
            "--top-module", top, "-Mdir", str(mdir)]
     for d in ydirs:
         cmd += ["-y", str(d)]
@@ -75,8 +79,12 @@ def _parse_xml(path, top):
                 params[attrs.get("origName", attrs["name"])] = attrs.get("value")
     if not found_top:
         raise RuntimeError(f"top module {top!r} not found in XML dump")
-    has_delay = "<delay" in text or 'name="#' in text
-    has_dpi = "dpiImport" in text or "dpiExport" in text or 'dpi="' in text
+    has_delay = "<delay" in text
+    # M0 discovery: 5.020's XML carries NO DPI marker at all -- a DPI
+    # import's <func> is indistinguishable from a plain function.
+    # has_dpi=None means UNKNOWN; the caller must backstop by checking
+    # for V<top>__Dpi.h emission after the real --cc run.
+    has_dpi = None
     ts = re.search(r'timeprecision="([^"]*)"', text)
     return {"format": "xml", "ports": ports, "params": params,
             "has_delay": has_delay, "has_dpi": has_dpi,
@@ -95,54 +103,59 @@ def _walk_json(node, fn):
 
 def _parse_json(path, top):
     tree = json.loads(Path(path).read_text())
+    # pass 1: dtype table -- nodes with an addr and a bit range
+    widths = {}
+    def collect_types(n):
+        if isinstance(n, dict) and n.get("addr") and "DTYPE" in str(n.get("type", "")):
+            rng = n.get("range")
+            if rng:
+                m = re.match(r"(\d+):(\d+)", str(rng))
+                widths[n["addr"]] = (abs(int(m.group(1)) - int(m.group(2))) + 1) if m else 1
+            else:
+                widths[n["addr"]] = 1
+    _walk_json(tree, collect_types)
+
     ports, params = [], {}
-    state = {"in_top": False, "has_delay": False, "has_dpi": False,
+    state = {"has_delay": False, "has_dpi": False,
              "timeprecision": None, "found_top": False}
-    # JSON tree: nodes carry "type" ("MODULE", "VAR", ...); VARs under the
-    # top MODULE with a direction are ports.  Field names verified against
-    # the built 5.050 in the M0 gate (see driver.py --check-adapter).
+
     def visit_module(mod):
-        if mod.get("type") != "MODULE" or mod.get("name") != top:
+        if not (isinstance(mod, dict) and mod.get("type") == "MODULE"
+                and mod.get("name") == top):
             return
         state["found_top"] = True
+        pin = [0]
         def visit(n):
             if not isinstance(n, dict):
                 return
             t = n.get("type")
             if t == "VAR":
-                direction = n.get("direction") or n.get("dir")
-                if direction and direction not in ("NONE", ""):
+                direction = n.get("direction")
+                if n.get("isPrimaryIO") and direction and direction != "NONE":
+                    pin[0] += 1
                     ports.append({
-                        "name": n.get("name"),
+                        "name": n.get("verilogName", n.get("name")),
                         "orig_name": n.get("origName", n.get("name")),
                         "dir": direction.lower(),
-                        "width": _json_width(n),
-                        "pin_index": int(n.get("pinIndex", 0) or 0),
+                        "width": widths.get(n.get("dtypep"), 1),
+                        "pin_index": pin[0],
                     })
-                elif n.get("isParam") or n.get("varType") == "GPARAM":
-                    params[n.get("origName", n.get("name"))] = n.get("value")
-            if t in ("DELAY", "TIMINGCONTROL"):
+                elif n.get("varType") == "GPARAM":
+                    params[n.get("origName", n.get("name"))] = None
+            if t in ("DELAY", "DELAYSCHEDULER") or (t == "TIMINGCONTROL"):
                 state["has_delay"] = True
-            if t in ("CFUNC",) and n.get("dpiImport"):
+            if isinstance(n.get("dpiImport"), bool) and n["dpiImport"]:
+                state["has_dpi"] = True
+            if n.get("dpiExport"):
                 state["has_dpi"] = True
         _walk_json(mod, visit)
+
     _walk_json(tree, visit_module)
     if not state["found_top"]:
         raise RuntimeError(f"top module {top!r} not found in JSON dump")
     return {"format": "json", "ports": ports, "params": params,
             "has_delay": state["has_delay"], "has_dpi": state["has_dpi"],
             "timeprecision": state["timeprecision"]}
-
-
-def _json_width(n):
-    dt = n.get("dtype") or {}
-    if isinstance(dt, dict) and "left" in dt and dt["left"] is not None:
-        return abs(int(dt["left"]) - int(dt["right"])) + 1
-    rng = n.get("range") or ""
-    m = re.match(r"\[(\d+):(\d+)\]", str(rng))
-    if m:
-        return abs(int(m.group(1)) - int(m.group(2))) + 1
-    return 1
 
 
 def extract(vlt, top, sources, ydirs=(), defines=None, workdir="obj_meta"):
