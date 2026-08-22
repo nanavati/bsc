@@ -1,0 +1,51 @@
+{
+  "format": "xml",
+  "ports": [
+    {
+      "name": "CLK",
+      "orig_name": "CLK",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 1
+    },
+    {
+      "name": "RST_N",
+      "orig_name": "RST_N",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 2
+    },
+    {
+      "name": "EN_bump",
+      "orig_name": "EN_bump",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 3
+    },
+    {
+      "name": "bump_amt",
+      "orig_name": "bump_amt",
+      "dir": "input",
+      "width": 8,
+      "pin_index": 4
+    },
+    {
+      "name": "count",
+      "orig_name": "count",
+      "dir": "output",
+      "width": 8,
+      "pin_index": 5
+    },
+    {
+      "name": "RDY_bump",
+      "orig_name": "RDY_bump",
+      "dir": "output",
+      "width": 1,
+      "pin_index": 6
+    }
+  ],
+  "params": {},
+  "has_delay": false,
+  "has_dpi": false,
+  "timeprecision": null
+}
