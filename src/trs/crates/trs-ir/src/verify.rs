@@ -165,8 +165,23 @@ fn verify_bvi(
             return Err(bad("path must run input -> output".into()));
         }
     }
+    let check_val = |v: &crate::bvi::BviParamValue| -> Result<(), VerifyError> {
+        match v {
+            crate::bvi::BviParamValue::Bits { hex, .. } => check(*hex),
+            crate::bvi::BviParamValue::Str(s) => check(*s),
+            _ => Ok(()),
+        }
+    };
     for prm in &c.params {
         check(prm.name)?;
+        check_val(&prm.value)?;
+    }
+    for (pi, v) in &c.const_args {
+        pidx(*pi, "const arg")?;
+        if c.ports[*pi as usize].kind != BviPortKind::ConstArg {
+            return Err(bad("const_args index does not name a ConstArg port".into()));
+        }
+        check_val(v)?;
     }
     Ok(())
 }

@@ -76,6 +76,7 @@ data MState = MState {
        , m_verbose :: Bool
        , m_ifc_path :: [String]
        , m_backend :: Maybe Backend
+       , m_allow_foreign :: Bool
        , m_foreign_mods :: [String]
        , m_abmis_used :: [(String, (ABinEitherModInfo, String))]
        , m_abis_unused :: [(String, (String, ABin))]
@@ -124,13 +125,17 @@ putHierMap m = get >>= \s -> put (s { m_foundmod_map = m })
 
 
 -- prim_names = list of primtives which don't need .ba files
+-- allow_foreign = accept import-BVI instances instead of erroring for
+-- the Bluesim backend (the trs backend imports them via Verilator;
+-- pass False everywhere else so classic Bluesim keeps G0084)
 getABIHierarchy ::
-    ErrorHandle -> Bool -> [String] -> (Maybe Backend) ->
+    ErrorHandle -> Bool -> [String] -> (Maybe Backend) -> Bool ->
     [String] -> String -> [(String, ABin)] ->
     ExceptT EMsgs IO
         (Id, HierMap, InstModMap, ForeignFuncMap, ABinMap, [String],
          [(String, (ABinEitherModInfo, String))])
-getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
+getABIHierarchy errh be_verbose ifc_path backend allow_foreign
+                prim_names topname fabis = do
     -- pair the abis with their module name
     let
         pair_with_name (f,abi) = (getIdString (getABIName abi), (f,abi))
@@ -142,6 +147,7 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
                      m_verbose = be_verbose,
                      m_ifc_path = ifc_path,
                      m_backend = backend,
+                     m_allow_foreign = allow_foreign,
                      m_foreign_mods = [],
                      m_abmis_used = [],
                      m_abis_unused = fabis_by_name,
@@ -275,8 +281,12 @@ followABMIHierarchy curpkg = do
               then return ()
               else do
                   -- error if the backend is Bluesim
+                  -- (unless foreign imports were explicitly allowed:
+                  -- the trs backend links them via Verilator)
                   backend <- getBackend
+                  allow_foreign <- get >>= return . m_allow_foreign
                   when ((backend == (Just Bluesim)) &&
+                        (not allow_foreign) &&
                         (not (null foreign_avis))) $
                       let parent = getIdString (apkg_name curpkg)
                           pos = getPosition (avi_vname avi)

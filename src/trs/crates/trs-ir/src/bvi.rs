@@ -58,6 +58,11 @@ pub struct BviContract {
     /// source must not fingerprint-match a different elaboration).
     #[serde(default)]
     pub defines: Vec<(StrId, Option<StrId>)>,
+    /// Constant module Port arguments: (port index, value).  Driven once
+    /// at construction, before the startup eval — unlike `params` these
+    /// are runtime port drives, not verilate-time `-G` bakes.
+    #[serde(default)]
+    pub const_args: Vec<(u32, BviParamValue)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +234,7 @@ mod tests {
             vpath: vec![],
             vfiles: vec![],
             defines: vec![],
+            const_args: vec![],
         }
     }
 

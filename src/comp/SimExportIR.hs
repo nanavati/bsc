@@ -56,6 +56,9 @@ import ASyntaxUtil (aVars, tupleElemRange, argInputPorts)
 import SimCCBlock (SimCCFnStmt(..))
 import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg)
+import SimBvi (BviInfo(..), BviPortI(..), BviMethodI(..), BviClockI(..),
+               BviResetI(..), BviParamValueI(..), BviDirI(..), BviKindI(..),
+               BviMethodKindI(..), deriveBvi, isBviImport)
 import SimDomainInfo (DomainInfo(..))
 import ForeignFunctions (ForeignFunction(..), ForeignType(..))
 import ASyntax
@@ -140,23 +143,35 @@ encStr = C.encodeString . T.pack
 -- ===============
 -- SimSystem -> BIR
 
+-- | Compile environment carried into BVI contracts: Verilog search
+-- path (-vsearch) and -D defines, from Flags at the call site.
+type BviEnv = ([String], [String])
+
 -- | Encode a 'SimSystem' as a BIR design document.
-simSystemToBir :: Bool -> M.Map String (S.Set AId) -> SimSystem
+simSystemToBir :: Bool -> BviEnv -> M.Map String (S.Set AId) -> SimSystem
                -> L.ByteString
-simSystemToBir keepF symMap ssys =
-    CW.toLazyByteString (encDesign keepF symMap ssys)
+simSystemToBir keepF bviEnv symMap ssys =
+    CW.toLazyByteString (encDesign keepF bviEnv symMap ssys)
 
 -- | Write the design's .bir file.
-writeBirFile :: FilePath -> Bool -> M.Map String (S.Set AId) -> SimSystem
-             -> IO ()
-writeBirFile path keepF symMap ssys =
-    L.writeFile path (simSystemToBir keepF symMap ssys)
+writeBirFile :: FilePath -> Bool -> BviEnv -> M.Map String (S.Set AId)
+             -> SimSystem -> IO ()
+writeBirFile path keepF bviEnv symMap ssys =
+    L.writeFile path (simSystemToBir keepF bviEnv symMap ssys)
 
-encDesign :: Bool -> M.Map String (S.Set AId) -> SimSystem -> C.Encoding
-encDesign keepF symMap ssys =
+encDesign :: Bool -> BviEnv -> M.Map String (S.Set AId) -> SimSystem
+          -> C.Encoding
+encDesign keepF bviEnv symMap ssys =
     let pkgs = M.elems (ssys_packages ssys)
         pkgNames = S.fromList (map (getIdBaseString . sp_name) pkgs)
         instmap = M.toList (ssys_instmap ssys)
+
+        -- Verilog module names of BVI imports: their schedule ticks
+        -- bypass the primMap direction specs (direction Both)
+        bviMods = S.fromList
+            [ getVNameString (vName (avi_vmi avi))
+            | p <- pkgs, avi <- M.elems (sp_state_instances p)
+            , isBviImport avi ]
 
         -- per-module schedule analysis (segments, exec order, disjointness)
         msis = M.fromList [ (getIdBaseString (sp_name p),
@@ -172,14 +187,15 @@ encDesign keepF symMap ssys =
         action :: EncM [(String, C.Encoding)]
         action = do
           topId <- str (getIdBaseString (ssys_top ssys))
-          modsEnc <- mapM (\p -> encModule pkgNames
+          modsEnc <- mapM (\p -> encModule pkgNames bviEnv
                                    (msis M.! getIdBaseString (sp_name p))
                                    (M.findWithDefault S.empty
                                       (getIdBaseString (sp_name p)) symMap)
                                    p)
                           pkgs
           instEnc <- mapM (\(p, m) -> encPair <$> strE p <*> strE m) instmap
-          compsEnc <- concat <$> mapM (encComposition instToMod msis topGates)
+          compsEnc <- concat <$> mapM (encComposition instToMod msis topGates
+                                                      bviMods)
                                        (ssys_schedules ssys)
           ffEnc <- mapM encForeignFunc (M.toList (ssys_ffuncmap ssys))
           clkId <- traverse str (ssys_default_clk ssys)
@@ -330,8 +346,8 @@ qualPath i = case getIdQualString i of
 
 encComposition :: M.Map String String
                -> M.Map String ModSchedInfo
-               -> [AId] -> SimSchedule -> EncM [C.Encoding]
-encComposition instToMod msis topGates ss = do
+               -> [AId] -> S.Set String -> SimSchedule -> EncM [C.Encoding]
+encComposition instToMod msis topGates bviMods ss = do
     let segmaps = M.map msi_segIdx msis
 
         -- resolve a merged node to (instance path, segment index) plus
@@ -555,8 +571,17 @@ encComposition instToMod msis topGates ss = do
                                (l : _) -> l
                                [] -> []
                 dir_ok = if wantPos then tickIsPos else tickIsNeg
-            in  if any (\td -> tickElem td == getIdBaseString port && dir_ok td)
-                       tick_specs
+            in  if pname `S.member` bviMods
+                -- BVI imports tick BOTH directions: the model's clock
+                -- port follows the raw oscillator on both edges (design
+                -- §4.4).  The gate expr rides along as the LEVEL to
+                -- drive the model's gate port, never as a tick
+                -- suppressor.
+                then Just (getIdQualString prim, getIdBaseString prim,
+                           getIdBaseString port, aclock_gate clk)
+                else if any (\td -> tickElem td == getIdBaseString port
+                                    && dir_ok td)
+                            tick_specs
                 then Just (getIdQualString prim, getIdBaseString prim,
                            getIdBaseString port, aclock_gate clk)
                 else Nothing
@@ -697,9 +722,9 @@ oscName clk = case aclock_osc clk of
 -- ===============
 -- Modules
 
-encModule :: S.Set String -> ModSchedInfo -> S.Set AId -> SimPackage
-          -> EncM C.Encoding
-encModule pkgNames msi symSet pkg = do
+encModule :: S.Set String -> BviEnv -> ModSchedInfo -> S.Set AId
+          -> SimPackage -> EncM C.Encoding
+encModule pkgNames bviEnv msi symSet pkg = do
     nameId <- idE (sp_name pkg)
     domsEnc <- mapM encClockDomain (sp_clock_domains pkg)
     rstsEnc <- mapM encReset (sp_reset_list pkg)
@@ -708,7 +733,8 @@ encModule pkgNames msi symSet pkg = do
     -- warnings): match the C++ backend's alphabetization (raw_avis)
     let avis = sortBy (\a b -> avi_vname a `cmpIdByName` avi_vname b)
                       (M.elems (sp_state_instances pkg))
-    instsEnc0 <- mapM (encInstance pkgNames (sp_method_order_map pkg)) avis
+    instsEnc0 <- mapM (encInstance pkgNames bviEnv (sp_method_order_map pkg))
+                      avis
     -- noinline functions instantiate as argument-less modules whose one
     -- value method computes the function
     niEnc <- mapM (\(iname, mname) -> do
@@ -908,19 +934,30 @@ encPortRaw nameEnc w kind =
       , ("kind", encUnitVariant kind)
       ]
 
-encInstance :: S.Set String -> MethodOrderMap -> AVInst -> EncM C.Encoding
-encInstance pkgNames mom avi = do
+encInstance :: S.Set String -> BviEnv -> MethodOrderMap -> AVInst
+            -> EncM C.Encoding
+encInstance pkgNames bviEnv mom avi = do
     nameId <- idE (avi_vname avi)
     let modName = getVNameString (vName (avi_vmi avi))
     kindEnc <-
-      if modName `S.member` pkgNames
+      if isBviImport avi
+        -- import-BVI instance: carry the full Verilator-link contract.
+        -- The refusal suite already ran in SimExpand (checkBviPackage);
+        -- a Left here is a compiler bug, not a user error.
+        then encVariant "Bvi" <$> encBviContract bviEnv avi
+        else if modName `S.member` pkgNames
         then encVariant "Module" <$> strE modName
         -- P0 TODO: map primitives to their structured kinds (Reg, Fifo,
         -- ...) instead of Other; the structured mapping lands with codegen.
         else do mEnc <- strE modName
                 return $ encVariant "Prim"
                            (encVariant "Other" (encStruct [("name", mEnc)]))
-    argsEnc <- mapM encExpr (avi_iargs avi)
+    argsEnc <- if isBviImport avi
+                 -- BVI instantiation args (params, const ports, clocks,
+                 -- resets) are fully carried by the contract; the
+                 -- generic expr encoder would choke on ASClock/ASReset
+                 then return []
+                 else mapM encExpr (avi_iargs avi)
     -- name-sorted: the set is (AId, AId) pairs and AId's Ord follows
     -- run/context-dependent interned-FString order — the encoded list
     -- is a constraint RELATION, so canonical order is free (and .bir
@@ -940,6 +977,120 @@ encInstance pkgNames mom avi = do
       , ("method_order", encList morderEnc)
       , ("port_counts", encList portsEnc)
       ]
+
+-- BVI contract encoding (InstanceKind::Bvi, trs-ir/src/bvi.rs).  The
+-- derivation and its refusal suite live in SimBvi; refusals were raised
+-- as user errors in SimExpand, so failure here is an internal error.
+encBviContract :: BviEnv -> AVInst -> EncM C.Encoding
+encBviContract (vpath, defs) avi =
+    case deriveBvi avi of
+      Left tags ->
+          internalError ("SimExportIR.encBviContract: refusals escaped " ++
+                         "SimExpand.checkBviPackage:\n" ++ unlines tags)
+      Right bi -> do
+        let encIdx :: Int -> C.Encoding
+            encIdx = encW32 . fromIntegral
+            encDir BviInput  = encUnitVariant "Input"
+            encDir BviOutput = encUnitVariant "Output"
+            encKind KClock        = encUnitVariant "Clock"
+            encKind KClockGate    = encUnitVariant "ClockGate"
+            encKind KReset        = encUnitVariant "Reset"
+            encKind KEnable       = encUnitVariant "Enable"
+            encKind KRdy          = encUnitVariant "Rdy"
+            encKind KMethodArg    = encUnitVariant "MethodArg"
+            encKind KMethodResult = encUnitVariant "MethodResult"
+            encKind KConstArg     = encUnitVariant "ConstArg"
+            encMKind MKValue       = encUnitVariant "Value"
+            encMKind MKAction      = encUnitVariant "Action"
+            encMKind MKActionValue = encUnitVariant "ActionValue"
+            encPV (PVIntSigned w v) = return $ encVariant "IntSigned" $
+                encStruct [ ("width", encW32 (fromIntegral w))
+                          , ("value", C.encodeInt64 (fromIntegral v)) ]
+            encPV (PVBits w hex) = do
+                hE <- strE hex
+                return $ encVariant "Bits" $
+                    encStruct [ ("width", encW32 (fromIntegral w))
+                              , ("hex", hE) ]
+            encPV (PVStr s) = encVariant "Str" <$> strE s
+            encPV (PVReal d) = return $ encVariant "Real" (C.encodeDouble d)
+            splitDef s = case break (== '=') s of
+                           (k, '=' : v) -> (k, Just v)
+                           (k, _)       -> (k, Nothing)
+        nameE <- strE (bi_verilog_name bi)
+        portsE <- mapM (\p -> do
+                          nE <- strE (bp_name p)
+                          return $ encStruct
+                            [ ("name", nE)
+                            , ("width", encW32 (fromIntegral (bp_width p)))
+                            , ("dir", encDir (bp_dir p))
+                            , ("kind", encKind (bp_kind p))
+                            , ("props", encW32 (fromIntegral (bp_props p)))
+                            ])
+                       (bi_ports bi)
+        methodsE <- mapM (\m -> do
+                            nE <- strE (bm_name m)
+                            return $ encStruct
+                              [ ("name", nE)
+                              , ("kind", encMKind (bm_kind m))
+                              , ("clock", encMaybe encIdx (bm_clock m))
+                              , ("args", encList (map encIdx (bm_args m)))
+                              , ("results",
+                                 encList (map encIdx (bm_results m)))
+                              , ("enable", encMaybe encIdx (bm_enable m))
+                              , ("rdy", encMaybe encIdx (bm_rdy m))
+                              , ("self_sbr", encBool (bm_self_sbr m))
+                              ])
+                         (bi_methods bi)
+        clocksE <- mapM (\c -> do
+                           nE <- strE (bc_name c)
+                           tE <- strE (bc_tick c)
+                           return $ encStruct
+                             [ ("name", nE)
+                             , ("osc_port", encIdx (bc_osc c))
+                             , ("gate_port", encMaybe encIdx (bc_gate c))
+                             , ("tick_port", tE)
+                             ])
+                        (bi_clocks bi)
+        resetsE <- mapM (\r -> do
+                           nE <- strE (br_name r)
+                           return $ encStruct
+                             [ ("name", nE)
+                             , ("port", encIdx (br_port r))
+                             , ("active_low", encBool (br_active_low r))
+                             ])
+                        (bi_resets bi)
+        paramsE <- mapM (\(n, v) -> do
+                           nE <- strE n
+                           vE <- encPV v
+                           return $ encStruct
+                             [ ("name", nE), ("value", vE) ])
+                        (bi_params bi)
+        cargsE <- mapM (\(i, v) -> encPair (encIdx i) <$> encPV v)
+                       (bi_const_args bi)
+        let pathsE = [ encPair (encIdx a) (encIdx b)
+                     | (a, b) <- bi_paths bi ]
+        vpathE <- mapM strE vpath
+        definesE <- mapM (\d -> do
+                            let (k, mv) = splitDef d
+                            kE <- encW32 <$> str k
+                            vE <- case mv of
+                                    Just v -> encW32 <$> str v
+                                    Nothing -> return C.encodeNull
+                            return (encPair kE vE))
+                         defs
+        return $ encStruct
+          [ ("verilog_name", nameE)
+          , ("ports", encList portsE)
+          , ("methods", encList methodsE)
+          , ("clocks", encList clocksE)
+          , ("resets", encList resetsE)
+          , ("params", encList paramsE)
+          , ("paths", encList pathsE)
+          , ("vpath", encList vpathE)
+          , ("vfiles", encList [])
+          , ("defines", encList definesE)
+          , ("const_args", encList cargsE)
+          ]
 
 -- ActionValue results are read through the synthetic temp def that the
 -- corresponding AvAction statement latches -- never by re-invoking the

@@ -1042,7 +1042,7 @@ tclModule ["load",topname] = do
       <- convExceptTToIO globalErrHandle $
          getABIHierarchy globalErrHandle
                          (verbose flags) (ifcPath flags) (Just gen_backend)
-                         prim_names topname []
+                         False prim_names topname []
   let modnames = map fst abmis_by_name
   let res = (topmodId, hierMap, instModMap, ffuncMap, foreign_mods,
              [(n,mi) | (n,(mi,_)) <- abmis_by_name])

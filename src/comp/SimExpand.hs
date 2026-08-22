@@ -2,7 +2,7 @@
 module SimExpand ( simExpand, simExpandSched, simCheckPackage ) where
 
 import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList)
-import Data.List (partition, union, nub, sort, sortBy, delete, intercalate)
+import Data.List (partition, union, nub, nubBy, sort, sortBy, delete, intercalate)
 import Control.Monad (when, guard, msum {-, mapM_ -})
 import Debug.Trace
 import qualified Data.Map as M
@@ -32,6 +32,7 @@ import AScheduleInfo
 import AUses(MethodId(..))
 import Params(isConstAExpr)
 import SimPackage
+import SimBvi(checkBviPackage, isBviImport)
 import SimPrimitiveModules(getPrimDomainInfo, checkBluesimPrimitives)
 import SimCCBlock(SimCCBlock(..), primBlocks)
 import SchedInfo (methodConflictInfo, sSB)
@@ -64,10 +65,12 @@ simExpand errh flags topname fabis = do
     -- (to put in the list of mods we don't need .ba for)
     let prim_names = map sb_name primBlocks
 
+    -- the trs backend accepts import-BVI instances (linked via
+    -- Verilator); classic Bluesim keeps the G0084 refusal
     (topmodId, hiermap, instmap, ffuncmap, filemap, _, emodinfos_used_by_name)
         <- convExceptTToIO errh $
            getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
-                           prim_names topname fabis
+                           (genTrs flags) prim_names topname fabis
 
     modinfos_used_by_name <- convExceptTToIO errh $
                              assertNoSchedErr emodinfos_used_by_name
@@ -119,6 +122,12 @@ simExpand errh flags topname fabis = do
 
     simpkgs <- mapM (simExpandABin errh flags) (map snd modinfos_used_by_name)
     let pkg_map = M.fromList (map (\p -> (sp_name p,p)) simpkgs)
+
+    -- BVI-import refusal suite (trs backend only; foreign instances
+    -- cannot reach this point otherwise): contract-local checks plus
+    -- the self-SBR ActionValue atomic-read condition
+    let bvi_msgs = concatMap checkBviPackage simpkgs
+    when (not (null bvi_msgs)) $ bsError errh bvi_msgs
 
     -- record default clock and reset for top module
     let def_clk = msum $ [ lookup idDefaultClock xs
@@ -679,6 +688,28 @@ makeDomainMaps cds rs insts iface =
         prim_names = map sb_name primBlocks
 
         accumPrim :: AVInst -> DomainInfoMap -> DomainInfoMap
+        -- BVI imports (trs backend): register the instance under each
+        -- distinct bound AClock so the schedule export emits edge ticks
+        -- for it.  Dedup by the WHOLE AClock (oscillator AND gate):
+        -- same-clock args share one QualifiedTick and commit batched;
+        -- distinct gates need distinct tick gate exprs.  No reset ticks
+        -- (reset levels join the batched commit instead).
+        accumPrim p map_so_far
+          | isBviImport p =
+            let pid = avi_vname p
+                clk_infos = nubBy (\a b -> fst a == fst b)
+                              [ (aclk, arg_id)
+                                | (ClockArg arg_id, clk_expr) <- getInstArgs p,
+                                  let aclk = getClkFromAExpr clk_expr,
+                                  not (isNoClock aclk)
+                                  ]
+                infoToEntry (aclk, arg_id) =
+                  (findDomainId domain_id_map aclk,
+                   singlePrim (pid, (arg_id, aclk)) False)
+                new_map = M.fromListWith joinDomainInfo
+                                         (map infoToEntry clk_infos)
+            in
+                M.unionWith joinDomainInfo new_map map_so_far
         accumPrim p map_so_far
           | (getVNameString (vName (avi_vmi p)) `notElem` prim_names) = map_so_far
         accumPrim p map_so_far =
@@ -1124,8 +1155,14 @@ combineSchedInfos abis hiermap instmap pu_map curmod smap =
                                       Just x -> x
                                       Nothing ->
                                           internalError ("s_csi: " ++ mod)
+                          -- BVI imports (trs) have no ABI of their own:
+                          -- like prims, their clock args were already
+                          -- registered in the parent's domain map by
+                          -- accumPrim, and getPrimDomainInfo's default
+                          -- passes the parent CSI through unchanged
+                          is_foreign = mod `notElem` map fst abis
                       in
-                        if (mod `elem` prim_names)
+                        if (mod `elem` prim_names || is_foreign)
                         then
                           let csi' = combinePrimClocks dom_id_map p_csi
                                                        inst (getAVInst inst)

@@ -306,7 +306,7 @@ hmain argv = do
           when (verbose) $ putStrLn "Reading design data from .ba files..."
           (_, hier_map, inst_map, _, _, _, abemis_by_name)
               <- convExceptTToIO errh $
-                 getABIHierarchy errh verbose ba_path Nothing prim_names top_mod []
+                 getABIHierarchy errh verbose ba_path Nothing False prim_names top_mod []
           abmis_by_name <- convExceptTToIO errh $ assertNoSchedErr abemis_by_name
 
           -- analyze design in preparation for VCD interpretation

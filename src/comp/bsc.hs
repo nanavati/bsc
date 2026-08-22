@@ -140,6 +140,7 @@ import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
 import SimPackage(SimSystem(..), SimSchedule(..))
 import SimPackageOpt(simPackageOpt)
+import SimBvi(spHasBvi)
 import SimExportIR(writeBirFile)
 import qualified Data.ByteString.Lazy as L
 import SimMakeCBlocks(simMakeCBlocks)
@@ -1345,18 +1346,26 @@ genModuleC errh flags dumpnames time0 toplevel abis =
             -- the debug-tier symbol set: defs surviving as C++
             -- members (post-SimCOpt public defs, isOkId-filtered) —
             -- blocks are recomputed here (pure) so the export stays
-            -- decoupled from the C++ generation path below
-            let (sbs, sscheds, scgs, sgis, _sbtop) =
-                    simMakeCBlocks flags sim_system_opt
-                (sbs_opt, _, _, _) =
-                    simCOpt flags (ssys_instmap sim_system_opt)
-                            (sbs, sscheds, scgs, sgis)
-                symMap = M.fromListWith S.union
-                    [ (sb_name sb,
-                       S.fromList [ i | (_, i) <- sb_publicDefs sb
-                                      , isOkId i ])
-                    | sb <- sbs_opt ]
+            -- decoupled from the C++ generation path below.
+            -- BVI-carrying designs skip this: the Bluesim block
+            -- generator has no notion of a foreign instance (it would
+            -- internal-error), so they get an empty symbol map
+            let has_bvi = any spHasBvi
+                              (M.elems (ssys_packages sim_system_opt))
+                symMap | has_bvi = M.empty
+                       | otherwise =
+                    let (sbs, sscheds, scgs, sgis, _sbtop) =
+                            simMakeCBlocks flags sim_system_opt
+                        (sbs_opt, _, _, _) =
+                            simCOpt flags (ssys_instmap sim_system_opt)
+                                    (sbs, sscheds, scgs, sgis)
+                    in  M.fromListWith S.union
+                            [ (sb_name sb,
+                               S.fromList [ i | (_, i) <- sb_publicDefs sb
+                                              , isOkId i ])
+                            | sb <- sbs_opt ]
             writeBirFile (prefix ++ toplevel ++ ".bir") (keepFires flags)
+                         (vPath flags, defines flags)
                          symMap sim_system_opt
 
        -- the -trs backend stops here: the .bir plus the user's C files
@@ -2110,7 +2119,7 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     let prim_names = map sb_name primBlocks
     mhier0 <- runExceptT $
               getABIHierarchy errh
-                  (verbose flags) (ifcPath flags) (Just Verilog)
+                  (verbose flags) (ifcPath flags) (Just Verilog) False
                   prim_names topmod_name user_abis
 
     mhier <- case mhier0 of
