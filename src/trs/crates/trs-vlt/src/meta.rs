@@ -1,9 +1,9 @@
 //! Versioned Verilator metadata adapters (design v4 sec 5.2 item 2).
 //!
 //! The model metadata -- port name mapping (origName -> possibly
-//! mangled member name), widths, directions, parameter list, and the
-//! delay/DPI presence that powers refusals -- is read from a frontend
-//! dump.  Two formats, selected by probing the binary:
+//! mangled member name), widths, directions, parameter list, the delay
+//! presence that selects the --timing build mode, and the DPI presence
+//! that powers the DPI refusal -- is read from a frontend dump.  Two formats, selected by probing the binary:
 //!   XML  (--xml-only): present through 5.045 (the 5.020 floor uses it).
 //!   JSON (--json-only): the replacement from 5.046 onward (5.046+
 //!         hard-reject --xml-only; verified on source-built 5.050).
@@ -14,8 +14,8 @@
 //! - The inspection dump runs with --timing so delay constructs SURVIVE
 //!   into the AST; a --no-timing dump discards them before dumping and
 //!   -Werror-*DLY stays silent in dump-only mode, so a --no-timing dump
-//!   cannot power the delay refusal.  (The model BUILD stays
-//!   --no-timing.)
+//!   cannot detect delays.  (has_delay selects whether the model BUILD
+//!   runs --timing or --no-timing.)
 //! - 5.020's XML carries NO DPI marker at all; `has_dpi: None` means
 //!   UNKNOWN and the builder must backstop by checking for
 //!   V<top>__Dpi.h emission after the real --cc run.

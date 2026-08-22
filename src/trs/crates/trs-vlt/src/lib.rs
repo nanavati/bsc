@@ -7,13 +7,16 @@
 //! class -- (verilator version, shim-generator revision, contract
 //! shape, typed parameters, defines, resolved top file) -- the pipeline
 //! resolves sources, extracts model metadata through the versioned
-//! adapters, applies the inspection refusals (delays, DPI), generates
-//! the engine-neutral shim, builds a shared object, and caches it
+//! adapters, applies the inspection refusals (DPI), generates the
+//! engine-neutral shim, builds a shared object, and caches it
 //! content-addressed over the depfile closure with a per-class lock.
 //!
-//! The build is `--no-timing`; only the metadata INSPECTION dump runs
-//! `--timing` (so delay constructs survive into the dumped AST -- an M0
-//! discovery; see meta.rs).
+//! Delay-bearing models build with `--timing` (verilated_timing.o +
+//! coroutines; the shim's vlt_advance drains internal delayed events);
+//! delay-free models build `--no-timing` as before.  The metadata
+//! INSPECTION dump always runs `--timing` so delay constructs survive
+//! into the dumped AST and select the mode (an M0 discovery; see
+//! meta.rs).
 
 use std::fmt;
 use std::os::unix::io::AsRawFd;
@@ -428,12 +431,10 @@ pub fn build_model_resolved(
         &gparams,
         &meta_dir,
     )?;
-    if m.has_delay {
-        return Err(VltError::refuse(
-            "delay",
-            format!("{top} contains delay constructs (not supported)"),
-        ));
-    }
+    // delay constructs select the --timing build mode (the shim's
+    // vlt_advance then drains internal delayed events between the
+    // kernel's timeslices)
+    let timing = m.has_delay;
     if m.has_dpi == Some(true) {
         return Err(VltError::refuse(
             "dpi",
@@ -445,10 +446,10 @@ pub fn build_model_resolved(
     std::fs::write(&decl_path, shim::PRINTF_DECL_H)
         .map_err(|e| VltError::tool("shim write", format!("{}: {e}", decl_path.display())))?;
 
-    // ---- verilate (--no-timing build) with depfiles.  This runs
-    // BEFORE shim generation so the __Dpi.h backstop below refuses DPI
-    // models with the right tag on XML-era versions (whose metadata
-    // cannot tell) before any contract-vs-model port check.
+    // ---- verilate (--timing iff the model has delays) with depfiles.
+    // This runs BEFORE shim generation so the __Dpi.h backstop below
+    // refuses DPI models with the right tag on XML-era versions (whose
+    // metadata cannot tell) before any contract-vs-model port check.
     let obj = class_dir.join("obj");
     let cflags = format!(
         "-DVL_USER_FATAL -DVL_USER_FINISH -DVL_PRINTF=trs_vlt_printf -include {} -fPIC",
@@ -456,7 +457,7 @@ pub fn build_model_resolved(
     );
     let mut cmd = Command::new(&opts.verilator);
     cmd.arg("--cc")
-        .arg("--no-timing")
+        .arg(if timing { "--timing" } else { "--no-timing" })
         .arg("--x-assign")
         .arg("0")
         .arg("--x-initial")
@@ -512,6 +513,12 @@ pub fn build_model_resolved(
         .arg(format!("V{top}__ALL.a"))
         .arg("verilated.o")
         .arg("verilated_threads.o");
+    if timing {
+        // --timing adds verilated_timing to VM_GLOBAL (the generated
+        // classes.mk sets VM_TIMING=1, which also turns on the
+        // coroutine flags inside verilated.mk)
+        mk.arg("verilated_timing.o");
+    }
     run_logged(mk, "model build")?;
 
     // ---- link the shim into a shared object
@@ -533,8 +540,14 @@ pub fn build_model_resolved(
         .arg("-fPIC")
         .arg("-O2")
         .arg("-std=c++17")
-        .arg("-DVL_USER_FATAL")
-        .arg("-DVL_USER_FINISH")
+        .arg("-DVL_USER_FATAL");
+    if timing {
+        // the shim includes V<top>.h, which pulls verilated_timing.h
+        // for timing models; Verilator's own objects build -std=gnu++17
+        // with this same flag (verilated.mk CFG_CXXFLAGS_COROUTINES)
+        ld.arg("-fcoroutines");
+    }
+    ld.arg("-DVL_USER_FINISH")
         .arg("-DVL_PRINTF=trs_vlt_printf")
         .arg("-include")
         .arg(&decl_path)
@@ -547,8 +560,11 @@ pub fn build_model_resolved(
         .arg(&shim_path)
         .arg(obj.join(format!("V{top}__ALL.a")))
         .arg(obj.join("verilated.o"))
-        .arg(obj.join("verilated_threads.o"))
-        .arg("-lpthread")
+        .arg(obj.join("verilated_threads.o"));
+    if timing {
+        ld.arg(obj.join("verilated_timing.o"));
+    }
+    ld.arg("-lpthread")
         .arg("-lz")
         .arg("-o")
         .arg(&so_path);

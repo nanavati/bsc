@@ -3,8 +3,10 @@
 #   - counter contract verilates end-to-end into a dlopen-checked .so
 #   - cache hit on re-invocation; content invalidation via the depfile
 #     manifest; per-class lock survives concurrent builds
-#   - refusals: delay (via --timing inspection dump), DPI (metadata or
-#     __Dpi.h backstop), contract/model mismatch, unresolvable source
+#   - delay constructs select the --timing build mode (detected via the
+#     --timing inspection dump) and still build end-to-end
+#   - refusals: DPI (metadata or __Dpi.h backstop), contract/model
+#     mismatch, unresolvable source
 #   - `bsc -sim -trs -e` chains into the verilate step, then fails only
 #     with the tagged R4 runtime placeholder
 # Optional: TRS_VERILATOR_NEW=/path/to/post-5.046/bin/verilator (with
@@ -68,7 +70,12 @@ refusal() { # name vpath tag
     elif echo "$out" | grep -q "$3"; then ok "$1"
     else bad "$1 (missing tag $3)" "$out"; fi
 }
-refusal refuse-delay    "$WK/rtl-delay"    "REFUSE(delay)"
+# delay constructs are NOT a refusal: they select the --timing build
+# (each vpath is its own class, so this builds fresh)
+if out=$(TRS_VLT_CACHE=$C "$TRS" vlt build sysPosCounter.bir --vpath "$WK/rtl-delay" 2>&1) \
+   && echo "$out" | grep -q "built, contract"; then ok timing-build
+else bad timing-build "$out"; fi
+
 refusal refuse-dpi      "$WK/rtl-dpi"      "REFUSE(dpi)"
 refusal refuse-mismatch "$WK/rtl-mismatch" "REFUSE(contract-mismatch)"
 refusal refuse-missing  "$WK/empty-nowhere" "source resolution"
@@ -108,7 +115,11 @@ if [ -n "$TRS_VERILATOR_NEW" ]; then
         elif echo "$out" | grep -q "$3"; then ok "$1"
         else bad "$1 (missing tag $3)" "$out"; fi
     }
-    refusal_new json-refuse-delay "$WK/rtl-delay" "REFUSE(delay)"
+    if out=$(TRS_VLT_CACHE=$C TRS_VERILATOR="$TRS_VERILATOR_NEW" \
+             VERILATOR_ROOT="$VERILATOR_ROOT_NEW" \
+             "$TRS" vlt build sysPosCounter.bir --vpath "$WK/rtl-delay" 2>&1) \
+       && echo "$out" | grep -q "built, contract"; then ok json-timing-build
+    else bad json-timing-build "$out"; fi
     refusal_new json-refuse-dpi   "$WK/rtl-dpi"   "REFUSE(dpi)"
 fi
 

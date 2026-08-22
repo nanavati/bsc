@@ -91,6 +91,9 @@ differ PosTwoRst sysPosTwoRst
 differ PosTime sysPosTime
 RUNARGS="+doit +lvl=7" differ PosPlus sysPosPlus
 differ PosWrap sysPosWrap
+# PosDelay: real intra-cycle delays (#3/#12/#13 NBAs) -> the --timing
+# build mode; delayed events fire between edges via vlt_advance
+differ PosDelay sysPosDelay
 differ ParamOrder sysParamOrder "$REPO/testsuite/bsc.verilog/v95"
 
 golden Rams mkTop "$REPO/testsuite/bsc.bsv_examples/RAMS" Test.bsv \

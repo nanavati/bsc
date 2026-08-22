@@ -21,6 +21,13 @@
 //! - Startup: drive every input to 0 with resets DEASSERTED, one
 //!   unconditional eval (initial blocks run); the kernel's t=0 reset
 //!   assertion then arrives as a real transition.
+//! - Time advances through vlt_advance: for --timing models (the model
+//!   has delay constructs) it drains internal delayed events strictly
+//!   before the target instant -- one eval per drained slot -- so
+//!   delayed NBAs land between the kernel's timeslices exactly where
+//!   the reference simulators put them; for delay-free models it is a
+//!   plain time set.  A drain legitimately changes outputs with no
+//!   input change, so it resets the observe-mode snapshots.
 //!
 //! TRS_BVI_CHECK=observe: epoch-tracked re-reads with declared-cone
 //! attribution; every report is a sound witness of an undeclared
@@ -39,7 +46,7 @@ type FreeFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type SetFn = unsafe extern "C" fn(*mut c_void, u32, *const u64) -> i32;
 type GetFn = unsafe extern "C" fn(*mut c_void, u32, *mut u64) -> i32;
 type EvalFn = unsafe extern "C" fn(*mut c_void) -> i32;
-type TimeFn = unsafe extern "C" fn(*mut c_void, u64) -> i32;
+type AdvFn = unsafe extern "C" fn(*mut c_void, u64, *mut u64) -> i32;
 type FinFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type MsgFn = unsafe extern "C" fn() -> *const std::ffi::c_char;
 type CbFn = unsafe extern "C" fn(Option<OutCb>, *mut c_void);
@@ -89,7 +96,7 @@ pub struct BviPrim {
     f_set: SetFn,
     f_get: GetFn,
     f_eval: EvalFn,
-    f_time: TimeFn,
+    f_adv: AdvFn,
     f_finished: FinFn,
     f_msg: MsgFn,
 
@@ -179,7 +186,7 @@ impl BviPrim {
         let f_set: SetFn = sym!(b"vlt_set", SetFn);
         let f_get: GetFn = sym!(b"vlt_get", GetFn);
         let f_eval: EvalFn = sym!(b"vlt_eval", EvalFn);
-        let f_time: TimeFn = sym!(b"vlt_set_time", TimeFn);
+        let f_adv: AdvFn = sym!(b"vlt_advance", AdvFn);
         let f_finished: FinFn = sym!(b"vlt_finished", FinFn);
         let f_msg: MsgFn = sym!(b"vlt_fatal_msg", MsgFn);
         let f_cb: CbFn = sym!(b"vlt_set_output_cb", CbFn);
@@ -290,7 +297,7 @@ impl BviPrim {
             f_set,
             f_get,
             f_eval,
-            f_time,
+            f_adv,
             f_finished,
             f_msg,
             widths,
@@ -387,12 +394,40 @@ impl BviPrim {
         if rc != 0 {
             self.die("eval", rc);
         }
+        self.check_finished();
+    }
+
+    fn check_finished(&mut self) {
         let fin = unsafe { (self.f_finished)(self.h) };
         if fin & 2 != 0 {
             self.die("model fatal", -1);
         }
         if fin & 1 != 0 {
             self.finish_req = true;
+        }
+    }
+
+    /// Bring the model's time to `to`.  On a --timing model this drains
+    /// internal delayed events strictly before `to` (one eval per
+    /// drained slot); a drain legitimately changes outputs with no
+    /// input change, so the observe-mode snapshots reset.
+    fn advance_to(&mut self, to: u64) {
+        let mut drained: u64 = 0;
+        let rc = unsafe { (self.f_adv)(self.h, to, &mut drained) };
+        if rc != 0 {
+            self.die("vlt_advance", rc);
+        }
+        if drained > 0 {
+            if self.trace {
+                eprintln!(
+                    "bvi[{}] t={to} advance drained {drained} event slot(s)",
+                    self.path
+                );
+            }
+            self.check_finished();
+            if self.check {
+                self.obs.clear();
+            }
         }
     }
 
@@ -415,6 +450,10 @@ impl BviPrim {
     }
 
     fn publish_and_settle(&mut self) {
+        // drain internal delayed events up to `now` BEFORE publishing:
+        // inputs staged in this timeslice must not be visible to events
+        // at earlier instants
+        self.advance_to(self.now);
         let mut any = false;
         for i in 0..self.shadow.len() {
             if let Some(v) = self.shadow[i].take() {
@@ -427,10 +466,6 @@ impl BviPrim {
             }
         }
         if any || self.dirty {
-            let rc = unsafe { (self.f_time)(self.h, self.now) };
-            if rc != 0 {
-                self.die("vlt_set_time", rc);
-            }
             self.eval();
             self.dirty = false;
             if self.check {
@@ -692,6 +727,10 @@ impl crate::prim::Prim for BviPrim {
                 self.path, self.pending_edges, self.en_group
             );
         }
+        // drain internal delayed events up to this instant even when the
+        // slice stages nothing for this instance (a --timing model's
+        // scheduled events fire between its edges regardless)
+        self.advance_to(now);
         let any_edge = self.pending_edges.iter().any(|e| e.is_some());
         let any_input = self.shadow.iter().any(|s| s.is_some());
         if !any_edge && !any_input && self.en_group.is_empty() {
@@ -725,10 +764,8 @@ impl crate::prim::Prim for BviPrim {
                 }
             }
             if moved {
-                let rc = unsafe { (self.f_time)(self.h, self.now) };
-                if rc != 0 {
-                    self.die("vlt_set_time", rc);
-                }
+                // time is already at `now` (the advance above; phase a
+                // re-advances as a no-op)
                 self.eval();
             }
         }
