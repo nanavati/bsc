@@ -45,6 +45,28 @@ worker/wrapper adapter) — never in the source of truth. GHC precedent througho
 rigid Givens, `-Wredundant-constraints` instead of constraint deletion, inert sets, per-version
 interface machinery.
 
+**The validity criterion** (Ravi, 2026-08-22): early context reduction is meaning-preserving
+only when the instance match is **coherent and closed**. Coherent: every scope would select the
+same instance — committing early on an incoherent match is a semantic choice made in the wrong
+scope, which is why CtxRed already runs with incoherent matching disabled (`runTI flags False`,
+`CtxRed.hs:40-41`; the in-source "XXX why?" has this as its answer). Closed, in two dimensions:
+*type-closed* — no pending instantiation can redirect the match, which BSC actively tracks
+(`MatchResult = NoConclusion | Fails | Matches`, `byInstIsReducible`/`matchTopIsReducible`,
+`TCMisc.hs:1715-1740`); and *world-closed* — no future instance can redirect it, which BSC
+**assumes but never checks**: the reduced signature bakes in the defining package's instance
+world, and a downstream more-specific overlapping instance silently re-opens a frozen choice.
+The only world-closed classes in the tree are the StdPrel computed ones — instances constructed
+by `genInsts` functions, `allowIncoherent = Just False` (`StdPrel.hs:78-93`) — instance-as-
+total-function is closedness by construction, and it is exactly where discharge is safest and
+most profitable. Three regimes follow: (i) coherent ∧ closed → early reduction is a pure
+optimization, valid anywhere (the only regime P3 discharge and unrestricted evidence reuse may
+operate in); (ii) coherent ∧ open-world → valid only relative to a pinned environment — cached
+with the environment stamped on it, or deliberately frozen at a boundary (the contracts
+design's resolve-once-in-defining-environment manufactures closedness by snapshot); (iii)
+incoherent → never reduce early; defer to the use site, as `runTI False` already does. This
+also accounts for CtxRed sometimes *enlarging* predicate counts: aggressive reduction in the
+open/unground regime trades one pred for an instance context it cannot discharge.
+
 ---
 
 ## 2. Job inventory: everything CtxRed does today
@@ -92,6 +114,11 @@ blowup recurs.
   (the conditional arm), since those are the heads whose meaning could shift.
 - Acceptance census: programs that typecheck **only because** CtxRed reduced something early
   (run the testsuite with the pass's output discarded-but-checked to find them).
+- **Regime census** (per the §1 validity criterion): classify every constraint CtxRed discharges
+  in the wild as (a) computed-class head (StdPrel `genInsts` — world-closed, safe), (b) single
+  total instance (safe in practice, world-open in principle), or (c) other (discharge is
+  technically unsound today). Expectation to test: (a)+(b) dominate, meaning the ABI win
+  survives the criterion nearly intact.
 
 **Exit:** censuses published; fences green on baseline; no compiler change shipped.
 
@@ -139,6 +166,13 @@ gh678 within noise; full-testsuite fence green.
   the principled home of Phase 1's annex, and it shares machinery and review bandwidth with
   the #925 dictionary-lifting/sharing work — land them as one arc.
 - **If no:** ABI = raw telescope; delete the Phase 1 adapter annex outright.
+- **Admission rule either way** (§1 validity criterion): discharge only constraints whose heads
+  are coherent ∧ world-closed — today decidable only for the StdPrel computed classes (plus
+  whatever the P0 regime census justifies for single-total-instance heads). If user-defined
+  classes should ever be discharge-eligible, that requires a **closed-class marker** — the
+  term-level sibling of GHC closed type families (which exist precisely because solve-no-search
+  needs extension-proofness; PureScript instance chains are the related art). Open-world heads
+  never discharge into the ABI; they freeze at boundaries or stay use-site-solved.
 
 **Exit:** cross-package link-level differential tests (mixed old/new callers impossible by tag,
 but mixed w/w and non-w/w defs within one build must interoperate); perf fence green; a
@@ -173,11 +207,15 @@ dead code guarded by a flag.
 - **R1 — Conditional instance-head normalization** (`CtxRed.hs:396-409`): the in-source XXX
   says existing code relies on the use-expansion-only-if-nonempty behavior. Phase 0's census
   is the mitigation; any behavior change ships as a diagnostic, not a silent shift.
-- **R2 — The incoherence split is unexplained in-source**: CtxRed runs `runTI flags False`
-  ("incoherent instances should not be matched at this time... XXX why?", `CtxRed.hs:40-41,
-  52-53`) while typecheck runs with incoherent matching per flags. Moving work between the
-  passes changes *when* incoherent matching is attempted. This archaeology item must be
-  resolved (documented, then tested) before Phase 4 moves J2-J6.
+- **R2 — The incoherence split is the coherence half of the validity criterion; the closedness
+  half is unenforced**: CtxRed's `runTI flags False` ("XXX why?", `CtxRed.hs:40-41, 52-53`) is
+  now understood — early reduction on an incoherent match is invalid, so the pass defers it —
+  and the XXX should be answered in-code with the §1 criterion. The residual risk is twofold:
+  (a) confirm no code path depends on the *difference* in when incoherent matching is attempted
+  as work moves between passes; (b) world-closedness is assumed, never checked — the current
+  pass will discharge a coherent-looking match that a downstream overlapping instance can
+  re-open, a latent cross-package meaning change that the P0 regime census sizes and the P3
+  admission rule eliminates going forward.
 - **R3 — Order-sensitive resolution bugs**: `reducePredsAggressive'` deliberately avoids the
   sorting optimization because "there are some existing bugs where the order in which preds
   are reduced affects whether instance resolution succeeds" (in-source comment citing
