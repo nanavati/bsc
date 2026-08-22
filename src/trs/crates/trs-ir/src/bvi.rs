@@ -40,8 +40,22 @@ pub struct BviContract {
     pub methods: Vec<BviMethod>,
     /// Input clocks (output clocks are refused at export in v1).
     pub clocks: Vec<BviClock>,
-    /// Input resets (output resets are refused at export in v1).
+    /// Input resets.
     pub resets: Vec<BviReset>,
+    /// Output resets (v1.2): an output port the runtime samples and
+    /// routes into the interpreter's derived-reset network.  At most one
+    /// per import (the export refuses more).  The parent module's reset
+    /// list carries the derived node under the "<inst>$<port>" wire
+    /// name, exactly like the native reset-generator prims.
+    #[serde(default)]
+    pub out_resets: Vec<BviOutReset>,
+    /// Output clocks (v1.2): oscillator output ports the runtime
+    /// samples at the commit point; edges route through the
+    /// interpreter's dynamic-clock network (the ClockDiv mechanism)
+    /// under the "<inst>$<port>" wire name.  Gated output clocks are
+    /// refused at export.
+    #[serde(default)]
+    pub out_clocks: Vec<BviOutClock>,
     /// Module parameters, typed — baked at verilate time via `-G`
     /// (semantics-preserving serialization is the link step's job).
     pub params: Vec<BviParam>,
@@ -149,6 +163,23 @@ pub struct BviReset {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BviOutReset {
+    /// BVI-side logical reset name.
+    pub name: StrId,
+    /// Output port index (dir Output, kind Reset; active-low level, the
+    /// bsc reset convention).
+    pub port: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BviOutClock {
+    /// BVI-side logical clock name.
+    pub name: StrId,
+    /// Oscillator output port index (dir Output, kind Clock).
+    pub port: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BviParam {
     pub name: StrId,
     pub value: BviParamValue,
@@ -253,6 +284,8 @@ mod tests {
             vfiles: vec![],
             defines: vec![],
             const_args: vec![],
+            out_resets: vec![],
+            out_clocks: vec![],
         }
     }
 

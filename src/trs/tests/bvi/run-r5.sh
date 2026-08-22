@@ -27,6 +27,7 @@ differ() { # name top [extra-files-dir]
     if [ -n "$extras" ]; then cp "$extras"/* . 2>/dev/null
     else cp "$SRC/$name.bsv" .; cp "$SRC"/rtl/*.v .; fi
     bsv=$(ls *.bsv | head -1)
+    [ -f "$name.bsv" ] && bsv=$name.bsv
     $BSC -verilog -u -g "$top" "$bsv" >v.out 2>&1 \
         && $BSC -verilog -vsim iverilog -e "$top" -o vref.exe >>v.out 2>&1 || {
         echo "FAIL $name (verilog oracle build)"; tail -3 v.out; fail=1; return; }
@@ -44,6 +45,13 @@ differ() { # name top [extra-files-dir]
     if [ -n "$XFILTER" ]; then
         grep -v "$XFILTER" vref.flt > vref.flt2 && mv vref.flt2 vref.flt
         XFILTER=
+    fi
+    # GFILTER: drop matching lines from the TRS side -- the mirror of
+    # XFILTER, for deterministic two-state output the 4-state oracle
+    # X-suppresses at startup (sec 4.3)
+    if [ -n "$GFILTER" ]; then
+        grep -v "$GFILTER" got.flt > got.flt2 && mv got.flt2 got.flt
+        GFILTER=
     fi
     if [ "$vrc" != "$grc" ]; then
         echo "FAIL $name (exit $vrc vs $grc)"; fail=1; return
@@ -94,6 +102,27 @@ differ PosWrap sysPosWrap
 # PosDelay: real intra-cycle delays (#3/#12/#13 NBAs) -> the --timing
 # build mode; delayed events fire between edges via vlt_advance
 differ PosDelay sysPosDelay
+# output resets (v1.2a): a registered stretcher generates a reset that
+# a downstream register is reset_by (asserts AND deasserts mid-run)
+differ PosRstOut sysPosRstOut
+# the census design: library mkResetInverter (combinational output
+# reset) + native MakeResetA through one network.  Sec 4.3 startup pin:
+# the 4-state oracle X-suppresses the first CounterB display (its guard
+# reads !X at the first task instant); two-state trs prints it -- drop
+# that one deterministic line from the trs side.
+GFILTER='is -1431655766$' differ ResetInv sysResetInv \
+        "$REPO/testsuite/bsc.mcd/ClockDividers"
+# output clocks (v1.2b): a divide-by-2 clock generated inside the
+# import; a downstream register and rule live in the derived domain,
+# so edges must fire between the kernel's scheduled slices.  Sec 4.3
+# startup pin (mirror of ResetInv): the 4-state oracle's first
+# derived-domain task instant absorbs one fire; drop our first
+# uninit-value display.
+GFILTER='^slow=170$' differ PosClkOut sysPosClkOut
+# census pair: output clocks queried only for elaboration-time family
+# facts (isAncestor/sameFamily) -- constant-0 model clocks, never tick
+differ TransitiveAncestor sysTransitiveAncestor "$REPO/testsuite/bsc.mcd/Misc"
+differ TransitiveFamily sysTransitiveFamily "$REPO/testsuite/bsc.mcd/Misc"
 differ ParamOrder sysParamOrder "$REPO/testsuite/bsc.verilog/v95"
 
 golden Rams mkTop "$REPO/testsuite/bsc.bsv_examples/RAMS" Test.bsv \

@@ -127,6 +127,10 @@ data BviInfo = BviInfo {
       bi_methods      :: [BviMethodI],
       bi_clocks       :: [BviClockI],
       bi_resets       :: [BviResetI],
+      -- output resets: (logical name, output port index)
+      bi_out_resets   :: [(String, Int)],
+      -- output clocks: (logical name, oscillator output port index)
+      bi_out_clocks   :: [(String, Int)],
       bi_params       :: [(String, BviParamValueI)],
       bi_const_args   :: [(Int, BviParamValueI)],
       bi_paths        :: [(Int, Int)],
@@ -209,15 +213,33 @@ deriveBvi avi =
         inout_args   = [ getVNameString vn | (InoutArg vn _ _) <- vArgs vmi ]
         inout_fields = [ getIdBaseString (vf_name f)
                        | f@(Inout {}) <- vFields vmi ]
-        out_clks = [ getIdBaseString i | (i, _) <- output_clocks clkinfo ]
-        out_rsts = [ getIdBaseString i
-                   | (i, (mp, _)) <- output_resets rstinfo, isJust mp ]
+        -- output clocks (v1.2): ordinary output ports sampled by the
+        -- runtime at the commit point; edges route through the
+        -- interpreter's dynamic-clock network (the ClockDiv mechanism).
+        -- Gated and portless output clocks stay refused.
+        out_clk_list = [ (i, osc, gate)
+                       | (i, Just (osc, gate)) <- output_clocks clkinfo ]
+        -- output resets: an ordinary output port sampled by the runtime
+        -- and routed into the interpreter's derived-reset network (one
+        -- per import in v1.2; portless outputs have nothing to sample)
+        out_rst_list = [ (i, vn)
+                       | (i, (Just vn, _)) <- output_resets rstinfo ]
 
         early_refusals =
-            [ "output clock '" ++ c ++ "' (output clocks are not supported)"
-            | c <- out_clks ] ++
-            [ "output reset '" ++ r ++ "' (output resets are not supported)"
-            | r <- out_rsts ] ++
+            [ "output clock '" ++ getIdBaseString i ++
+              "' has no oscillator port (portless output clocks are " ++
+              "not observable)"
+            | (i, Nothing) <- output_clocks clkinfo ] ++
+            [ "output clock '" ++ getIdBaseString i ++
+              "' is gated (gated output clocks are not supported)"
+            | (i, _, Just _) <- out_clk_list ] ++
+            [ "output reset '" ++ getIdBaseString i ++
+              "' has no output port (portless output resets are not " ++
+              "observable)"
+            | (i, (Nothing, _)) <- output_resets rstinfo ] ++
+            [ "more than one output reset (only a single output reset " ++
+              "per import is supported)"
+            | length out_rst_list > 1 ] ++
             [ "inout '" ++ x ++ "' (inouts are not supported)"
             | x <- inout_args ++ inout_fields ] ++
             [ "method '" ++ getIdBaseString (vf_name f) ++
@@ -309,6 +331,10 @@ deriveBvi avi =
                    | (_, osc, gate) <- ported_clks ]
         rst_ports = [ (getVNameString vn, 1, BviInput, KReset, 0)
                     | (_, vn) <- ported_rsts ]
+        orst_ports = [ (getVNameString vn, 1, BviOutput, KReset, 0)
+                     | (_, vn) <- out_rst_list ]
+        oclk_ports = [ (getVNameString osc, 1, BviOutput, KClock, 0)
+                     | (_, osc, _) <- out_clk_list ]
         carg_ports = [ (vpName vp, aTypeWidthI (aType e), BviInput,
                         KConstArg, 0)
                      | (vp, e) <- port_args ]
@@ -355,7 +381,8 @@ deriveBvi avi =
                     , vp <- take 1 (vf_outputs f) ]
 
         all_port_tuples =
-            clk_ports ++ rst_ports ++ carg_ports ++ meth_ports ++ rdy_ports
+            clk_ports ++ rst_ports ++ orst_ports ++ oclk_ports ++
+            carg_ports ++ meth_ports ++ rdy_ports
         ports = [ BviPortI n w d k pr | (n, w, d, k, pr) <- all_port_tuples ]
 
         -- physical names must be unique: a shared output port is exactly
@@ -389,6 +416,13 @@ deriveBvi avi =
         resets = [ BviResetI (getIdBaseString i) (idxOf (getVNameString vn))
                              True  -- bsc input resets are active-low
                  | (i, vn) <- ported_rsts ]
+
+        -- (logical name, port index); the interpreter finds the parent
+        -- module's derived-reset node by the "<inst>$<port>" wire name
+        out_resets = [ (getIdBaseString i, idxOf (getVNameString vn))
+                     | (i, vn) <- out_rst_list ]
+        out_clocks = [ (getIdBaseString i, idxOf (getVNameString osc))
+                     | (i, osc, _) <- out_clk_list ]
 
         const_args = [ (idxOf (vpName vp), v)
                      | (vp, e) <- port_args, Just v <- [constVal e] ]
@@ -543,6 +577,8 @@ deriveBvi avi =
                 bi_methods = methods,
                 bi_clocks = clocks,
                 bi_resets = resets,
+                bi_out_resets = out_resets,
+                bi_out_clocks = out_clocks,
                 bi_params = params,
                 bi_const_args = const_args,
                 bi_paths = all_paths,

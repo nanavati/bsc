@@ -156,6 +156,28 @@ fn verify_bvi(
         check(r.name)?;
         pidx(r.port, "reset")?;
     }
+    for r in &c.out_resets {
+        check(r.name)?;
+        pidx(r.port, "output reset")?;
+        if c.ports[r.port as usize].dir != BviDir::Output
+            || c.ports[r.port as usize].kind != BviPortKind::Reset
+        {
+            return Err(bad(
+                "out_resets index must name an Output port of kind Reset".into(),
+            ));
+        }
+    }
+    for cl in &c.out_clocks {
+        check(cl.name)?;
+        pidx(cl.port, "output clock")?;
+        if c.ports[cl.port as usize].dir != BviDir::Output
+            || c.ports[cl.port as usize].kind != BviPortKind::Clock
+        {
+            return Err(bad(
+                "out_clocks index must name an Output port of kind Clock".into(),
+            ));
+        }
+    }
     for &(from, to) in &c.paths {
         pidx(from, "path source")?;
         pidx(to, "path target")?;

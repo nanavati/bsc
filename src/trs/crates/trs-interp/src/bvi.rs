@@ -128,6 +128,22 @@ pub struct BviPrim {
     tick_map: HashMap<String, Vec<usize>>,
     /// reset ordinal -> (port index, active_low)
     resets: Vec<(usize, bool)>,
+    /// output reset ports (contract out_resets; at most one in v1.2 --
+    /// the interpreter routes transitions into its derived-reset network)
+    rst_out_ports: Vec<usize>,
+    /// last sampled asserted-state per output reset (active-low level)
+    rst_out_last: Vec<bool>,
+    /// transitions observed since the last take_reset_out poll:
+    /// (asserted, immediate)
+    rst_out_pending: Vec<(bool, bool)>,
+    /// output clock oscillator ports (contract out_clocks; edges route
+    /// through the interpreter's dynamic-clock network)
+    clk_out_ports: Vec<usize>,
+    /// last sampled level per output clock
+    clk_out_last: Vec<bool>,
+    /// edges observed since the last take_clock_edges_multi poll:
+    /// (out-clock ordinal, new level)
+    clk_out_pending: Vec<(u32, bool)>,
 
     now: u64,
     finish_req: bool,
@@ -262,6 +278,10 @@ impl BviPrim {
             .iter()
             .map(|r| (r.port as usize, r.active_low))
             .collect();
+        let rst_out_ports: Vec<usize> =
+            c.out_resets.iter().map(|r| r.port as usize).collect();
+        let clk_out_ports: Vec<usize> =
+            c.out_clocks.iter().map(|cl| cl.port as usize).collect();
 
         let check = std::env::var("TRS_BVI_CHECK")
             .map(|v| v == "observe")
@@ -316,6 +336,12 @@ impl BviPrim {
             clk_gate,
             tick_map,
             resets,
+            rst_out_ports,
+            rst_out_last: Vec::new(),
+            rst_out_pending: Vec::new(),
+            clk_out_ports,
+            clk_out_last: Vec::new(),
+            clk_out_pending: Vec::new(),
             now: 0,
             finish_req: false,
             trace,
@@ -345,7 +371,90 @@ impl BviPrim {
             prim.drive(port, vec![lv; 1]);
         }
         prim.publish_and_settle();
+        // initial output-reset state (an inverter's output is asserted
+        // while its input is deasserted; the interpreter broadcasts
+        // initially-asserted nodes at run() start)
+        prim.rst_out_last = prim
+            .rst_out_ports
+            .clone()
+            .iter()
+            .map(|&p| prim.raw_get(p)[0] == 0)
+            .collect();
+        // initial output clock levels (dynclk_init registration)
+        prim.clk_out_last = prim
+            .clk_out_ports
+            .clone()
+            .iter()
+            .map(|&p| prim.raw_get(p)[0] & 1 != 0)
+            .collect();
         prim
+    }
+
+    /// Initial output clock levels after the startup settle (read by
+    /// the interpreter's instantiation arm for dynclk registration).
+    pub fn clk_out_initial(&self) -> &[bool] {
+        &self.clk_out_last
+    }
+
+    /// Sample the output clock oscillator ports; changed levels queue
+    /// edges for take_clock_edges_multi.
+    fn sample_clk_outs(&mut self) {
+        for i in 0..self.clk_out_ports.len() {
+            let lvl = self.raw_get(self.clk_out_ports[i])[0] & 1 != 0;
+            if lvl != self.clk_out_last[i] {
+                self.clk_out_last[i] = lvl;
+                self.clk_out_pending.push((i as u32, lvl));
+                if self.trace {
+                    eprintln!(
+                        "bvi[{}] t={} clock out {} -> {}",
+                        self.path,
+                        self.now,
+                        self.port_names[self.clk_out_ports[i]],
+                        lvl as u8
+                    );
+                }
+            }
+        }
+    }
+
+    /// Sample the output reset ports (asserted = level 0, the bsc
+    /// active-low convention); changed levels queue transitions for
+    /// take_reset_out.
+    fn sample_rst_outs(&mut self, immediate: bool) {
+        for i in 0..self.rst_out_ports.len() {
+            let asserted = self.raw_get(self.rst_out_ports[i])[0] == 0;
+            if asserted != self.rst_out_last[i] {
+                self.rst_out_last[i] = asserted;
+                self.rst_out_pending.push((asserted, immediate));
+                if self.trace {
+                    eprintln!(
+                        "bvi[{}] t={} reset out {} -> asserted={}",
+                        self.path,
+                        self.now,
+                        self.port_names[self.rst_out_ports[i]],
+                        asserted
+                    );
+                }
+            }
+        }
+    }
+
+    /// Bootstrap the output-reset initial condition: called once at run
+    /// start AFTER the t=0 reset cascades have propagated into the
+    /// model, this settles, samples the true initial levels, and clears
+    /// any transitions the cascade staged (the settled state IS the
+    /// initial condition, not a transition).  Returns the asserted
+    /// state of the single output reset, if any.
+    pub fn rst_out_bootstrap_impl(&mut self) -> Option<bool> {
+        if self.rst_out_ports.is_empty() {
+            return None;
+        }
+        self.publish_and_settle();
+        for i in 0..self.rst_out_ports.len() {
+            self.rst_out_last[i] = self.raw_get(self.rst_out_ports[i])[0] == 0;
+        }
+        self.rst_out_pending.clear();
+        self.rst_out_last.first().copied()
     }
 
     fn drive(&mut self, port: usize, val: Vec<u64>) {
@@ -706,6 +815,15 @@ impl crate::prim::Prim for BviPrim {
         // phase a) -- the t=0 assertion after the deasserted startup
         // settle is a real transition
         self.drive(port, vec![lv]);
+        // a model with an output reset may derive it combinationally
+        // from this input (ResetInverter): settle now so the transition
+        // is observed, but DEFER it to the end-of-timeslice flush --
+        // Bluesim's reset network applies derived transitions at
+        // reset_at_end_of_timeslice, so rules see them one slice later
+        if !self.rst_out_ports.is_empty() {
+            self.publish_and_settle();
+            self.sample_rst_outs(false);
+        }
     }
 
     fn set_in_reset(&mut self, asserted: bool) {
@@ -734,6 +852,11 @@ impl crate::prim::Prim for BviPrim {
         let any_edge = self.pending_edges.iter().any(|e| e.is_some());
         let any_input = self.shadow.iter().any(|s| s.is_some());
         if !any_edge && !any_input && self.en_group.is_empty() {
+            // a --timing drain above may still have moved an output
+            // reset (flush_reset_pending runs right after this point);
+            // --timing + output clocks is refused at build
+            self.sample_rst_outs(false);
+            self.sample_clk_outs();
             return std::mem::take(&mut self.finish_req);
         }
         // (a) inputs: final selected non-clock vector -- args, ENs,
@@ -783,6 +906,24 @@ impl crate::prim::Prim for BviPrim {
         self.dirty = false;
         // a new instant: edge commits legitimately change outputs
         self.obs.clear();
+        // output resets move with the edge (deferred: applied by
+        // flush_reset_pending at end of timeslice, the
+        // reset_at_end_of_timeslice semantics); output clock edges are
+        // collected by the commit point and heaped at this instant
+        self.sample_rst_outs(false);
+        self.sample_clk_outs();
         std::mem::take(&mut self.finish_req)
+    }
+
+    fn take_reset_out(&mut self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut self.rst_out_pending)
+    }
+
+    fn reset_out_bootstrap(&mut self) -> Option<bool> {
+        self.rst_out_bootstrap_impl()
+    }
+
+    fn take_clock_edges_multi(&mut self) -> Vec<(u32, bool)> {
+        std::mem::take(&mut self.clk_out_pending)
     }
 }

@@ -435,6 +435,17 @@ pub fn build_model_resolved(
     // vlt_advance then drains internal delayed events between the
     // kernel's timeslices)
     let timing = m.has_delay;
+    if timing && !c.out_clocks.is_empty() {
+        return Err(VltError::refuse(
+            "timing-outclock",
+            format!(
+                "{top} has both delay constructs and output clocks; a \
+                 --timing drain can move an output clock through several \
+                 edges between commits, which the derived-clock network \
+                 cannot observe"
+            ),
+        ));
+    }
     if m.has_dpi == Some(true) {
         return Err(VltError::refuse(
             "dpi",

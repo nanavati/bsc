@@ -1065,6 +1065,20 @@ encBviContract (vpath, defs) avi =
                              , ("active_low", encBool (br_active_low r))
                              ])
                         (bi_resets bi)
+        orstsE <- mapM (\(n, p) -> do
+                          nE <- strE n
+                          return $ encStruct
+                            [ ("name", nE)
+                            , ("port", encIdx p)
+                            ])
+                       (bi_out_resets bi)
+        oclksE <- mapM (\(n, p) -> do
+                          nE <- strE n
+                          return $ encStruct
+                            [ ("name", nE)
+                            , ("port", encIdx p)
+                            ])
+                       (bi_out_clocks bi)
         paramsE <- mapM (\(n, v) -> do
                            nE <- strE n
                            vE <- encPV v
@@ -1090,6 +1104,8 @@ encBviContract (vpath, defs) avi =
           , ("methods", encList methodsE)
           , ("clocks", encList clocksE)
           , ("resets", encList resetsE)
+          , ("out_resets", encList orstsE)
+          , ("out_clocks", encList oclksE)
           , ("params", encList paramsE)
           , ("paths", encList pathsE)
           , ("vpath", encList vpathE)
