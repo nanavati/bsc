@@ -1,0 +1,79 @@
+<?xml version="1.0" ?>
+<!-- DESCRIPTION: Verilator output: XML representation of netlist -->
+<verilator_xml>
+  <files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviGate2.v" language="1800-2017"/>
+    <file id="c" filename="/usr/share/verilator/include/verilated_std.sv" language="1800-2017"/>
+    <file id="a" filename="&lt;built-in&gt;" language="1800-2017"/>
+    <file id="b" filename="&lt;command-line&gt;" language="1800-2017"/>
+  </files>
+  <module_files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviGate2.v" language="1800-2017"/>
+  </module_files>
+  <cells>
+    <cell loc="d,6,8,6,16" name="BviGate2" submodname="BviGate2" hier="BviGate2"/>
+  </cells>
+  <netlist>
+    <module loc="d,6,8,6,16" name="BviGate2" origName="BviGate2" topModule="1">
+      <var loc="d,7,16,7,19" name="CLK" dtype_id="1" dir="input" pinIndex="1" vartype="logic" origName="CLK"/>
+      <var loc="d,7,21,7,26" name="RST_N" dtype_id="1" dir="input" pinIndex="2" vartype="logic" origName="RST_N"/>
+      <var loc="d,8,16,8,22" name="EN_put" dtype_id="1" dir="input" pinIndex="3" vartype="logic" origName="EN_put"/>
+      <var loc="d,9,16,9,21" name="put_x" dtype_id="2" dir="input" pinIndex="4" vartype="logic" origName="put_x"/>
+      <var loc="d,10,16,10,23" name="RDY_put" dtype_id="1" dir="output" pinIndex="5" vartype="logic" origName="RDY_put"/>
+      <var loc="d,11,16,11,22" name="STORED" dtype_id="2" dir="output" pinIndex="6" vartype="logic" origName="STORED"/>
+      <var loc="d,13,13,13,19" name="stored" dtype_id="2" vartype="logic" origName="stored"/>
+      <always loc="d,17,3,17,9">
+        <sentree loc="d,17,10,17,11">
+          <senitem loc="d,17,12,17,19" edgeType="POS">
+            <varref loc="d,17,20,17,23" name="CLK" dtype_id="1"/>
+          </senitem>
+        </sentree>
+        <begin loc="d,17,25,17,30">
+          <if loc="d,18,5,18,7">
+            <varref loc="d,18,10,18,15" name="RST_N" dtype_id="1"/>
+            <begin>
+              <if loc="d,19,10,19,12">
+                <varref loc="d,19,14,19,20" name="EN_put" dtype_id="1"/>
+                <begin>
+                  <assigndly loc="d,19,29,19,31" dtype_id="2">
+                    <varref loc="d,19,32,19,37" name="put_x" dtype_id="2"/>
+                    <varref loc="d,19,22,19,28" name="stored" dtype_id="2"/>
+                  </assigndly>
+                </begin>
+              </if>
+            </begin>
+            <begin>
+              <assigndly loc="d,18,24,18,26" dtype_id="2">
+                <const loc="d,18,27,18,31" name="8&apos;h0" dtype_id="2"/>
+                <varref loc="d,18,17,18,23" name="stored" dtype_id="2"/>
+              </assigndly>
+            </begin>
+          </if>
+        </begin>
+      </always>
+      <contassign loc="d,14,18,14,19" dtype_id="1">
+        <and loc="d,14,26,14,27" dtype_id="1">
+          <not loc="d,14,28,14,29" dtype_id="1">
+            <sel loc="d,14,34,14,35" dtype_id="1">
+              <varref loc="d,9,16,9,21" name="put_x" dtype_id="2"/>
+              <const loc="d,14,34,14,35" name="32&apos;h0" dtype_id="3"/>
+              <const loc="d,14,34,14,35" name="32&apos;h1" dtype_id="3"/>
+            </sel>
+          </not>
+          <varref loc="d,7,21,7,26" name="RST_N" dtype_id="1"/>
+        </and>
+        <varref loc="d,10,16,10,23" name="RDY_put" dtype_id="1"/>
+      </contassign>
+      <contassign loc="d,15,18,15,19" dtype_id="2">
+        <varref loc="d,13,13,13,19" name="stored" dtype_id="2"/>
+        <varref loc="d,11,16,11,22" name="STORED" dtype_id="2"/>
+      </contassign>
+    </module>
+    <typetable loc="a,0,0,0,0">
+      <basicdtype loc="c,50,22,50,24" id="1" name="logic"/>
+      <voiddtype loc="c,51,21,51,30" id="4"/>
+      <basicdtype loc="d,9,10,9,11" id="2" name="logic" left="7" right="0"/>
+      <basicdtype loc="d,14,34,14,35" id="3" name="logic" left="31" right="0"/>
+    </typetable>
+  </netlist>
+</verilator_xml>

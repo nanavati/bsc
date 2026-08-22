@@ -205,6 +205,76 @@ def scenario_counter(so, contract):
 
 SCENARIOS = {"counter": scenario_counter}
 
+def scenario_shadow(so, contract):
+    """Self-SBR shadow group (v4 4.2, Ravi's atomic-read condition).
+
+    Two calls to m in one instant form a replacement group.  Pins:
+      1. The LAST caller's AV read is exact (== netlist settled value).
+      2. An EARLIER caller's per-call read differs from the netlist's
+         settled value -- the divergence the consumed-and-coactive
+         refusal exists to keep out of accepted designs.
+      3. The edge commits the FINAL selected argument (netlist mux).
+    """
+    b = Bvi(so, contract)
+    b.drive("CLK", 0); b.drive("RST_N", 1)
+    _ = b.observe("LAST")
+    b.set_reset("RST_N", 0)
+    b.commit_edge({"CLK": 1}); b.commit_edge({"CLK": 0})
+    b.set_reset("RST_N", 1)
+
+    # instant: caller A then caller B, same shadow group
+    b.call_action("m", IN=10)
+    early = b.observe("OUT")          # A's per-call read
+    b.call_action("m", IN=20)         # replacement: B's args win
+    late = b.observe("OUT")           # B's read (last caller)
+    assert early == 11, f"early per-call read: {early} != 11"
+    assert late == 21, f"last-caller read: {late} != 21"
+    # netlist settled value == 21 == late: last-caller consumption is exact;
+    # 'early' (11) is what a non-final consumer would wrongly keep -- refused.
+    b.commit_edge({"CLK": 1})
+    latched = b.observe("LAST")
+    assert latched == 20, f"edge latched {latched} != 20 (replacement)"
+    b.commit_edge({"CLK": 0})
+
+    # next instant: only A calls -> A is the last firing caller, exact.
+    b.call_action("m", IN=7)
+    only = b.observe("OUT")
+    assert only == 8, f"solo caller read: {only} != 8"
+    b.commit_edge({"CLK": 1})
+    assert b.observe("LAST") == 7
+    b.close()
+    return "shadow: last-caller exact, early-read divergence pinned, edge = replacement"
+
+SCENARIOS["shadow"] = scenario_shadow
+
+def scenario_argrdy(so, contract):
+    """Argument-dependent RDY: the readiness read's cone includes an arg
+    port, so a frontier read after driving the arg must see the settled
+    combinational answer (even -> ready, odd -> not ready)."""
+    b = Bvi(so, contract)
+    b.drive("CLK", 0); b.drive("RST_N", 1)
+    _ = b.observe("STORED")
+    b.set_reset("RST_N", 0)
+    b.commit_edge({"CLK": 1}); b.commit_edge({"CLK": 0})
+    b.set_reset("RST_N", 1)
+
+    b.drive("put_x", 4)
+    assert b.observe("RDY_put") == 1, "even arg should be ready"
+    b.drive("put_x", 5)
+    assert b.observe("RDY_put") == 0, "odd arg should not be ready"
+    b.drive("put_x", 6)
+    assert b.observe("RDY_put") == 1
+    b.call_action("put", put_x=6)
+    b.commit_edge({"CLK": 1})
+    assert b.observe("STORED") == 6
+    b.commit_edge({"CLK": 0})
+    b.close()
+    return "argrdy: RDY tracks the argument cone at frontiers; edge commits the enabled value"
+
+SCENARIOS["argrdy"] = scenario_argrdy
+
+
+
 
 def main():
     vlt, fixture = sys.argv[1], sys.argv[2]
