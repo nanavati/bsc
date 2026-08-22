@@ -116,7 +116,6 @@ module GatedClockDiv(CLK_IN,
   // four-state simulators see.
   initial
     begin
-       #0 ;
        PREEDGE = 0 ;
     end // initial begin
   // synopsys translate_on

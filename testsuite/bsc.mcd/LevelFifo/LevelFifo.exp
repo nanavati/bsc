@@ -26,7 +26,12 @@ test_c_only_bsv GFIFOLevelTest sysGFIFOLevelTest.c.out.expected
 test_veri_only_bsv GFIFOCountTest
 test_c_only_bsv GFIFOCountTest sysGFIFOCountTest.c.out.expected
 
-test_veri_only_bsv SyncFIFOCountTest {} $iverilog09_bug
+# The clock domains run in separately-synthesized primitives, so the order of
+# $displays within a single timestamp is not guaranteed across simulators
+# (verilator interleaves same-cycle lines differently than iverilog/Bluesim).
+# sort_output compares the outputs as sorted files, canonicalizing the
+# same-cycle order so all simulators share the goldens.
+test_veri_only_bsv SyncFIFOCountTest {} $iverilog09_bug 1
 test_c_only_bsv SyncFIFOCountTest sysSyncFIFOCountTest.c.out.expected
 
 test_veri_only_bsv LevelFIFOTest1

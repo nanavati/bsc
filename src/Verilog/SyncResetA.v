@@ -59,7 +59,6 @@ module SyncResetA (
    // inverted-reset consumers during startup).
    initial
      begin
-        #0 ;
         reset_hold = {(RSTDELAY + 1) {`BSV_RESET_VALUE}} ;
      end
    // synopsys translate_on

@@ -67,7 +67,6 @@ module MakeReset (
    // manufactured assertion edge, and consumers of the INVERTED reset
    // observed that window as a spurious assertion of their own reset.
    initial begin
-      #0 ;
       rst = init ? ~ `BSV_RESET_VALUE : `BSV_RESET_VALUE ;
    end
    // synopsys translate_on

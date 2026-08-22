@@ -48,7 +48,6 @@ module SyncReset (
    // synopsys translate_off
    initial
      begin
-        #0 ;
         // initialize out of reset forcing the designer to do one
         reset_hold = {(RSTDELAY + 1) {`BSV_RESET_VALUE}} ; // asserted: must agree with the time-0 level (see SyncResetA.v)
      end

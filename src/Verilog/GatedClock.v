@@ -91,7 +91,6 @@ module GatedClock(
    // synopsys translate_off
    initial
       begin
-	 #0 ;
          new_gate = 1'b0 ;
 	 COND_reg = 1'b0 ;
       end // initial begin

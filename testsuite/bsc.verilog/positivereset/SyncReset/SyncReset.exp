@@ -12,12 +12,17 @@ set ::env(BSC_OPTIONS) "$::env(BSC_OPTIONS) -reset-prefix RESET_P -D BSV_POSITIV
 ## test RstTest_V2, for rule "c2".
 
 ## Full test of working system
+# The clock domains run in separately-synthesized primitives, so the order of
+# $displays within a single timestamp is not guaranteed across simulators
+# (verilator interleaves same-cycle lines differently than iverilog/Bluesim).
+# sort_output compares the outputs as sorted files, canonicalizing the
+# same-cycle order so all simulators share the goldens.
 test_c_only_bsv RstTest
-test_veri_only_bsv RstTest sysRstTest.v.out.expected
+test_veri_only_bsv RstTest sysRstTest.v.out.expected "" 1
 
 ## variation -- mkReset input can be from any domain
 test_c_only_bsv RstTest_V1
-test_veri_only_bsv RstTest_V1 sysRstTest_V1.v.out.expected
+test_veri_only_bsv RstTest_V1 sysRstTest_V1.v.out.expected "" 1
 
 ## bad reset arguments
 compile_verilog_fail_error RstTest_E1.bsv  G0042
@@ -25,7 +30,7 @@ compile_verilog_fail_error RstTest_E1.bsv  G0042
 ##
 ## Check the null reset logic
 test_c_only_bsv RstTest_V2
-test_veri_only_bsv RstTest_V2 sysRstTest_V2.v.out.expected
+test_veri_only_bsv RstTest_V2 sysRstTest_V2.v.out.expected "" 1
 
 
 set ::env(BSC_OPTIONS) $oldenv

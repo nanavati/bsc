@@ -50,7 +50,6 @@ module ClockMux(
    // synopsys translate_off
    initial
       begin
-         #0 ;
          sel_reg  = 1'b0 ;
       end
    // synopsys translate_on

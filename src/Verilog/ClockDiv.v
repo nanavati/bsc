@@ -59,9 +59,9 @@ module ClockDiv(CLK_IN, RST, PREEDGE,  CLK_OUT);
    // Combinational block to generate next edge signal
    always@( cntr or nexttick )
      begin
-        #0
         // The nonblocking assignment use to delay the update of the edge ready signal
         // Since this read by other always blocks trigger by the output CLK of this module
+        #0
         PREEDGE <= `BSV_ASSIGNMENT_DELAY  (cntr == nexttick) ;
      end
 
@@ -96,7 +96,6 @@ module ClockDiv(CLK_IN, RST, PREEDGE,  CLK_OUT);
   // assertion edge instead (matching BSV_NO_INITIAL_BLOCKS builds).
   initial
     begin
-       #0 ;
        PREEDGE = 0 ;
     end // initial begin
   // synopsys translate_on

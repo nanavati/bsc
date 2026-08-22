@@ -137,6 +137,23 @@ manufactured edge does, and `BSV_NO_INITIAL_BLOCKS` builds work
 through the edge alone -- it only removes an init that disagreed with
 the sequence.
 
+Consistency also requires the init to be *in effect at time 0*, which
+the primitives' traditional `#0` prefix (`initial begin #0; rst = ...`)
+silently breaks under Verilator without `--timing`: delays are dropped,
+but a statement after even a zero delay resumes in a later evaluation
+than the one that ran the initial block, so the C++ zero-initialized
+state -- not the init value -- is what the startup window observes.
+For a `MakeReset` output, zero *is* "asserted", so consumers saw a
+phantom reset of intentionally-unreset state (`mkReset(..., False)`
+starts deasserted; `sysResetMux`/`sysResetEither` count in registers
+that no reset should ever reach).  The `#0` is therefore stripped from
+the reset- and clock-network initial blocks: every value assigned there
+is an elaboration constant, and in four-state simulators the only thing
+the `#0` ever ordered against -- the same-instant asynchronous reset
+branch triggered by the X -> asserted transition -- writes the identical
+value, so removing it is benign by value.  (`ClockDiv`'s *functional*
+`#0`, inside an always block, is unrelated and stays.)
+
 **Internal asynchronous assertion** (the tree fanning out after time 3)
 is race-immune *by dominance*: every consumer's always block checks the
 reset level first, and the reset branch writes a value that does not
@@ -202,6 +219,16 @@ assertion edge onward.
 * `SyncResetA.v`, `SyncReset.v`, `ClockSelect.v`,
   `UngatedClockSelect.v`, `MakeReset{,0,A}.v`: initial state agrees
   with the time-0 asserted level (initial-state consistency, above).
+* The `#0` prefix is stripped from the initial blocks of the reset- and
+  clock-network primitives (the two families above plus `ClockDiv`,
+  `GatedClockDiv`, `GatedClock`, `ClockMux`, `UngatedClockMux`), so the
+  inits are in effect at time 0 under no-timing Verilator (initial-state
+  consistency, above).
+* Three multi-domain tests whose goldens interleave same-instant
+  `$display`s (`sysRstTest` x3 in both reset polarities,
+  `sysSyncFIFOCountTest`) adopt the testsuite's existing
+  sorted-comparison convention, since the LRM does not order
+  same-instant output across separately-triggered processes.
 * Testsuite goldens that recorded startup-window output are re-recorded
   once — identically valid for every simulator.
 
@@ -253,6 +280,29 @@ assertion edge onward.
     the ResetMux/ResetEither select paths are the audit's next round;
   - 3 environmental (chmod-as-root, DupInclude), simulator-independent.
   One XPASS marks an XFAIL screen now too broad.
+* Audit round (the ResetMux/ResetEither flips), same tree plus the
+  `#0` strip and the sorted comparisons: the "flips" diagnosis above
+  was wrong — instrumentation showed Verilator *phantom-resetting*
+  intentionally-unreset state because the `#0`-deferred init left C++
+  zeros (= asserted, for a `MakeReset` output) visible through the
+  startup window; the recorded never-reset goldens were correct
+  behavior all along.  After the strip, a 14-directory matrix covering
+  every affected directory (mcd Reset/SyncReset/LevelFifo/ClockDividers/
+  Misc/NullCrossing/Gating/ClockMux/Hierarchy/MakeClock, positivereset
+  ClockDividers/SyncReset, SpecialSyncReg, OVL): Icarus **0 fails in
+  all 14**; Verilator check-level failures in these directories fall
+  **19 -> 10**, the nine fixed being exactly the two flips, the six
+  sysRstTest ordering checks, and sysSyncFIFOCountTest, with the
+  survivors byte-identical to before (no regressions).  The ten
+  survivors are sysClockDiv2 (x2 checks), positive-reset
+  sysClockDivFifo (x2) and sysClockDivFifo2 — the negative-reset
+  versions now pass — sysTestMkClock/sysTestMkUngatedClock,
+  sysNullSyncTest2, sysGatedClockCycle, and SpecialSyncReg's
+  fast_to_slow (a divided-clock startup-phase shift, reclassified into
+  the residual-startup class).  Projected full-suite Verilator total:
+  **31 fail** (= 40 - 9); decomposition becomes 12 upstream + 6
+  MacTestBench link + 10 residual startup + 3 environmental, the
+  same-instant-ordering and flips classes now empty.
 
 ## Migration
 

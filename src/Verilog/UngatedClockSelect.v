@@ -101,7 +101,6 @@ module UngatedClockSelect(
    // synopsys translate_off
    initial
      begin
-         #0 ;
          select_out  = 1'b0 ;
          select_out2 = 1'b0 ;
          reset_hold = {(RSTDELAY + 1) {`BSV_RESET_VALUE}} ; // asserted: must agree with the time-0 level (see SyncResetA.v)
