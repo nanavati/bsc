@@ -1,0 +1,40 @@
+// Verilated -*- C++ -*-
+// DESCRIPTION: Verilator output: Design internal header
+// See VBviFatal.h for the primary calling header
+
+#ifndef VERILATED_VBVIFATAL___024ROOT_H_
+#define VERILATED_VBVIFATAL___024ROOT_H_  // guard
+
+#include "verilated.h"
+
+
+class VBviFatal__Syms;
+
+class alignas(VL_CACHE_LINE_BYTES) VBviFatal___024root final : public VerilatedModule {
+  public:
+
+    // DESIGN SPECIFIC STATE
+    VL_IN8(CLK,0,0);
+    VL_IN8(RST_N,0,0);
+    VL_IN8(EN_go,0,0);
+    VL_OUT8(OUT,7,0);
+    CData/*0:0*/ __Vtrigprevexpr___TOP__CLK__0;
+    CData/*0:0*/ __VactContinue;
+    IData/*31:0*/ __VactIterCount;
+    VlTriggerVec<1> __VactTriggered;
+    VlTriggerVec<1> __VnbaTriggered;
+
+    // INTERNAL VARIABLES
+    VBviFatal__Syms* const vlSymsp;
+
+    // CONSTRUCTORS
+    VBviFatal___024root(VBviFatal__Syms* symsp, const char* v__name);
+    ~VBviFatal___024root();
+    VL_UNCOPYABLE(VBviFatal___024root);
+
+    // INTERNAL METHODS
+    void __Vconfigure(bool first);
+};
+
+
+#endif  // guard

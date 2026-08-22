@@ -1,0 +1,53 @@
+<?xml version="1.0" ?>
+<!-- DESCRIPTION: Verilator output: XML representation of netlist -->
+<verilator_xml>
+  <files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviFatal.v" language="1800-2017"/>
+    <file id="c" filename="/usr/share/verilator/include/verilated_std.sv" language="1800-2017"/>
+    <file id="a" filename="&lt;built-in&gt;" language="1800-2017"/>
+    <file id="b" filename="&lt;command-line&gt;" language="1800-2017"/>
+  </files>
+  <module_files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviFatal.v" language="1800-2017"/>
+  </module_files>
+  <cells>
+    <cell loc="d,4,8,4,16" name="BviFatal" submodname="BviFatal" hier="BviFatal"/>
+  </cells>
+  <netlist>
+    <module loc="d,4,8,4,16" name="BviFatal" origName="BviFatal" topModule="1">
+      <var loc="d,5,16,5,19" name="CLK" dtype_id="1" dir="input" pinIndex="1" vartype="logic" origName="CLK"/>
+      <var loc="d,5,21,5,26" name="RST_N" dtype_id="1" dir="input" pinIndex="2" vartype="logic" origName="RST_N"/>
+      <var loc="d,6,16,6,21" name="EN_go" dtype_id="1" dir="input" pinIndex="3" vartype="logic" origName="EN_go"/>
+      <var loc="d,7,16,7,19" name="OUT" dtype_id="2" dir="output" pinIndex="4" vartype="logic" origName="OUT">
+        <const loc="d,8,16,8,20" name="8&apos;h7" dtype_id="2"/>
+      </var>
+      <always loc="d,9,3,9,9">
+        <sentree loc="d,9,10,9,11">
+          <senitem loc="d,9,12,9,19" edgeType="POS">
+            <varref loc="d,9,20,9,23" name="CLK" dtype_id="1"/>
+          </senitem>
+        </sentree>
+        <if loc="d,9,25,9,27">
+          <and loc="d,9,35,9,37" dtype_id="1">
+            <varref loc="d,9,29,9,34" name="RST_N" dtype_id="1"/>
+            <varref loc="d,9,38,9,43" name="EN_go" dtype_id="1"/>
+          </and>
+          <begin>
+            <begin loc="d,9,45,9,50"/>
+          </begin>
+        </if>
+      </always>
+      <initial loc="d,8,14,8,15">
+        <assign loc="d,8,14,8,15" dtype_id="2">
+          <const loc="d,8,16,8,20" name="8&apos;h7" dtype_id="2"/>
+          <varref loc="d,8,10,8,13" name="OUT" dtype_id="2"/>
+        </assign>
+      </initial>
+    </module>
+    <typetable loc="a,0,0,0,0">
+      <basicdtype loc="c,43,22,43,24" id="1" name="logic"/>
+      <voiddtype loc="c,45,18,45,27" id="3"/>
+      <basicdtype loc="d,7,10,7,11" id="2" name="logic" left="7" right="0"/>
+    </typetable>
+  </netlist>
+</verilator_xml>

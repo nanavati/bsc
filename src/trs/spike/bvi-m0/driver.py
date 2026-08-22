@@ -459,6 +459,33 @@ def scenario_params(so, contract):
 
 SCENARIOS["params"] = scenario_params
 
+def scenario_fatal(so, contract):
+    """$fatal containment: the model's assertion fires at the enabled
+    edge; the host must SURVIVE, the eval must return an error, and the
+    fatal message must be retrievable."""
+    b = Bvi(so, contract)
+    _startup(b)
+    assert b.observe("OUT") == 7
+    b.call_action("go")
+    blew = False
+    try:
+        b.commit_edge({"CLK": 1})
+    except AssertionError:
+        blew = True
+    assert blew, "fatal edge did not report an error"
+    fin = b.lib.vlt_finished(b.h)
+    msg = b.lib.vlt_fatal_msg().decode()
+    assert fin & 2, f"fatal flag not set (fin={fin})"
+    # 5.020 routes assertion failure through $stop; the contained message
+    # carries the SOURCE LOCATION, while the user text goes to the output
+    # stream.  Containment is the property under test, not the wording.
+    assert "BviFatal.v" in msg, f"fatal msg lacks location: {msg!r}"
+    b.close()
+    return f"fatal: host survived; contained message {msg.split(': ')[-1]!r}"
+
+SCENARIOS["fatal"] = scenario_fatal
+
+
 
 
 
