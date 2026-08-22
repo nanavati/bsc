@@ -14,6 +14,7 @@ fn usage() -> ExitCode {
     eprintln!("usage: trs ir dump <module.bir>");
     eprintln!("       trs link <module.bir> [-o <out.cexe>] [+NAME=value...]");
     eprintln!("       trs run <module.bir> [-m max_cycles] [--code <model.so>] [+NAME=value...]");
+    eprintln!("       trs vlt build <module.bir> [--vpath <dir>]... [--vfile <file>]... [--verilator <bin>] [--cache <dir>]");
     eprintln!();
     eprintln!("Top-level bindings: a top module compiled with -trs may take");
     eprintln!("Bit-typed arguments/parameters; bind them with +NAME=value or");
@@ -203,6 +204,79 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        // trs vlt build: verilate every BVI model class in a design and
+        // print the built shared objects — the standalone entry to the
+        // verilate-or-cache pipeline that link/run also perform.
+        ["vlt", "build", path, rest @ ..] => {
+            let mut opts = trs_vlt::BuildOptions::from_env();
+            opts.verbose = true;
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                let need = |v: Option<&&str>, what: &str| -> Result<String, ExitCode> {
+                    v.map(|s| s.to_string()).ok_or_else(|| {
+                        eprintln!("Error: {what} requires a value");
+                        ExitCode::from(2)
+                    })
+                };
+                match *a {
+                    "--vpath" => match need(it.next(), "--vpath") {
+                        Ok(v) => opts.extra_vpath.push(v.into()),
+                        Err(e) => return e,
+                    },
+                    "--vfile" => match need(it.next(), "--vfile") {
+                        Ok(v) => opts.extra_vfiles.push(v.into()),
+                        Err(e) => return e,
+                    },
+                    "--verilator" => match need(it.next(), "--verilator") {
+                        Ok(v) => opts.verilator = v.into(),
+                        Err(e) => return e,
+                    },
+                    "--cache" => match need(it.next(), "--cache") {
+                        Ok(v) => opts.cache_dir = v.into(),
+                        Err(e) => return e,
+                    },
+                    other => {
+                        eprintln!("Error: invalid vlt build option '{other}'");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            let bytes = match std::fs::read(path) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("trs vlt: {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let design = match trs_ir::Design::decode(&bytes) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("trs vlt: {path}: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match trs_vlt::build_all(&design, &opts) {
+                Ok(models) if models.is_empty() => {
+                    println!("trs vlt: no BVI instances in {path}");
+                    ExitCode::SUCCESS
+                }
+                Ok(models) => {
+                    for (inst, m) in &models {
+                        println!(
+                            "{inst}: {} ({}, contract {})",
+                            m.so_path.display(),
+                            if m.cached { "cached" } else { "built" },
+                            m.contract_hash
+                        );
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("trs vlt: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         // trs link: compile the design ahead of time and write the
         // persistent artifact: <out> (wrapper script with the same CLI
         // as reference Bluesim), <out>.bir, <out>.so.  Runs never
@@ -307,6 +381,13 @@ fn main() -> ExitCode {
             // constructed, so the artifact written here opens its own
             // when it runs (see prim::LOAD_MEMFILES)
             trs_interp::prim::set_load_memfiles(false);
+            // BVI imports: verilate-or-cache their models before load,
+            // so every source/toolchain/refusal error fires at link
+            // (the artifact then finds warm cache entries at run)
+            if let Err(e) = bvi_prebuild(path) {
+                eprintln!("trs link: {e}");
+                return ExitCode::FAILURE;
+            }
             // drop any stale RunCore sidecar BEFORE the new .so is
             // emitted: a link that dies between the two writes must
             // leave "no sidecar" (classic boot), never a new .so
@@ -1437,6 +1518,26 @@ exec $BLUESPECDIR/tcllib/bluespec/bluesim.tcl $0.so {top} --script_name `basenam
     ExitCode::SUCCESS
 }
 
+/// Verilate-or-cache every BVI model class in the design (design v4
+/// sec 5.2) before the interpreter loads it.  A design with no Bvi
+/// instances is untouched.  Errors are user errors (refusals, missing
+/// sources, toolchain failures), reported with the `bvi:` prefix.
+fn bvi_prebuild(path: &str) -> Result<Vec<(String, trs_vlt::BuiltModel)>, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let design = trs_ir::Design::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let has_bvi = design.modules.iter().any(|m| {
+        m.instances
+            .iter()
+            .any(|i| matches!(i.kind, trs_ir::InstanceKind::Bvi(_)))
+    });
+    if !has_bvi {
+        return Ok(Vec::new());
+    }
+    let mut opts = trs_vlt::BuildOptions::from_env();
+    opts.verbose = true;
+    trs_vlt::build_all(&design, &opts).map_err(|e| format!("bvi: {e}"))
+}
+
 fn run_script(
     path: &str,
     max_cycles: u64,
@@ -1452,6 +1553,11 @@ fn run_script(
     // sim advances — pin the sim's stdout sink to the same LineWriter
     // so the two cannot reorder (out.rs)
     trs_interp::stdout_force_line();
+    // BVI imports: verilate-or-cache their models before load
+    if let Err(e) = bvi_prebuild(path) {
+        eprintln!("trs run: {e}");
+        return ExitCode::FAILURE;
+    }
     let mut interp = match trs_interp::load_file(path, plusargs, binds, vcd) {
         Ok(i) => i,
         Err(e) => {

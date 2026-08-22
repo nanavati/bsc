@@ -18,6 +18,9 @@ fail=0
 pos() { # name top
     name=$1; top=$2
     cp "$SRC/$name.bsv" .
+    # the R3 verilate step runs inside `trs link` and resolves sources
+    # against the contract's vpath (cwd included): give it the model
+    cp "$SRC"/rtl/*.v . 2>/dev/null
     $BSC -sim -u -g "$top" "$name.bsv" >bsc.out 2>&1 || {
         echo "FAIL $name (bsc compile)"; head -3 bsc.out; fail=1; return; }
     # -e chains into `trs link`, whose runtime arm is rung R4: the ONLY

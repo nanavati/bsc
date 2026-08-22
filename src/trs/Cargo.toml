@@ -8,6 +8,7 @@ members = [
     "crates/trs-wave",
     "crates/trs-codegen",
     "crates/trs-capi",
+    "crates/trs-vlt",
     "crates/trs",
 ]
 # trs-codegen needs llvm-18-dev; everything else builds without it.
@@ -18,6 +19,7 @@ default-members = [
     "crates/trs-rt",
     "crates/trs-wave",
     "crates/trs-capi",
+    "crates/trs-vlt",
     "crates/trs",
 ]
 
