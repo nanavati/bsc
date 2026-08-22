@@ -76,6 +76,9 @@ neg NegReversedPath sysNegReversedPath "not scheduled SB/SBR before"
 neg NegValueArgPath sysNegValueArgPath "value-method argument"
 neg NegSharedOut sysNegSharedOut "shared by more than one"
 neg NegOutClock sysNegOutClock "output clock"
+neg NegOutReset sysNegOutReset "output reset"
+neg NegVPregArg sysNegVPregArg "(\*reg\*)"
+neg NegClocklessAction sysNegClocklessAction "clockless"
 # dynamic Port args never reach the trs refusal: bsc's own G0058
 # (dynamic module arguments) fires first, at code generation
 negcompile() { # name top want
