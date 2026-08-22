@@ -407,6 +407,10 @@ deriveBvi avi =
             [ "method '" ++ getIdBaseString (vf_name f) ++
               "' has neither outputs nor an enable"
             | (f, _, Nothing, []) <- meth_port_details ] ++
+            [ "method '" ++ getIdBaseString (vf_name f) ++
+              "' returns through " ++ show (length outs) ++
+              " output ports (multi-port results are not supported yet)"
+            | (f, _, _, outs) <- meth_port_details, length outs > 1 ] ++
             [ "Action/ActionValue method '" ++
               getIdBaseString (vf_name f) ++ "' is clockless " ++
               "(no edge exists to commit its effects)"

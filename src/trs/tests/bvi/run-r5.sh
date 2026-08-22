@@ -82,6 +82,9 @@ differ PosClocks sysPosClocks
 XFILTER='=x$' differ PosGate sysPosGate
 differ PosRst sysPosRst
 differ PosParams sysPosParams
+differ PosMix sysPosMix
+differ PosTwins sysPosTwins
+differ PosTwoRst sysPosTwoRst
 differ ParamOrder sysParamOrder "$REPO/testsuite/bsc.verilog/v95"
 
 golden Rams mkTop "$REPO/testsuite/bsc.bsv_examples/RAMS" Test.bsv \
