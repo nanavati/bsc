@@ -96,21 +96,28 @@ module GatedClockDiv(CLK_IN,
 
    // Use latch to avoid glitches
    // Gate can only change when clock is low
-   always @( CLK_OUT or CLK_GATE_IN )
+   // The gate is forced closed while the reset is asserted: a gated
+   // clock must emit no edges before its domain's reset completes
+   // (see GatedClock.v).
+   always @( CLK_OUT or CLK_GATE_IN or RST )
      begin
-        if ( ! CLK_OUT )
+        if ( RST == `BSV_RESET_VALUE )
+          new_gate <= `BSV_ASSIGNMENT_DELAY 1'b0 ;
+        else if ( ! CLK_OUT )
           new_gate <= `BSV_ASSIGNMENT_DELAY CLK_GATE_IN ;
      end
 
 `ifdef BSV_NO_INITIAL_BLOCKS
 `else // not BSV_NO_INITIAL_BLOCKS
   // synopsys translate_off
+  // cntr and new_gate are deliberately NOT initialized at time 0 (see
+  // ClockDiv.v and GatedClock.v): both are defined by the reset
+  // assertion edge, and a time-0 init is an X -> value edge that only
+  // four-state simulators see.
   initial
     begin
        #0 ;
-       cntr = (upper - offset) ;
        PREEDGE = 0 ;
-       new_gate = 0 ;
     end // initial begin
   // synopsys translate_on
 `endif // BSV_NO_INITIAL_BLOCKS

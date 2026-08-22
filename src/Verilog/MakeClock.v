@@ -106,17 +106,10 @@ module MakeClock ( CLK, RST,
    assign CLK_GATE_OUT = current_gate;
    assign COND_OUT     = new_gate;
 
-`ifdef BSV_NO_INITIAL_BLOCKS
-`else // not BSV_NO_INITIAL_BLOCKS
-   // synopsys translate_off
-   initial begin
-      #0 ;
-      current_clk  = 1'b0 ;
-      current_gate = 1'b1 ;
-      new_gate     = 1'b1 ;
-      CLK_VAL_OUT  = 1'b0;
-   end
-   // synopsys translate_on
-`endif // BSV_NO_INITIAL_BLOCKS
+// No time-0 initial block: every register here is asynchronously
+// reset (initVal/initGate) by the reset assertion edge, and a time-0
+// init is an X -> value output edge that only four-state simulators
+// see (it fired clocked processes before reset).  This also makes the
+// BSV_NO_INITIAL_BLOCKS build identical by construction.
 
 endmodule

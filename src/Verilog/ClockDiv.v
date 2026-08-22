@@ -89,10 +89,14 @@ module ClockDiv(CLK_IN, RST, PREEDGE,  CLK_OUT);
 `ifdef BSV_NO_INITIAL_BLOCKS
 `else // not BSV_NO_INITIAL_BLOCKS
   // synopsys translate_off
+  // The counter is deliberately NOT initialized at time 0: CLK_OUT is a
+  // bit of it, and a time-0 X -> value assignment is an edge in
+  // four-state simulators (firing clocked processes before reset) but
+  // not in two-state ones.  The counter is defined by the reset
+  // assertion edge instead (matching BSV_NO_INITIAL_BLOCKS builds).
   initial
     begin
        #0 ;
-       cntr = (upper - offset)  ;
        PREEDGE = 0 ;
     end // initial begin
   // synopsys translate_on
