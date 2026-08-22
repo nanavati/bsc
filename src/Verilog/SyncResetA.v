@@ -49,11 +49,18 @@ module SyncResetA (
 `ifdef BSV_NO_INITIAL_BLOCKS
 `else // not BSV_NO_INITIAL_BLOCKS
    // synopsys translate_off
+   // Initialize holding the reset ASSERTED: the harness drives the
+   // asserted level at time 0, and the initial state must agree with
+   // the time-0 input levels or the window before the manufactured
+   // assertion edge differs between four-state simulators (where the
+   // time-0 X -> asserted transition is itself an edge) and two-state
+   // simulators (which see no edge until the pulse and would otherwise
+   // sit at a deasserted init, wrongly releasing downstream and
+   // inverted-reset consumers during startup).
    initial
      begin
         #0 ;
-        // initialize out of reset forcing the designer to do one
-        reset_hold = {(RSTDELAY + 1) {~ `BSV_RESET_VALUE}} ;
+        reset_hold = {(RSTDELAY + 1) {`BSV_RESET_VALUE}} ;
      end
    // synopsys translate_on
 `endif // BSV_NO_INITIAL_BLOCKS

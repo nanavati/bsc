@@ -54,9 +54,16 @@ module MakeReset0 (
 `ifdef BSV_NO_INITIAL_BLOCKS
 `else // not BSV_NO_INITIAL_BLOCKS
    // synopsys translate_off
+   // Initialize to the value the reset branch would produce: the state
+   // a simulator that saw the reset assertion edge at time 0 would
+   // reach.  Initializing to the deasserted value contradicted the
+   // reset branch: a two-state simulator (which sees no time-0 edge)
+   // then held the generated reset deasserted until the harness's
+   // manufactured assertion edge, and consumers of the INVERTED reset
+   // observed that window as a spurious assertion of their own reset.
    initial begin
       #0 ;
-      rst = ~ `BSV_RESET_VALUE ;
+      rst = init ? ~ `BSV_RESET_VALUE : `BSV_RESET_VALUE ;
    end
    // synopsys translate_on
 `endif // BSV_NO_INITIAL_BLOCKS

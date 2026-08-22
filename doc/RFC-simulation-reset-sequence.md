@@ -1,8 +1,8 @@
 # RFC: A portable reset sequence for the simulation harness
 
 Status: draft for discussion
-Scope: `src/Verilog/main.v`, `src/Verilator/sim_main.cpp`,
-`src/Verilog/ClockGen.v`, `src/Verilog/GatedClock.v`, testsuite golden
+Scope: `src/Verilog/main.v`, `src/Verilator/sim_main.cpp`, the clock
+and reset primitives named in "What changes", and testsuite golden
 files that record output from the startup window.
 
 ## Summary
@@ -15,25 +15,33 @@ four-state event simulators (Icarus Verilog, VCS), two-state simulators
 (Verilator), and Bluesim's execution model:
 
   * time 0: clock low, reset **asserted as a level** (actively driven);
-  * times 1..2: one **deassert/assert pulse**, so the assertion is also
+  * time 1: first clock posedge, under reset;
+  * times 2..3: one **deassert/assert pulse**, so the assertion is also
     a genuine value **edge**, asynchronously (no clock edge at either
     instant);
-  * time 3: first clock posedge, under reset;
   * time 4: reset **deasserted**, between clock edges;
   * steady schedule unchanged: negedge at 5, posedge at 10, period 10.
+
+The clock edge comes BEFORE the pulse deliberately: the pulse is a
+one-tick window in which the reset is seen deasserted, and
+level-sensitive reset-gated logic (assertion checkers such as the OVL
+library) samples during it.  A four-state simulator's X-guards keep
+such checkers quiet on uninitialized state; a two-state simulator has
+no X, so the window must only ever expose post-reset state -- which
+the preceding under-reset clock edge establishes.
 
 Each half of the assertion serves a different simulator class: the
 time-0 *level* is what a four-state simulator's initialization
 artifacts are judged against (see the ordering argument below), and the
-time-2 *edge* is the only thing a two-state simulator or a
+time-3 *edge* is the only thing a two-state simulator or a
 `BSV_NO_INITIAL_BLOCKS` build can see at all.  The steady schedule and
 every first rule-firing edge (time 10, 20, ...) are unchanged, so
 golden files that record post-reset behavior are unaffected.  Golden
 files that recorded output from the startup window change; this RFC
 argues they were recording a simulator race, not design behavior.
 
-Two small primitive changes accompany the harness change; each is a
-rule about clocks and reset that holds on its own (below).
+A set of small primitive changes accompanies the harness change; each
+follows a rule about clocks and reset that holds on its own (below).
 
 ## The problem: time-0 reset assertion is a race
 
@@ -112,9 +120,24 @@ closed by the clock rule below, not by scheduling.)
 separate process with blocking assignments — the only writes the LRM
 leaves unordered against a clock edge at the same instant.  The
 schedule therefore keeps them away from clock-edge instants: pulse at
-1..2, release at 4; edges at 3, 5, 10.
+2..3, release at 4; edges at 1, 5, 10.
 
-**Internal asynchronous assertion** (the tree fanning out after time 2)
+**Initial-state consistency.**  The primitives' simulation-only initial
+values must AGREE with the time-0 asserted level: a reset-holding
+register initialized "out of reset" contradicts it, and a two-state
+simulator (which sees no edge until the pulse) sits in that
+contradiction through the whole startup window -- downstream and
+inverted-reset consumers observe a reset network that four-state
+simulators (fixed at time 0 by the X -> asserted transition itself)
+never show.  The reset-network registers (`SyncResetA`, `SyncReset`,
+`ClockSelect`, `UngatedClockSelect` `reset_hold`; the `MakeReset`
+family's `rst`) therefore initialize to the value their own
+reset/assertion branch produces.  This carries no proof weight -- the
+manufactured edge does, and `BSV_NO_INITIAL_BLOCKS` builds work
+through the edge alone -- it only removes an init that disagreed with
+the sequence.
+
+**Internal asynchronous assertion** (the tree fanning out after time 3)
 is race-immune *by dominance*: every consumer's always block checks the
 reset level first, and the reset branch writes a value that does not
 depend on prior state.  Whatever order the simulator fires the
@@ -173,7 +196,12 @@ assertion edge onward.
 * `sim_main.cpp` (verilator): the same schedule in both `--timing` and
   `--no-timing` builds; the time-0 deassert/assert evaluation hack and
   its `BSC_VLT_NO_RESET_EDGE` escape are deleted.
-* `ClockGen.v`: rule 1.  `GatedClock.v`: rule 2.
+* `ClockGen.v`, `ClockDiv.v`, `GatedClockDiv.v`, `MakeClock.v`:
+  rule 1 (no time-0 output transitions).  `GatedClock.v`,
+  `GatedClockDiv.v`: rule 2 (gate closed under reset).
+* `SyncResetA.v`, `SyncReset.v`, `ClockSelect.v`,
+  `UngatedClockSelect.v`, `MakeReset{,0,A}.v`: initial state agrees
+  with the time-0 asserted level (initial-state consistency, above).
 * Testsuite goldens that recorded startup-window output are re-recorded
   once — identically valid for every simulator.
 
@@ -181,9 +209,6 @@ assertion edge onward.
 
 * The steady clock schedule (negedge 5, posedge 10) and therefore all
   timestamps in post-reset output.
-* The reset primitives' logic and initial values (`SyncResetA` is
-  untouched; its deasserted init no longer matters to the outcome,
-  because the load-bearing assertion is the time-2 edge).
 * The `'hAAAA...` uninitialized-register markers: they remain the
   visible detector for state that no reset ever reaches.
 * Bluesim.

@@ -104,8 +104,7 @@ module UngatedClockSelect(
          #0 ;
          select_out  = 1'b0 ;
          select_out2 = 1'b0 ;
-        // initialize out of reset forcin the designer to do one.
-         reset_hold = {(RSTDELAY + 1) {~ `BSV_RESET_VALUE}} ;
+         reset_hold = {(RSTDELAY + 1) {`BSV_RESET_VALUE}} ; // asserted: must agree with the time-0 level (see SyncResetA.v)
       end
    // synopsys translate_on
 `endif // BSV_NO_INITIAL_BLOCKS
