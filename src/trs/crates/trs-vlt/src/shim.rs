@@ -19,7 +19,7 @@ use crate::{sha256, VltError};
 
 /// Bumped whenever the generated shim's shape or the C ABI changes;
 /// part of the cache class key.
-pub const SHIMGEN_REV: u32 = 1;
+pub const SHIMGEN_REV: u32 = 2;
 
 fn ctype_for(width: u32) -> Option<&'static str> {
     match width {
@@ -235,6 +235,16 @@ extern "C" int trs_vlt_printf(const char* fmt, ...) {{
     va_end(ap);
     if (g_out_cb) g_out_cb(g_out_ctx, buf); else fwrite(buf, 1, n, stdout);
     return n;
+}}
+
+// vl_finish (built with -DVL_USER_FINISH): set the context's finish
+// flag SILENTLY -- the reference Bluesim prints nothing for $finish,
+// and byte parity with its goldens is the oracle contract (Verilator's
+// default prints "- <file>: Verilog $finish").
+void vl_finish(const char* filename, int linenum, const char* hier)
+    VL_MT_UNSAFE {{
+    (void)filename; (void)linenum; (void)hier;
+    Verilated::threadContextp()->gotFinish(true);
 }}
 
 // vl_fatal containment (built with -DVL_USER_FATAL): $fatal/$stop and

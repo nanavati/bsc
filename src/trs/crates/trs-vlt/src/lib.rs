@@ -382,7 +382,7 @@ pub fn build_model(
     // cannot tell) before any contract-vs-model port check.
     let obj = class_dir.join("obj");
     let cflags = format!(
-        "-DVL_USER_FATAL -DVL_PRINTF=trs_vlt_printf -include {} -fPIC",
+        "-DVL_USER_FATAL -DVL_USER_FINISH -DVL_PRINTF=trs_vlt_printf -include {} -fPIC",
         decl_path.display()
     );
     let mut cmd = Command::new(&opts.verilator);
@@ -465,6 +465,7 @@ pub fn build_model(
         .arg("-O2")
         .arg("-std=c++17")
         .arg("-DVL_USER_FATAL")
+        .arg("-DVL_USER_FINISH")
         .arg("-DVL_PRINTF=trs_vlt_printf")
         .arg("-include")
         .arg(&decl_path)

@@ -404,7 +404,11 @@ def _trsonly_test(rel, top, wk, testdir, src, trsonly):
         return (rel, top, "DIFF", "trsonly: no golden " + golden_p)
 
     for f in os.listdir(testdir):
-        if f.endswith((".bsv", ".bs")):
+        # .v/.data ride along for BVI designs: the trs link's
+        # verilate-or-cache step resolves the imported module's Verilog
+        # source against the contract's vpath (cwd included), and
+        # $readmemh data resolves against the invocation cwd
+        if f.endswith((".bsv", ".bs", ".v", ".sv", ".data")):
             try:
                 shutil.copy(os.path.join(testdir, f), wk)
             except OSError:
