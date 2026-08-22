@@ -19,7 +19,7 @@ use crate::{sha256, VltError};
 
 /// Bumped whenever the generated shim's shape or the C ABI changes;
 /// part of the cache class key.
-pub const SHIMGEN_REV: u32 = 2;
+pub const SHIMGEN_REV: u32 = 3;
 
 fn ctype_for(width: u32) -> Option<&'static str> {
     match width {
@@ -273,7 +273,9 @@ void* vlt_new(const char* inst_path, int argc, const char** argv) {{
     try {{
         Handle* h = new Handle();
         h->ctx = new VerilatedContext();
-        if (argc > 0) h->ctx->commandArgs(argc, argv);
+        // always, even with argc==0: $test$plusargs errors if
+        // commandArgs was never called on the context
+        h->ctx->commandArgs(argc, argv);
         Verilated::threadContextp(h->ctx);
         h->model = new V{top}(h->ctx, inst_path ? inst_path : "{top}");
         h->finaled = false;

@@ -162,6 +162,9 @@ fn load_file_inner(
             d
         }
     };
+    // raw +args reach BVI models at construction (their per-instance
+    // VerilatedContext), so they stage before instantiation
+    crate::bvi::stage_plusargs(plusargs);
     let mut interp = Interp::new_bound(design, binds)?;
     sl.lap("interp build (instantiate)");
     // the bind salt differentiates compiled artifacts by their baked

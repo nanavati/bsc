@@ -30,12 +30,15 @@ differ() { # name top [extra-files-dir]
     $BSC -verilog -u -g "$top" "$bsv" >v.out 2>&1 \
         && $BSC -verilog -vsim iverilog -e "$top" -o vref.exe >>v.out 2>&1 || {
         echo "FAIL $name (verilog oracle build)"; tail -3 v.out; fail=1; return; }
-    timeout 120 ./vref.exe > vref.out 2>&1; vrc=$?
+    # RUNARGS (e.g. "+doit +lvl=7") reach both the oracle exe and the
+    # trs run, then reset -- the plusargs fixture uses this
+    timeout 120 ./vref.exe $RUNARGS > vref.out 2>&1; vrc=$?
     $BSC -sim -u -g "$top" "$bsv" >b.out 2>&1 || {
         echo "FAIL $name (bsc compile)"; head -3 b.out; fail=1; return; }
     $BSC -sim -trs -e "$top" >link.out 2>&1 || {
         echo "FAIL $name (trs link)"; head -5 link.out; fail=1; return; }
-    timeout 120 "$TRS" run "$top.bir" > got.out 2>&1; grc=$?
+    timeout 120 "$TRS" run "$top.bir" $RUNARGS > got.out 2>&1; grc=$?
+    RUNARGS=
     grep -v '\$finish' vref.out > vref.flt
     grep -v '\$finish' got.out > got.flt
     if [ -n "$XFILTER" ]; then
@@ -85,6 +88,8 @@ differ PosParams sysPosParams
 differ PosMix sysPosMix
 differ PosTwins sysPosTwins
 differ PosTwoRst sysPosTwoRst
+differ PosTime sysPosTime
+RUNARGS="+doit +lvl=7" differ PosPlus sysPosPlus
 differ ParamOrder sysParamOrder "$REPO/testsuite/bsc.verilog/v95"
 
 golden Rams mkTop "$REPO/testsuite/bsc.bsv_examples/RAMS" Test.bsv \

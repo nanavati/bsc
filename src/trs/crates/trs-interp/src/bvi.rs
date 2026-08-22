@@ -55,6 +55,22 @@ unsafe extern "C" fn model_output_cb(_ctx: *mut c_void, text: *const std::ffi::c
     out::write_str(&s);
 }
 
+thread_local! {
+    /// Raw +args staged BEFORE instantiation (BviPrim::new hands them
+    /// to the model's VerilatedContext; the Verilog flow passes every
+    /// command-line +arg to the simulator the same way).  Instantiation
+    /// runs before the Interp's own fe.plusargs field is populated, so
+    /// the loader stages them here first.
+    static PLUSARGS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Stage the raw +args for models constructed by the CURRENT thread's
+/// upcoming instantiation (called by the loaders before Interp::new*).
+pub fn stage_plusargs(args: &[String]) {
+    PLUSARGS.with(|p| *p.borrow_mut() = args.to_vec());
+}
+
 struct MethodInfo {
     kind: BviMethodKind,
     args: Vec<usize>,
@@ -132,6 +148,7 @@ impl BviPrim {
     /// error reporting before instantiation -- so failure panics with
     /// the full diagnosis.
     pub fn new(c: &BviContract, strings: &[String], path: &str) -> BviPrim {
+        let plusargs: Vec<String> = PLUSARGS.with(|p| p.borrow().clone());
         let s = |id: u32| strings.get(id as usize).map(String::as_str).unwrap_or("");
         let top = s(c.verilog_name).to_string();
         let opts = trs_vlt::BuildOptions::from_env();
@@ -162,7 +179,22 @@ impl BviPrim {
         unsafe { f_cb(Some(model_output_cb), std::ptr::null_mut()) };
 
         let cpath = std::ffi::CString::new(path).unwrap_or_default();
-        let h = unsafe { f_new(cpath.as_ptr(), 0, std::ptr::null()) };
+        // sim plusargs reach the model through commandArgs (the shim
+        // passes argv to the per-instance VerilatedContext), so
+        // $test$plusargs/$value$plusargs see what the design sees
+        let cargs: Vec<std::ffi::CString> = plusargs
+            .iter()
+            .map(|a| std::ffi::CString::new(format!("+{a}")).unwrap_or_default())
+            .collect();
+        let argv: Vec<*const std::ffi::c_char> =
+            cargs.iter().map(|c| c.as_ptr()).collect();
+        let h = unsafe {
+            f_new(
+                cpath.as_ptr(),
+                argv.len() as i32,
+                if argv.is_empty() { std::ptr::null() } else { argv.as_ptr() },
+            )
+        };
         assert!(!h.is_null(), "trs bvi: vlt_new failed for {path} ({top})");
 
         let n = c.ports.len();
