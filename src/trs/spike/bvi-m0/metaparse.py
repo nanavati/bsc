@@ -29,7 +29,7 @@ def pick_format(vlt):
     return "xml" if (maj, minor) < (5, 46) else "json"
 
 
-def run_dump(vlt, top, sources, ydirs, defines, mdir, fmt):
+def run_dump(vlt, top, sources, ydirs, defines, mdir, fmt, extra_args=()):
     # NOTE (M0 discovery): the inspection dump runs with --timing so
     # delay constructs SURVIVE into the AST -- under --no-timing
     # verilator discards them before dumping and no warning fires,
@@ -40,6 +40,7 @@ def run_dump(vlt, top, sources, ydirs, defines, mdir, fmt):
         cmd += ["-y", str(d)]
     for k, v in (defines or {}).items():
         cmd += [f"-D{k}={v}" if v is not None else f"-D{k}"]
+    cmd += list(extra_args)
     cmd += [str(s) for s in sources]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -158,11 +159,11 @@ def _parse_json(path, top):
             "timeprecision": state["timeprecision"]}
 
 
-def extract(vlt, top, sources, ydirs=(), defines=None, workdir="obj_meta"):
+def extract(vlt, top, sources, ydirs=(), defines=None, workdir="obj_meta", extra_args=()):
     fmt = pick_format(vlt)
     mdir = Path(workdir)
     mdir.mkdir(parents=True, exist_ok=True)
-    run_dump(vlt, top, sources, ydirs, defines, mdir, fmt)
+    run_dump(vlt, top, sources, ydirs, defines, mdir, fmt, extra_args)
     if fmt == "xml":
         dumps = list(mdir.glob("*.xml"))
     else:

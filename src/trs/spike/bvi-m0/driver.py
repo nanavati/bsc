@@ -18,12 +18,32 @@ import metaparse  # noqa: E402
 import shimgen    # noqa: E402
 
 
+def serialize_param(name, spec):
+    """Typed -G serialization (v4 sec 4.5): semantics, not text."""
+    t = spec["type"]
+    v = spec["value"]
+    if t == "int_signed":
+        return f"-G{name}={int(v)}"                      # signed decimal
+    if t == "bits":
+        return f"-G{name}={spec['width']}'h{v}"          # sized hex literal
+    if t == "string":
+        # verilog string literal; exact escaping of quotes/backslashes
+        esc = str(v).replace("\\", "\\\\").replace('"', '\\"')
+        return f'-G{name}="{esc}"'
+    if t == "real":
+        return f"-G{name}={float(v)!r}"                  # round-trip repr
+    raise SystemExit(f"REFUSE(param-type): {name} has unsupported type {t}")
+
+
 def build(vlt, contract, workdir):
     top = contract["verilog_name"]
     work = Path(workdir); work.mkdir(parents=True, exist_ok=True)
     rtl = HERE / "rtl" / f"{top}.v"
 
-    meta = metaparse.extract(vlt, top, [rtl], workdir=work / "meta")
+    gparams = [serialize_param(n, sp) for n, sp in
+               (contract.get("params") or {}).items()]
+    meta = metaparse.extract(vlt, top, [rtl], workdir=work / "meta",
+                             extra_args=gparams)
     (work / "meta.json").write_text(json.dumps(meta, indent=2))
 
     if meta["has_delay"]:
@@ -39,7 +59,7 @@ def build(vlt, contract, workdir):
     r = subprocess.run(
         [vlt, "--cc", "--no-timing", "--x-assign", "0", "--x-initial", "0",
          "-O2", "--assert", "--top-module", top, "-Mdir", str(obj),
-         "-CFLAGS", defines, str(rtl)],
+         "-CFLAGS", defines] + gparams + [str(rtl)],
         capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit(f"verilate failed:\n{r.stderr}")
@@ -417,6 +437,28 @@ SCENARIOS["liar"] = scenario_liar
 SCENARIOS["xing"] = scenario_xing
 SCENARIOS["violator"] = scenario_violator
 SCENARIOS["xprobe"] = scenario_xprobe
+
+def scenario_params(so, contract):
+    """Typed -G semantics: signed sign-extension, wide limbs through the
+    VlWide get path, and string/real round-trip captured via the
+    VL_PRINTF redirect callback (initial-block $display)."""
+    lines = []
+    b = Bvi(so, contract)
+    CB = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_char_p)
+    cb = CB(lambda _c, txt: lines.append(txt.decode()))
+    b.lib.vlt_set_output_cb(cb, None)
+    b.drive("CLK", 0)
+    sint = b.observe("P_SINT")        # first settle also runs initial blocks
+    wide = b.observe("P_WIDE")
+    assert sint == 0xFFFFFFFB, f"signed -5 came back 0x{sint:08x}"
+    assert wide == 0x0123456789abcdef01234567, f"wide: 0x{wide:x}"
+    out = "".join(lines)
+    assert "STR=hello" in out and "RVAL=2.5" in out, f"display capture: {out!r}"
+    b.close()
+    return f"params: signed/-5 exact, 96-bit wide exact through VlWide, display capture {out.strip()!r}"
+
+SCENARIOS["params"] = scenario_params
+
 
 
 

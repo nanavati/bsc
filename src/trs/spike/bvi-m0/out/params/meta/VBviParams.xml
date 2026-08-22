@@ -1,0 +1,65 @@
+<?xml version="1.0" ?>
+<!-- DESCRIPTION: Verilator output: XML representation of netlist -->
+<verilator_xml>
+  <files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviParams.v" language="1800-2017"/>
+    <file id="c" filename="/usr/share/verilator/include/verilated_std.sv" language="1800-2017"/>
+    <file id="a" filename="&lt;built-in&gt;" language="1800-2017"/>
+    <file id="b" filename="&lt;command-line&gt;" language="1800-2017"/>
+  </files>
+  <module_files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviParams.v" language="1800-2017"/>
+  </module_files>
+  <cells>
+    <cell loc="d,4,8,4,17" name="BviParams" submodname="BviParams" hier="BviParams"/>
+  </cells>
+  <netlist>
+    <module loc="d,4,8,4,17" name="BviParams" origName="BviParams" topModule="1">
+      <var loc="d,9,23,9,26" name="CLK" dtype_id="1" dir="input" pinIndex="1" vartype="logic" origName="CLK"/>
+      <var loc="d,10,24,10,30" name="P_SINT" dtype_id="2" dir="output" pinIndex="2" vartype="logic" origName="P_SINT">
+        <const loc="d,12,19,12,23" name="32&apos;hfffffffb" dtype_id="2"/>
+      </var>
+      <var loc="d,11,23,11,29" name="P_WIDE" dtype_id="3" dir="output" pinIndex="3" vartype="logic" origName="P_WIDE">
+        <const loc="d,13,19,13,23" name="96&apos;h123456789abcdef01234567" dtype_id="3"/>
+      </var>
+      <var loc="d,5,27,5,31" name="SINT" dtype_id="2" vartype="logic" origName="SINT" param="true">
+        <const loc="d,5,27,5,31" name="32&apos;hfffffffb" dtype_id="2"/>
+      </var>
+      <var loc="d,6,27,6,30" name="STR" dtype_id="4" vartype="logic" origName="STR" param="true">
+        <const loc="d,6,27,6,30" name="40&apos;h68656c6c6f" dtype_id="4"/>
+      </var>
+      <var loc="d,7,27,7,31" name="RVAL" dtype_id="5" vartype="real" origName="RVAL" param="true">
+        <const loc="d,7,27,7,31" name="2.5" dtype_id="5"/>
+      </var>
+      <var loc="d,8,27,8,31" name="WIDE" dtype_id="3" vartype="logic" origName="WIDE" param="true">
+        <const loc="d,8,27,8,31" name="96&apos;h123456789abcdef01234567" dtype_id="3"/>
+      </var>
+      <initial loc="d,14,3,14,10">
+        <display loc="d,14,11,14,19" displaytype="$display">
+          <sformatf loc="d,14,11,14,19" name="STR=hello RVAL=2.5" dtype_id="6"/>
+        </display>
+      </initial>
+      <initial loc="d,12,17,12,18">
+        <assign loc="d,12,17,12,18" dtype_id="2">
+          <const loc="d,12,19,12,23" name="32&apos;hfffffffb" dtype_id="2"/>
+          <varref loc="d,12,10,12,16" name="P_SINT" dtype_id="2"/>
+        </assign>
+      </initial>
+      <initial loc="d,13,17,13,18">
+        <assign loc="d,13,17,13,18" dtype_id="3">
+          <const loc="d,13,19,13,23" name="96&apos;h123456789abcdef01234567" dtype_id="3"/>
+          <varref loc="d,13,10,13,16" name="P_WIDE" dtype_id="3"/>
+        </assign>
+      </initial>
+    </module>
+    <typetable loc="a,0,0,0,0">
+      <basicdtype loc="c,43,22,43,24" id="1" name="logic"/>
+      <voiddtype loc="c,45,18,45,27" id="7"/>
+      <basicdtype loc="c,156,10,156,16" id="6" name="string"/>
+      <basicdtype loc="d,7,34,7,37" id="5" name="real" signed="true"/>
+      <basicdtype loc="d,6,27,6,30" id="4" name="logic" left="39" right="0"/>
+      <basicdtype loc="d,10,17,10,18" id="2" name="logic" left="31" right="0" signed="true"/>
+      <basicdtype loc="d,11,10,11,11" id="3" name="logic" left="95" right="0"/>
+    </typetable>
+  </netlist>
+</verilator_xml>

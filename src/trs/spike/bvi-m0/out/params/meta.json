@@ -1,0 +1,35 @@
+{
+  "format": "xml",
+  "ports": [
+    {
+      "name": "CLK",
+      "orig_name": "CLK",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 1
+    },
+    {
+      "name": "P_SINT",
+      "orig_name": "P_SINT",
+      "dir": "output",
+      "width": 32,
+      "pin_index": 2
+    },
+    {
+      "name": "P_WIDE",
+      "orig_name": "P_WIDE",
+      "dir": "output",
+      "width": 96,
+      "pin_index": 3
+    }
+  ],
+  "params": {
+    "SINT": null,
+    "STR": null,
+    "RVAL": null,
+    "WIDE": null
+  },
+  "has_delay": false,
+  "has_dpi": null,
+  "timeprecision": null
+}
