@@ -7,6 +7,7 @@
 //! place; primitives implement the begin-of-cycle-snapshot semantics.
 //! Correctness and clarity over speed, everywhere.
 
+pub mod bvi;
 pub mod format;
 pub mod prim;
 pub mod value;
@@ -181,6 +182,10 @@ pub struct Interp {
     /// reset nodes asserted from time 0 (InitialReset outputs), broadcast
     /// at run() start once instantiation is complete
     initial_asserts: Vec<usize>,
+    /// BVI import instances (InstKind::Prim holding a BviPrim): walked
+    /// at the per-timeslice commit point (batched three-phase edge
+    /// commit, ordered before flush_reset_pending)
+    bvi_insts: Vec<usize>,
     /// VCD writer (vcd.rs, docs/VCD-CONTRACT.md)
     vcd: vcd::Vcd,
     /// record last-computed def values / method calls for VCD dumps (set
@@ -797,6 +802,7 @@ impl Interp {
             rst_active: 0,
             rst_pending: Vec::new(),
             initial_asserts: Vec::new(),
+            bvi_insts: Vec::new(),
             vcd: vcd::Vcd::new(),
             vcd_trace: false,
             debug_tier: false,
@@ -1059,15 +1065,32 @@ impl Interp {
                     )
                 }
                 ir::InstanceKind::Bvi(c) => {
-                    // BviPrim (shadow vector + batched commit) lands in R4;
-                    // no exporter emits this variant yet (R2), so reaching
-                    // here means a hand-built or future BIR — fail loudly.
-                    panic!(
-                        "BVI instance {:?} (verilog module {:?}): runtime support \
-                         not yet implemented (BviPrim, plan rung R4)",
-                        cpath,
-                        self.s(c.verilog_name)
-                    );
+                    // BVI import: a Verilator-compiled model behind the
+                    // prim ABI (bvi.rs).  The verilate-or-cache step ran
+                    // at link/run start; this hits a warm cache.
+                    let prim =
+                        bvi::BviPrim::new(&c, &self.d.strings, &cpath);
+                    let idx = self.insts.len();
+                    self.insts.push(Inst {
+                        path: cpath.clone(),
+                        kind: InstKind::Prim(Box::new(prim)),
+                    });
+                    // reset-line subscriptions, ordinal per Reset arg
+                    // (mirrors the Prim arm below)
+                    let mut rst_ord = 0;
+                    for a in &args {
+                        if let Expr::Reset { wire } = a {
+                            if let Expr::Port(p) = wire.as_ref() {
+                                if let Some(&n) = reset_map.get(p) {
+                                    self.rst_subs[n].push((idx, rst_ord));
+                                }
+                            }
+                            rst_ord += 1;
+                        }
+                    }
+                    self.bvi_insts.push(idx);
+                    self.inst_by_path.insert(cpath.clone(), idx);
+                    idx
                 }
                 ir::InstanceKind::Prim(p) => {
                     let pname = match &p {
@@ -3199,6 +3222,26 @@ impl Interp {
     /// End of timeslice: let generators move internally deferred
     /// transitions forward, then apply all deferred transitions (which
     /// may cascade into more, applied in the same instant).
+    /// The BVI commit point: batched three-phase edge commit for every
+    /// BVI import, once per timeslice, ordered BEFORE
+    /// flush_reset_pending / the PG_FINAL early-rule pass (design v4
+    /// sec 4.1 step 3).  A model $finish lands like a design $finish.
+    fn bvi_commit_point(&mut self, now: u64) {
+        if self.bvi_insts.is_empty() {
+            return;
+        }
+        let idxs: Vec<usize> = self.bvi_insts.clone();
+        let mut finish = false;
+        for i in idxs {
+            if let InstKind::Prim(p) = &mut self.insts[i].kind {
+                finish |= p.bvi_commit(now);
+            }
+        }
+        if finish && self.fe.finished.is_none() {
+            self.fe.finished = Some(0);
+        }
+    }
+
     fn flush_reset_pending(&mut self) {
         let gens: Vec<usize> = self.rstgen_out.keys().copied().collect();
         for idx in gens {
@@ -3906,6 +3949,9 @@ impl Interp {
         for n in inits {
             self.apply_reset(n, true);
         }
+        // the t=0 reset assertion reaches BVI models as a real
+        // transition (their startup settle ran deasserted)
+        self.bvi_commit_point(0);
         self.flush_reset_pending();
 
         // capture BEFORE planning: jit_plan takes the request and the
@@ -4351,6 +4397,7 @@ impl Interp {
             // top reset deasserts at t=2 after that instant's logic
             if t > 2 && self.rst_asserted[0] {
                 self.apply_reset(0, false);
+                self.bvi_commit_point(t);
                 self.flush_reset_pending();
                 // steady state begins here: push the in-flight edge
                 // back and try the central player once
@@ -4734,6 +4781,10 @@ impl Interp {
             // PG_AFTER_LOGIC reset flushing)
             let same_time = matches!(heap.peek(), Some(Reverse((nt, _, _, _))) if *nt == t);
             if !same_time {
+                // BVI batched edge commit: all of this instant's clock
+                // levels and firing-caller inputs land in the models
+                // (one NBA-batched eval per instance)
+                self.bvi_commit_point(t);
                 self.flush_reset_pending();
                 // per-timeslice VCD event (PG_AFTER_LOGIC, before the
                 // PG_FINAL early-rule pass)

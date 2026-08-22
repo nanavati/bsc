@@ -325,6 +325,7 @@ dependencies = [
  "serde",
  "trs-codegen",
  "trs-ir",
+ "trs-vlt",
 ]
 
 [[package]]

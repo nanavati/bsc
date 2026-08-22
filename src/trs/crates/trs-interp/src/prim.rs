@@ -204,6 +204,13 @@ pub trait Prim {
     /// internally deferred transitions forward (MakeReset's rst register
     /// reaching its internal SyncReset).
     fn end_of_timeslice(&mut self) {}
+    /// BVI imports only: the batched three-phase edge commit, run once
+    /// per timeslice at the interpreter's commit point (ordered before
+    /// flush_reset_pending / the PG_FINAL pass).  Returns true if the
+    /// model requested $finish.  Every other prim is a no-op.
+    fn bvi_commit(&mut self, _now: u64) -> bool {
+        false
+    }
     /// For clock-generating prims (MakeClock, ClockDiv, ClockInverter):
     /// drain output edges triggered at the current instant
     /// (bk_trigger_clock_edge).  true = posedge.

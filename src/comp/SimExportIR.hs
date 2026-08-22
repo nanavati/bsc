@@ -952,12 +952,10 @@ encInstance pkgNames bviEnv mom avi = do
         else do mEnc <- strE modName
                 return $ encVariant "Prim"
                            (encVariant "Other" (encStruct [("name", mEnc)]))
-    argsEnc <- if isBviImport avi
-                 -- BVI instantiation args (params, const ports, clocks,
-                 -- resets) are fully carried by the contract; the
-                 -- generic expr encoder would choke on ASClock/ASReset
-                 then return []
-                 else mapM encExpr (avi_iargs avi)
+    -- BVI instances keep their generic args too: the interpreter's
+    -- reset/clock subscription walk reads the Expr::Reset/Expr::Clock
+    -- connection info from them (values are carried by the contract)
+    argsEnc <- mapM encExpr (avi_iargs avi)
     -- name-sorted: the set is (AId, AId) pairs and AId's Ord follows
     -- run/context-dependent interned-FString order — the encoded list
     -- is a constraint RELATION, so canonical order is free (and .bir

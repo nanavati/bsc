@@ -8,7 +8,7 @@ module Gate3(CLK, RST_N, CFG_IN, EN_cfg, PUT_IN, EN_put, RDY_put);
   input EN_put;
   output RDY_put;
 
-  assign RDY_put = RST_N & ~CFG_IN[0];
+  assign RDY_put = RST_N & ~CFG_IN[3];
 
   reg [7:0] last;
   always @(posedge CLK) begin
