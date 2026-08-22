@@ -549,7 +549,29 @@ pub fn build_model_resolved(
     )
     .trim()
     .to_string();
-    let mut ld = Command::new("g++");
+    // per-platform C++ configuration from the pinned verilator's own
+    // build config: include/verilated.mk is written by its configure
+    // and is the SAME file the model objects were just built with, so
+    // the shim compiles with the matching compiler and (for timing
+    // models) the platform's coroutine flags -- gcc wants -fcoroutines,
+    // clang/macOS configures differently.  Missing values fall back to
+    // the Linux/gcc defaults.
+    let vmk = std::fs::read_to_string(format!("{vroot}/include/verilated.mk"))
+        .unwrap_or_default();
+    let mk_var = |name: &str| -> Option<String> {
+        vmk.lines().find_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            let k = k.trim_end_matches(['?', ':']).trim();
+            (k == name).then(|| v.trim().to_string())
+        })
+    };
+    let cxx = mk_var("CXX")
+        .and_then(|v| v.split_whitespace().next().map(String::from))
+        .unwrap_or_else(|| "g++".into());
+    let coroutine_flags: Vec<String> = mk_var("CFG_CXXFLAGS_COROUTINES")
+        .map(|v| v.split_whitespace().map(String::from).collect())
+        .unwrap_or_else(|| vec!["-fcoroutines".into()]);
+    let mut ld = Command::new(&cxx);
     ld.arg("-shared")
         .arg("-fPIC")
         .arg("-O2")
@@ -557,9 +579,11 @@ pub fn build_model_resolved(
         .arg("-DVL_USER_FATAL");
     if timing {
         // the shim includes V<top>.h, which pulls verilated_timing.h
-        // for timing models; Verilator's own objects build -std=gnu++17
-        // with this same flag (verilated.mk CFG_CXXFLAGS_COROUTINES)
-        ld.arg("-fcoroutines");
+        // for timing models; platform flags AFTER -std so a configured
+        // standard override wins
+        for f in &coroutine_flags {
+            ld.arg(f);
+        }
     }
     ld.arg("-DVL_USER_FINISH")
         .arg("-DVL_PRINTF=trs_vlt_printf")
