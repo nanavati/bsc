@@ -5,12 +5,15 @@
 #     manifest; per-class lock survives concurrent builds
 #   - delay constructs select the --timing build mode (detected via the
 #     --timing inspection dump) and still build end-to-end
-#   - refusals: DPI (metadata or __Dpi.h backstop), contract/model
+#   - refusals: DPI (metadata + __Dpi.h backstop), contract/model
 #     mismatch, unresolvable source
-#   - `bsc -sim -trs -e` chains into the verilate step, then fails only
-#     with the tagged R4 runtime placeholder
-# Optional: TRS_VERILATOR_NEW=/path/to/post-5.046/bin/verilator (with
-# its VERILATOR_ROOT_NEW) adds the JSON-adapter leg.
+#   - the verilator FLOOR is a --json-only capability check: a pre-5.046
+#     binary produces the clear floor error (negative leg below)
+# REQUIRES a pinned Verilator >= 5.046: set TRS_VERILATOR (and
+# VERILATOR_ROOT for a source build), or have one on PATH as `verilator`.
+# Optional: TRS_VERILATOR_OLD=/path/to/pre-5.046/verilator adds the
+# floor-refusal negative (defaults to /usr/bin/verilator when that is
+# present and old enough).
 # BSC=/path/bsc TRS=/path/trs sh run-r3.sh [workdir]
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
@@ -22,6 +25,9 @@ esac
 case "$TRS" in
     */*) TRS=$(cd "$(dirname "$TRS")" && pwd)/$(basename "$TRS");;
 esac
+# the pin applies to every build in this battery (bsc -trs link included)
+[ -n "$TRS_VERILATOR" ] && export TRS_VERILATOR
+[ -n "$VERILATOR_ROOT" ] && export VERILATOR_ROOT
 WK=${1:-$(mktemp -d)}
 mkdir -p "$WK"
 WK=$(cd "$WK" && pwd)
@@ -39,7 +45,8 @@ $BSC -sim -trs -e sysPosCounter >link0.out 2>&1
 
 C=$WK/cache
 
-# ---- positive build + dlopen check
+# ---- positive build + dlopen check (fails with the floor message if
+# the pinned verilator is missing or too old -- that IS the check)
 if out=$(TRS_VLT_CACHE=$C "$TRS" vlt build sysPosCounter.bir --vpath "$RTL" 2>&1) \
    && echo "$out" | grep -q "built, contract"; then ok build
 else bad build "$out"; fi
@@ -92,35 +99,24 @@ else bad lock-parallel "$(cat par1.out par2.out)"; fi
 if ls "$C"/vlt/*/NOTICE >/dev/null 2>&1; then ok notice
 else bad notice; fi
 
-# ---- link chain: verilate step runs inside `bsc -sim -trs -e`; the
-# only acceptable failure is the tagged R4 runtime placeholder
+# ---- link chain: verilate step runs inside `bsc -sim -trs -e`
 cp "$RTL/BviCounter.v" .
 if TRS_VLT_CACHE=$C $BSC -sim -trs -e sysPosCounter >link.out 2>&1; then
     ok link-chain
-elif grep -q "plan rung R4" link.out; then ok link-chain
 else bad link-chain "$(tail -5 link.out)"; fi
 
-# ---- optional post-5.046 leg (JSON adapter)
-if [ -n "$TRS_VERILATOR_NEW" ]; then
-    if out=$(TRS_VLT_CACHE=$C TRS_VERILATOR="$TRS_VERILATOR_NEW" \
-             VERILATOR_ROOT="$VERILATOR_ROOT_NEW" \
-             "$TRS" vlt build sysPosCounter.bir --vpath "$RTL" 2>&1) \
-       && echo "$out" | grep -q "contract"; then ok json-adapter
-    else bad json-adapter "$out"; fi
-    refusal_new() {
-        if out=$(TRS_VLT_CACHE=$C TRS_VERILATOR="$TRS_VERILATOR_NEW" \
-                 VERILATOR_ROOT="$VERILATOR_ROOT_NEW" \
-                 "$TRS" vlt build sysPosCounter.bir --vpath "$2" 2>&1); then
-            bad "$1 (unexpectedly succeeded)" "$out"
-        elif echo "$out" | grep -q "$3"; then ok "$1"
-        else bad "$1 (missing tag $3)" "$out"; fi
-    }
-    if out=$(TRS_VLT_CACHE=$C TRS_VERILATOR="$TRS_VERILATOR_NEW" \
-             VERILATOR_ROOT="$VERILATOR_ROOT_NEW" \
-             "$TRS" vlt build sysPosCounter.bir --vpath "$WK/rtl-delay" 2>&1) \
-       && echo "$out" | grep -q "built, contract"; then ok json-timing-build
-    else bad json-timing-build "$out"; fi
-    refusal_new json-refuse-dpi   "$WK/rtl-dpi"   "REFUSE(dpi)"
+# ---- floor-refusal negative: a pre-5.046 verilator must produce the
+# capability floor error, not a parse failure
+OLD=${TRS_VERILATOR_OLD:-/usr/bin/verilator}
+if [ -x "$OLD" ] && env -u VERILATOR_ROOT "$OLD" --version 2>/dev/null | \
+       awk '{ split($2, v, "."); exit !(v[1] < 5 || (v[1] == 5 && v[2]+0 < 46)) }'; then
+    if out=$(env -u VERILATOR_ROOT TRS_VLT_CACHE=$C TRS_VERILATOR="$OLD" \
+             "$TRS" vlt build sysPosCounter.bir --vpath "$RTL" 2>&1); then
+        bad floor-refusal "unexpectedly succeeded on $OLD" "$out"
+    elif echo "$out" | grep -q "does not support --json-only"; then ok floor-refusal
+    else bad floor-refusal "(missing floor message)" "$out"; fi
+else
+    echo "SKIP floor-refusal (no pre-5.046 verilator found; set TRS_VERILATOR_OLD)"
 fi
 
 exit $fail

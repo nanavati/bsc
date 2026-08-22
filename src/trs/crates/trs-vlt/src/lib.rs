@@ -6,8 +6,9 @@
 //! design that carries `InstanceKind::Bvi` contracts.  Per contract
 //! class -- (verilator version, shim-generator revision, contract
 //! shape, typed parameters, defines, resolved top file) -- the pipeline
-//! resolves sources, extracts model metadata through the versioned
-//! adapters, applies the inspection refusals (DPI), generates the
+//! resolves sources, extracts model metadata through the JSON adapter
+//! (pinned Verilator, floor >= 5.046 checked by --json-only CAPABILITY;
+//! 2026-08-22), applies the inspection refusals (DPI), generates the
 //! engine-neutral shim, builds a shared object, and caches it
 //! content-addressed over the depfile closure with a per-class lock.
 //!
@@ -420,7 +421,7 @@ pub fn build_model_resolved(
         eprintln!("trs-vlt: verilating {top} (class {class}, verilator {vmaj}.{vmin:03})");
     }
 
-    // ---- metadata inspection (versioned adapters; --timing dump)
+    // ---- metadata inspection (JSON adapter; --timing dump)
     let meta_dir = class_dir.join("meta");
     let m = meta::extract(
         &opts.verilator,
@@ -446,7 +447,7 @@ pub fn build_model_resolved(
             ),
         ));
     }
-    if m.has_dpi == Some(true) {
+    if m.has_dpi {
         return Err(VltError::refuse(
             "dpi",
             format!("{top} imports or exports DPI (not supported)"),
@@ -459,8 +460,7 @@ pub fn build_model_resolved(
 
     // ---- verilate (--timing iff the model has delays) with depfiles.
     // This runs BEFORE shim generation so the __Dpi.h backstop below
-    // refuses DPI models with the right tag on XML-era versions (whose
-    // metadata cannot tell) before any contract-vs-model port check.
+    // catches DPI models before any contract-vs-model port check.
     let obj = class_dir.join("obj");
     let cflags = format!(
         "-DVL_USER_FATAL -DVL_USER_FINISH -DVL_PRINTF=trs_vlt_printf -include {} -fPIC",
@@ -499,7 +499,10 @@ pub fn build_model_resolved(
     run_logged(cmd, "verilate")?;
 
     // ---- DPI backstop: V<top>__Dpi.h emission is deterministic on
-    // every version (5.020's XML has no DPI marker at all)
+    // every version.  Kept deliberately even though the JSON metadata
+    // carries dpiImport/dpiExport flags: the dump schema is documented
+    // as unstable between releases, and this file-existence check is
+    // the version-proof armor against a quiet field drift.
     if obj.join(format!("V{top}__Dpi.h")).is_file() {
         return Err(VltError::refuse(
             "dpi",
