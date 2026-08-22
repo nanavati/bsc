@@ -64,7 +64,7 @@ import SimPackage
 -- | Bumped on any change to the encoded shape; must equal BIR_VERSION in
 -- trs-ir/src/lib.rs.
 birVersion :: Word32
-birVersion = 2
+birVersion = 3
 
 -- ===============
 -- String interning

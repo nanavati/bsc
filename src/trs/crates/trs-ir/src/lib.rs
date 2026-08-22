@@ -11,18 +11,21 @@
 //!   validation, no silent skew against bsc.
 //! - This models what the *backend* needs, not everything bsc knows.
 
+pub mod bvi;
 pub mod expr;
 pub mod schedule;
 pub mod verify;
 
 use serde::{Deserialize, Serialize};
 
+pub use bvi::{BviClock, BviContract, BviDir, BviMethod, BviMethodKind,
+              BviParam, BviParamValue, BviPort, BviPortKind, BviReset};
 pub use expr::{Action, Expr, PrimOp, Stmt};
 pub use schedule::{Composition, ModuleSchedule, SchedAlt, SchedNode, Schedule, Segment};
 
 /// Schema version; bumped on any incompatible change.  The bsc exporter
 /// writes it, `Design::decode` rejects mismatches.
-pub const BIR_VERSION: u32 = 2;
+pub const BIR_VERSION: u32 = 3;
 
 /// Snapshot sidecar magic (`<base>.birsnap`, see `Design::snap_encode`).
 /// The trailing byte is the HEADER format; \x02 added the layout rev
@@ -38,7 +41,7 @@ const SNAP_MAGIC: &[u8; 8] = b"TRSSNAP\x02";
 /// this with every such change (the AOT twin of this rule is
 /// `AOT_LAYOUT_REV` in trs-codegen); a stale rev makes readers fall
 /// back to the .bir instead of misdecoding.
-const SNAP_LAYOUT_REV: u32 = 3;
+const SNAP_LAYOUT_REV: u32 = 4;
 
 /// magic(8) | BIR_VERSION le32(4) | SNAP_LAYOUT_REV le32(4) |
 /// bir_hash le64(8) | payload fnv1a le64(8) = 32 bytes.
@@ -285,6 +288,11 @@ pub enum InstanceKind {
     Prim(Primitive),
     /// Another user module in this design.
     Module(StrId),
+    /// An imported BVI Verilog module executed by an external engine
+    /// behind the shim ABI (KB "BVI-via-Verilator design", v4; appended
+    /// last so existing designs' variant tags are unchanged — the rev
+    /// bumps cover the contract change regardless).
+    Bvi(Box<bvi::BviContract>),
 }
 
 /// Primitives the backend knows how to lay out or call into trs-rt.

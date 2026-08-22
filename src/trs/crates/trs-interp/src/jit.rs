@@ -3099,6 +3099,12 @@ impl Interp {
                         walk_expr(cx, inst, a, out);
                     }
                     match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
+                        Some((gi, InstanceKind::Bvi(_))) => {
+                            // Opaque external-engine read: never hoistable.
+                            cx.prim_cat.insert(gi, "bvi");
+                            out.reads.insert(gi);
+                            out.poison |= 4;
+                        }
                         Some((gi, InstanceKind::Prim(p))) => {
                             let s = |n: StrId| cx.itp.s(n).to_string();
                             let pc = cat(p, &s);
@@ -3290,6 +3296,10 @@ impl Interp {
                     Stmt::Action(a) | Stmt::AvAction { action: a, .. } => {
                         if let A::MethCall { instance, method, .. } = a {
                             match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
+                                Some((gi, InstanceKind::Bvi(_))) => {
+                                    cx.prim_cat.insert(gi, "bvi");
+                                    out.insert(gi);
+                                }
                                 Some((gi, InstanceKind::Prim(p))) => {
                                     let s = |n: StrId| cx.itp.s(n).to_string();
                                     cx.prim_cat.insert(gi, cat(p, &s));

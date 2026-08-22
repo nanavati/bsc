@@ -1058,6 +1058,17 @@ impl Interp {
                         clk_binds,
                     )
                 }
+                ir::InstanceKind::Bvi(c) => {
+                    // BviPrim (shadow vector + batched commit) lands in R4;
+                    // no exporter emits this variant yet (R2), so reaching
+                    // here means a hand-built or future BIR — fail loudly.
+                    panic!(
+                        "BVI instance {:?} (verilog module {:?}): runtime support \
+                         not yet implemented (BviPrim, plan rung R4)",
+                        cpath,
+                        self.s(c.verilog_name)
+                    );
+                }
                 ir::InstanceKind::Prim(p) => {
                     let pname = match &p {
                         ir::Primitive::Other { name } => self.s(*name).to_string(),
