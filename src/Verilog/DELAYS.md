@@ -170,6 +170,38 @@ sysErrorTest's `$error` exit-status behavior and eliminates every
 hang: under `--no-timing`, several divided-clock tests run forever
 until killed (one formerly filled the disk with an unbounded VCD).
 
+## Validation summary (automatic mode, verilator-ci base)
+
+Full testsuite with the per-design automatic decision (no environment
+overrides: needs-timing designs build `--timing`, everything else
+`--no-timing`), on the `verilator-ci` line — which additionally
+carries the simulator-derived `use_dpi` testsuite support, module-scope
+DPI-C imports, and XFAIL screens for genuine simulator differences:
+
+| run | pass | fail | xfail |
+|---|---|---|---|
+| verilator, automatic | 18,739 | 79 | 237 |
+
+(The total check count differs from the table above because the
+`verilator-ci` testsuite base reworks or removes some test
+directories; the comparison below is per-test, not by totals.)
+
+Every one of the 79 failures already fails identically in the forced
+`--timing` run on the same code, and none of that run's passes
+regressed: the automatic decision reproduces `--timing` behavior
+exactly where timing is needed and `--no-timing` behavior elsewhere.
+The 79 group as: ~60 golden diffs in the multiple-clock-domain
+directories (startup X-artifact display lines, the 11
+reset-assertion-edge diffs, same-timestamp ordering); 6 checks hit by
+the post-5.020 Verilator `$signed`-slice regression (defect (2)); 3
+`parallel_case` runtime assertions in bsc.scheduler/mutually_exclusive;
+6 custom-testbench links in bsc.bsv_examples/MacTestBench; and 4
+pre-existing environmental/golden failures independent of the
+simulator (chmod-as-root tests, DupInclude).  The foreign-function/BDPI
+bucket (~101 in earlier runs) is fixed by the DPI support on this
+base, and 1 XPASS (sysSmall5 in bsc.names/portRenaming/misc) marks an
+XFAIL screen that is now too broad.
+
 ## Validation summary (testsuite slices, 2026-08)
 
 Seven slices (bsc.mcd/{ClockDividers, MakeClock, Synchronizers,
