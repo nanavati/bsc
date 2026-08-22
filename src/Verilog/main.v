@@ -113,14 +113,59 @@ module main();
       end
 `endif
 
+      // Reset sequence: asserted as a level from time 0, then one
+      // deassert/assert pulse so the assertion is also a genuine EDGE,
+      // then one clock edge under reset, then release between clock
+      // edges.  Asserting asynchronously -- away from any clock edge --
+      // is required because clock-generating logic (dividers, gates)
+      // can only be reset asynchronously: no clean derived clock exists
+      // until it has been reset.  CLK is deliberately left
+      // uninitialized until the first posedge (an X -> 1 transition is
+      // not a negedge), as before.
+      //
+      // Nothing in the design's observable behavior should depend on
+      // the window before its reset deasserts; the first clock edge of
+      // the steady schedule is unchanged (negedge 5, posedge 10).
+      //
+      // BSV_LEGACY_RESET restores the previous choreography (assert in
+      // the time-0 inactive region, first posedge at 1, deassert at 2),
+      // as a one-release migration aid for environments with golden
+      // files that recorded output from the startup window.
+`ifdef BSV_LEGACY_RESET
       #0
       RST = `BSV_RESET_VALUE;
       #1;
       CLK = 1'b1;
-      // $display("reset");
       #1;
       RST = !`BSV_RESET_VALUE;
-      // $display("reset done");
+`else
+      // t=0: asserted as a LEVEL.  Initial blocks (including the
+      // primitives' own) run in the first time-0 inactive batch; any
+      // clocked process an init-caused transition triggers reads its
+      // guards at a strictly later batch, so this write is ordered
+      // before every such read -- time-0 initialization artifacts in
+      // four-state simulators are suppressed deterministically, not by
+      // scheduler luck.
+      #0
+      RST = `BSV_RESET_VALUE;
+      // t=1..2: one deassert/assert pulse, making the assertion a
+      // genuine value EDGE.  Two-state simulators (no X, no time-0
+      // edge) and BSV_NO_INITIAL_BLOCKS builds (no initialized state)
+      // rely on this edge alone; four-state simulators see the same
+      // edge, so the async-assert primitives fire identically
+      // everywhere.  No clock edge coincides with either transition.
+      #1;
+      RST = !`BSV_RESET_VALUE;
+      #1;
+      RST = `BSV_RESET_VALUE;
+      // t=3: first clock edge, under reset
+      #1;
+      CLK = 1'b1;
+      // t=4: release, between clock edges; deassertion is synchronized
+      // per-domain by the reset primitives
+      #1;
+      RST = !`BSV_RESET_VALUE;
+`endif
       //  #200010;
       //  $finish;
    end

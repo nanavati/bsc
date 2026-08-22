@@ -19,12 +19,18 @@ module ClockGen(CLK_OUT);
 
    // synopsys translate_off
 
-   // Clock is set to initValue for initDelay, and
-   // then repeats set to value1 for value1Width
+   // Clock is undefined (X) for initDelay, and then repeats set to
+   // value1 for value1Width.  The output deliberately makes NO
+   // transition at time 0: in a four-state simulator an X -> value
+   // assignment at time 0 is an edge that fires clocked processes in
+   // the window before the design's reset has asserted (a two-state
+   // simulator sees no such edge), so a time-0 init here is a source
+   // of simulator-dependent startup behavior.  Leaving the output X
+   // until the first real edge also matches the BSV_NO_INITIAL_BLOCKS
+   // build exactly.  The first driven value is otherValue, at
+   // initDelay -- i.e. the first scheduled edge.
    initial
       begin : clock_loop
-         #0 ;
-         CLK_OUT = initValue ;
          # initDelay ;
          forever
             begin

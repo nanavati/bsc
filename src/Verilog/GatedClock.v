@@ -59,9 +59,18 @@ module GatedClock(
 
    // Use latch to avoid glitches
    // Gate can only change when clock is low
-   always @( CLK_IN or CLK_GATE_IN or COND_reg )
+   // The gate is forced closed while the reset is asserted: a gated
+   // clock must emit no edges before its domain's reset completes.
+   // This makes startup behavior identical in four-state simulators
+   // (where an X on CLK_IN would hold the latch anyway) and two-state
+   // simulators (where CLK_IN is a real 0 and the latch would
+   // otherwise be transparent during the reset window), and it defines
+   // the gate under BSV_NO_INITIAL_BLOCKS as soon as reset asserts.
+   always @( CLK_IN or CLK_GATE_IN or COND_reg or RST )
      begin
-        if ( ! CLK_IN )
+        if ( RST == `BSV_RESET_VALUE )
+          new_gate <= `BSV_ASSIGNMENT_DELAY 1'b0 ;
+        else if ( ! CLK_IN )
           new_gate <= `BSV_ASSIGNMENT_DELAY CLK_GATE_IN & COND_reg ;
      end
 

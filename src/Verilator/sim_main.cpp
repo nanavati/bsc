@@ -159,20 +159,36 @@ int main (int argc, char **argv, char **env) {
     }
 #endif
 
+    // Reset sequence (matches main.v): asserted as a level at time 0,
+    // one deassert/assert pulse at times 1..2 so the assertion is also
+    // a genuine EDGE, first clock edge under reset at time 3, release
+    // at time 4 between clock edges.  Two-state Verilator has no X and
+    // no time-0 edge, so the async-assert primitives' 'always @(RST
+    // edge)' blocks fire only because of the explicit pulse; the
+    // time-0 asserted level matches what a four-state simulator's
+    // suppression guards read during initialization.  The steady clock
+    // schedule (negedge 5, posedge 10) is unchanged.
+
 #ifndef BSC_VERILATOR_TIMING
 
-    // initial conditions
+    // t=0: CLK low, reset asserted (level)
     TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
     TOP->CLK = 0;
     step(TOP, 1);
 
-    // First CLK edge to time 1
+    // t=1..2: deassert, then assert -- the assertion edge
+    TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+    step(TOP, 1);
+    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
+    step(TOP, 1);
+
+    // t=3: first CLK edge, under reset
     TOP->CLK = 1;
     step(TOP, 1);
 
-    // De-assert RST at time 2
+    // t=4: de-assert reset, between clock edges
     TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
-    step(TOP, 3);
+    step(TOP, 1);
 
     // now resume normal CLK cycle
     // negedge on 5, posedge on 10
@@ -189,43 +205,34 @@ int main (int argc, char **argv, char **env) {
 
 #else // BSC_VERILATOR_TIMING
 
-    // initial conditions
-    //
-    // Event-driven simulators see the reset assert at time 0 as an
-    // edge (X -> asserted), which triggers the 'always @(RST edge)'
-    // blocks in the asynchronous reset primitives (e.g. SyncResetA).
-    // Two-state Verilator has no X: inputs start at 0, so a negative
-    // reset asserted at time 0 produces no edge and those primitives
-    // would never see the assertion.  Evaluate once with the reset
-    // deasserted, then assert it, so the assertion is an edge here
-    // too (both evaluations are at time 0).
-    //
-    // The cost of that extra evaluation: latches that an event-driven
-    // simulator would leave holding X until reset propagates (e.g.
-    // the gate latch in the gated-clock primitives) instead capture
-    // the design's out-of-reset state, which can pass one extra clock
-    // edge into a gated domain at startup.  Setting the environment
-    // variable BSC_VLT_NO_RESET_EDGE at run time skips the deasserted
-    // evaluation (reset is then never seen as an edge, so designs
-    // relying on asynchronous reset assertion at time 0 will not
-    // reset).
+    // t=0: CLK low, reset asserted (level)
     TOP->CLK = 0;
-    if (!getenv("BSC_VLT_NO_RESET_EDGE")) {
-        TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
-        eval_now (TOP);
-    }
     TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
     eval_now (TOP);
 
-    // First CLK edge to time 1
+    // t=1..2: deassert, then assert -- the genuine edge, which the
+    // async-assert primitives' 'always @(RST edge)' blocks key on
     advance_to (TOP, 1);
+    if (! contextp->gotFinish ()) {
+        TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+        eval_now (TOP);
+    }
+    advance_to (TOP, 2);
+    if (! contextp->gotFinish ()) {
+        TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
+        eval_now (TOP);
+    }
+
+    // t=3: first CLK edge, under reset
+    advance_to (TOP, 3);
     if (! contextp->gotFinish ()) {
         TOP->CLK = 1;
         eval_now (TOP);
     }
 
-    // De-assert RST at time 2
-    advance_to (TOP, 2);
+    // t=4: de-assert reset, between clock edges (deassertion is
+    // synchronized per-domain by the reset primitives)
+    advance_to (TOP, 4);
     if (! contextp->gotFinish ()) {
         TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
         eval_now (TOP);
