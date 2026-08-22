@@ -1,0 +1,88 @@
+<?xml version="1.0" ?>
+<!-- DESCRIPTION: Verilator output: XML representation of netlist -->
+<verilator_xml>
+  <files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviXing.v" language="1800-2017"/>
+    <file id="c" filename="/usr/share/verilator/include/verilated_std.sv" language="1800-2017"/>
+    <file id="a" filename="&lt;built-in&gt;" language="1800-2017"/>
+    <file id="b" filename="&lt;command-line&gt;" language="1800-2017"/>
+  </files>
+  <module_files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviXing.v" language="1800-2017"/>
+  </module_files>
+  <cells>
+    <cell loc="d,3,8,3,15" name="BviXing" submodname="BviXing" hier="BviXing"/>
+  </cells>
+  <netlist>
+    <module loc="d,3,8,3,15" name="BviXing" origName="BviXing" topModule="1">
+      <var loc="d,4,16,4,20" name="SCLK" dtype_id="1" dir="input" pinIndex="1" vartype="logic" origName="SCLK"/>
+      <var loc="d,4,22,4,26" name="DCLK" dtype_id="1" dir="input" pinIndex="2" vartype="logic" origName="DCLK"/>
+      <var loc="d,4,28,4,33" name="RST_N" dtype_id="1" dir="input" pinIndex="3" vartype="logic" origName="RST_N"/>
+      <var loc="d,5,16,5,23" name="EN_send" dtype_id="1" dir="input" pinIndex="4" vartype="logic" origName="EN_send"/>
+      <var loc="d,6,16,6,21" name="s_din" dtype_id="2" dir="input" pinIndex="5" vartype="logic" origName="s_din"/>
+      <var loc="d,7,16,7,20" name="SREG" dtype_id="2" dir="output" pinIndex="6" vartype="logic" origName="SREG"/>
+      <var loc="d,8,16,8,20" name="DREG" dtype_id="2" dir="output" pinIndex="7" vartype="logic" origName="DREG"/>
+      <var loc="d,10,13,10,17" name="sreg" dtype_id="2" vartype="logic" origName="sreg"/>
+      <var loc="d,10,19,10,23" name="dreg" dtype_id="2" vartype="logic" origName="dreg"/>
+      <always loc="d,14,3,14,9">
+        <sentree loc="d,14,10,14,11">
+          <senitem loc="d,14,12,14,19" edgeType="POS">
+            <varref loc="d,14,20,14,24" name="SCLK" dtype_id="1"/>
+          </senitem>
+        </sentree>
+        <begin loc="d,14,26,14,31">
+          <if loc="d,15,5,15,7">
+            <varref loc="d,15,10,15,15" name="RST_N" dtype_id="1"/>
+            <begin>
+              <if loc="d,16,10,16,12">
+                <varref loc="d,16,14,16,21" name="EN_send" dtype_id="1"/>
+                <begin>
+                  <assigndly loc="d,16,28,16,30" dtype_id="2">
+                    <varref loc="d,16,31,16,36" name="s_din" dtype_id="2"/>
+                    <varref loc="d,16,23,16,27" name="sreg" dtype_id="2"/>
+                  </assigndly>
+                </begin>
+              </if>
+            </begin>
+            <begin>
+              <assigndly loc="d,15,22,15,24" dtype_id="2">
+                <const loc="d,15,25,15,29" name="8&apos;h0" dtype_id="2"/>
+                <varref loc="d,15,17,15,21" name="sreg" dtype_id="2"/>
+              </assigndly>
+            </begin>
+          </if>
+        </begin>
+      </always>
+      <always loc="d,18,3,18,9">
+        <sentree loc="d,18,10,18,11">
+          <senitem loc="d,18,12,18,19" edgeType="POS">
+            <varref loc="d,18,20,18,24" name="DCLK" dtype_id="1"/>
+          </senitem>
+        </sentree>
+        <begin loc="d,18,26,18,31">
+          <assigndly loc="d,20,15,20,17" dtype_id="2">
+            <cond loc="d,20,18,20,22" dtype_id="2">
+              <varref loc="d,19,10,19,15" name="RST_N" dtype_id="1"/>
+              <varref loc="d,20,18,20,22" name="sreg" dtype_id="2"/>
+              <const loc="d,19,25,19,29" name="8&apos;h0" dtype_id="2"/>
+            </cond>
+            <varref loc="d,20,10,20,14" name="dreg" dtype_id="2"/>
+          </assigndly>
+        </begin>
+      </always>
+      <contassign loc="d,11,15,11,16" dtype_id="2">
+        <varref loc="d,10,13,10,17" name="sreg" dtype_id="2"/>
+        <varref loc="d,7,16,7,20" name="SREG" dtype_id="2"/>
+      </contassign>
+      <contassign loc="d,12,15,12,16" dtype_id="2">
+        <varref loc="d,10,19,10,23" name="dreg" dtype_id="2"/>
+        <varref loc="d,8,16,8,20" name="DREG" dtype_id="2"/>
+      </contassign>
+    </module>
+    <typetable loc="a,0,0,0,0">
+      <basicdtype loc="c,43,22,43,24" id="1" name="logic"/>
+      <voiddtype loc="c,45,18,45,27" id="3"/>
+      <basicdtype loc="d,6,10,6,11" id="2" name="logic" left="7" right="0"/>
+    </typetable>
+  </netlist>
+</verilator_xml>

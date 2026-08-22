@@ -1,0 +1,102 @@
+// Verilated -*- C++ -*-
+// DESCRIPTION: Verilator output: Model implementation (design independent parts)
+
+#include "VBviViolator__pch.h"
+
+//============================================================
+// Constructors
+
+VBviViolator::VBviViolator(VerilatedContext* _vcontextp__, const char* _vcname__)
+    : VerilatedModel{*_vcontextp__}
+    , vlSymsp{new VBviViolator__Syms(contextp(), _vcname__, this)}
+    , CLK{vlSymsp->TOP.CLK}
+    , RST_N{vlSymsp->TOP.RST_N}
+    , EN_put{vlSymsp->TOP.EN_put}
+    , put_x{vlSymsp->TOP.put_x}
+    , COUNT{vlSymsp->TOP.COUNT}
+    , rootp{&(vlSymsp->TOP)}
+{
+    // Register model with the context
+    contextp()->addModel(this);
+}
+
+VBviViolator::VBviViolator(const char* _vcname__)
+    : VBviViolator(Verilated::threadContextp(), _vcname__)
+{
+}
+
+//============================================================
+// Destructor
+
+VBviViolator::~VBviViolator() {
+    delete vlSymsp;
+}
+
+//============================================================
+// Evaluation function
+
+#ifdef VL_DEBUG
+void VBviViolator___024root___eval_debug_assertions(VBviViolator___024root* vlSelf);
+#endif  // VL_DEBUG
+void VBviViolator___024root___eval_static(VBviViolator___024root* vlSelf);
+void VBviViolator___024root___eval_initial(VBviViolator___024root* vlSelf);
+void VBviViolator___024root___eval_settle(VBviViolator___024root* vlSelf);
+void VBviViolator___024root___eval(VBviViolator___024root* vlSelf);
+
+void VBviViolator::eval_step() {
+    VL_DEBUG_IF(VL_DBG_MSGF("+++++TOP Evaluate VBviViolator::eval_step\n"); );
+#ifdef VL_DEBUG
+    // Debug assertions
+    VBviViolator___024root___eval_debug_assertions(&(vlSymsp->TOP));
+#endif  // VL_DEBUG
+    vlSymsp->__Vm_deleter.deleteAll();
+    if (VL_UNLIKELY(!vlSymsp->__Vm_didInit)) {
+        VL_DEBUG_IF(VL_DBG_MSGF("+ Initial\n"););
+        VBviViolator___024root___eval_static(&(vlSymsp->TOP));
+        VBviViolator___024root___eval_initial(&(vlSymsp->TOP));
+        VBviViolator___024root___eval_settle(&(vlSymsp->TOP));
+        vlSymsp->__Vm_didInit = true;
+    }
+    VL_DEBUG_IF(VL_DBG_MSGF("+ Eval\n"););
+    VBviViolator___024root___eval(&(vlSymsp->TOP));
+    // Evaluate cleanup
+    Verilated::endOfEval(vlSymsp->__Vm_evalMsgQp);
+}
+
+//============================================================
+// Events and timing
+bool VBviViolator::eventsPending() { return false; }
+
+uint64_t VBviViolator::nextTimeSlot() {
+    VL_FATAL_MT(__FILE__, __LINE__, "", "No delays in the design");
+    return 0;
+}
+
+//============================================================
+// Utilities
+
+const char* VBviViolator::name() const {
+    return vlSymsp->name();
+}
+
+//============================================================
+// Invoke final blocks
+
+void VBviViolator___024root___eval_final(VBviViolator___024root* vlSelf);
+
+VL_ATTR_COLD void VBviViolator::final() {
+    contextp()->executingFinal(true);
+    VBviViolator___024root___eval_final(&(vlSymsp->TOP));
+    contextp()->executingFinal(false);
+}
+
+//============================================================
+// Implementations of abstract methods from VerilatedModel
+
+const char* VBviViolator::hierName() const { return vlSymsp->name(); }
+const char* VBviViolator::modelName() const { return "VBviViolator"; }
+unsigned VBviViolator::threads() const { return 1; }
+void VBviViolator::prepareClone() const { contextp()->prepareClone(); }
+void VBviViolator::atClone() const {
+    contextp()->threadPoolpOnClone();
+}

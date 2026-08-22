@@ -1,0 +1,58 @@
+{
+  "format": "xml",
+  "ports": [
+    {
+      "name": "SCLK",
+      "orig_name": "SCLK",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 1
+    },
+    {
+      "name": "DCLK",
+      "orig_name": "DCLK",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 2
+    },
+    {
+      "name": "RST_N",
+      "orig_name": "RST_N",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 3
+    },
+    {
+      "name": "EN_send",
+      "orig_name": "EN_send",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 4
+    },
+    {
+      "name": "s_din",
+      "orig_name": "s_din",
+      "dir": "input",
+      "width": 8,
+      "pin_index": 5
+    },
+    {
+      "name": "SREG",
+      "orig_name": "SREG",
+      "dir": "output",
+      "width": 8,
+      "pin_index": 6
+    },
+    {
+      "name": "DREG",
+      "orig_name": "DREG",
+      "dir": "output",
+      "width": 8,
+      "pin_index": 7
+    }
+  ],
+  "params": {},
+  "has_delay": false,
+  "has_dpi": null,
+  "timeprecision": null
+}

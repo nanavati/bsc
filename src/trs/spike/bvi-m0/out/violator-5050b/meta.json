@@ -1,0 +1,44 @@
+{
+  "format": "json",
+  "ports": [
+    {
+      "name": "CLK",
+      "orig_name": "CLK",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 1
+    },
+    {
+      "name": "RST_N",
+      "orig_name": "RST_N",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 2
+    },
+    {
+      "name": "EN_put",
+      "orig_name": "EN_put",
+      "dir": "input",
+      "width": 1,
+      "pin_index": 3
+    },
+    {
+      "name": "put_x",
+      "orig_name": "put_x",
+      "dir": "input",
+      "width": 8,
+      "pin_index": 4
+    },
+    {
+      "name": "COUNT",
+      "orig_name": "COUNT",
+      "dir": "output",
+      "width": 8,
+      "pin_index": 5
+    }
+  ],
+  "params": {},
+  "has_delay": false,
+  "has_dpi": false,
+  "timeprecision": null
+}

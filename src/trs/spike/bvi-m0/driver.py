@@ -91,6 +91,31 @@ class Bvi:
         self.pending_edges = {}  # port name -> level
         self.en_group = []     # ENs to clear post-edge
         self.time = 0
+        # -- TRS_BVI_CHECK=observe (spike form) --------------------------
+        self.check = False
+        self.witnesses = []
+        self.epoch = {}        # port -> publish epoch
+        self.obs = {}          # output port -> (value, epoch snapshot)
+        self.cones = self._declared_cones()
+        self.struct_ports = {p["name"] for p in contract["ports"]
+                             if p["kind"] in ("clock", "reset")}
+
+    def _declared_cones(self):
+        """Declared dependency cone per output port: owning method's args
+        + enable, plus declared path sources targeting it."""
+        cones = {}
+        for m in self.contract["methods"]:
+            outs = list(m.get("results") or [])
+            if m.get("rdy"):
+                outs.append(m["rdy"])
+            for o in outs:
+                cone = set(m.get("args") or [])
+                if m.get("enable"):
+                    cone.add(m["enable"])
+                cones.setdefault(o, set()).update(cone)
+        for p in self.contract.get("paths", []):
+            cones.setdefault(p["to"], set()).add(p["from"])
+        return cones
 
     def _limbs(self, width, value):
         n = max(1, (width + 63) // 64)
@@ -125,6 +150,7 @@ class Bvi:
         for k, v in self.shadow.items():
             self._set(k, v)
             self.published[k] = v
+            self.epoch[k] = self.epoch.get(k, 0) + 1
             self.dirty = True
         self.shadow.clear()
         if self.dirty:
@@ -132,6 +158,27 @@ class Bvi:
             rc = self.lib.vlt_eval(self.h)
             assert rc == 0, f"eval failed: {self.lib.vlt_fatal_msg().decode()}"
             self.dirty = False
+            if self.check:
+                self._check_observed()
+
+    def _check_observed(self):
+        """A sound witness: a previously-observed output changed while no
+        input in its DECLARED cone changed (and no clock/reset moved)."""
+        for port, (val, snap) in list(self.obs.items()):
+            cur = self._get(port)
+            if cur == val:
+                continue
+            cone = self.cones.get(port, set()) | self.struct_ports
+            cone_moved = any(self.epoch.get(p, 0) != snap.get(p, 0)
+                             for p in cone)
+            changed = [p for p in self.epoch
+                       if self.epoch[p] != snap.get(p, 0)]
+            if not cone_moved:
+                self.witnesses.append({
+                    "port": port, "old": val, "new": cur,
+                    "changed_inputs": changed,
+                    "verdict": "DYNAMIC_LIE: undeclared influence or protocol violation"})
+            self.obs[port] = (cur, dict(self.epoch))
 
     # -- protocol operations -------------------------------------------
     def call_action(self, method, **args):
@@ -145,7 +192,10 @@ class Bvi:
     def observe(self, port):
         """Observation frontier: publish everything dirty, settle, read."""
         self._publish_and_settle()
-        return self._get(port)
+        v = self._get(port)
+        if self.check:
+            self.obs[port] = (v, dict(self.epoch))
+        return v
 
     def commit_edge(self, clock_ports_high, dt=5):
         """Three-phase batched commit (v4 4.1 step 4)."""
@@ -167,6 +217,7 @@ class Bvi:
         rc = self.lib.vlt_eval(self.h)
         assert rc == 0
         self.dirty = False
+        self.obs.clear()   # new instant: edge commits legitimately change outputs
 
     def set_reset(self, port, level):
         self.drive(port, level)
@@ -276,6 +327,97 @@ def scenario_argrdy(so, contract):
     return "argrdy: RDY tracks the argument cone at frontiers; edge commits the enabled value"
 
 SCENARIOS["argrdy"] = scenario_argrdy
+
+def _startup(b, clocks=("CLK",), rst="RST_N"):
+    for c in clocks:
+        b.drive(c, 0)
+    b.drive(rst, 1)
+    b._publish_and_settle()
+    b.set_reset(rst, 0)
+    b.commit_edge({c: 1 for c in clocks}); b.commit_edge({c: 0 for c in clocks})
+    b.set_reset(rst, 1)
+
+
+def scenario_liar(so, contract):
+    """Undeclared path (put_x -> PEEK) caught by observe mode: a sound
+    DYNAMIC_LIE witness with attribution, from an ordinary guard probe."""
+    b = Bvi(so, contract)
+    b.check = True
+    _startup(b)
+    v0 = b.observe("PEEK")            # observed under put_x's initial value
+    b.drive("put_x", 0x5A)            # a guard probe drives the arg...
+    _ = b.observe("STORED")           # ...next frontier publishes it
+    assert b.witnesses, "liar not caught"
+    w = b.witnesses[0]
+    assert w["port"] == "PEEK" and "put_x" in w["changed_inputs"], w
+    assert v0 == 0 and w["new"] == 0x5A, w
+    b.close()
+    return f"liar: DYNAMIC_LIE witness fired ({w['port']} moved 0x{w['old']:x}->0x{w['new']:x} on undeclared put_x)"
+
+
+def scenario_xing(so, contract):
+    """Coincident two-clock NBA batching: the batched commit captures the
+    OLD source register; a per-edge sequential protocol shoot-throughs.
+    Pins the review's empirical counterexample permanently."""
+    b = Bvi(so, contract)
+    _startup(b, clocks=("SCLK", "DCLK"))
+    b.call_action("send", s_din=5)
+    b.commit_edge({"SCLK": 1, "DCLK": 1})       # ONE batched presentation
+    sreg, dreg = b.observe("SREG"), b.observe("DREG")
+    assert (sreg, dreg) == (5, 0), f"batched: {(sreg, dreg)} != (5, 0) [NBA old-value]"
+    b.commit_edge({"SCLK": 0, "DCLK": 0})
+    b.commit_edge({"SCLK": 1, "DCLK": 1})
+    assert b.observe("DREG") == 5
+    b.close()
+
+    # The WRONG protocol, demonstrated: sequential per-clock commits.
+    bad = Bvi(so, contract)
+    _startup(bad, clocks=("SCLK", "DCLK"))
+    bad.call_action("send", s_din=5)
+    bad.commit_edge({"SCLK": 1})                 # source domain commits...
+    bad.commit_edge({"DCLK": 1})                 # ...then dest sees NEW sreg
+    shoot = bad.observe("DREG")
+    assert shoot == 5, f"sequential protocol unexpectedly gave {shoot}"
+    bad.close()
+    return "xing: batched commit == NBA old-value; sequential per-edge protocol shoot-throughs (divergence pinned)"
+
+
+def scenario_violator(so, contract):
+    """Protocol violator: state clocked by a raw argument transition.
+    Inter-edge argument values have no BVI meaning; observe mode reports
+    the resulting undeclared influence as a witness."""
+    b = Bvi(so, contract)
+    b.check = True
+    _startup(b)
+    c0 = b.observe("COUNT")
+    for v in (1, 0, 1, 0):            # guard-probe-like transitions, EN low
+        b.drive("put_x", v)
+        b._publish_and_settle()
+    c1 = b.observe("COUNT")
+    assert c1 - c0 == 2, f"violator advanced {c1 - c0}, expected 2 posedges"
+    assert b.witnesses, "violation not witnessed"
+    b.close()
+    return f"violator: arg-transition-clocked state advanced {c1 - c0} with EN low; witnessed"
+
+
+def scenario_xprobe(so, contract):
+    """Two-state accepted limitation: === 1'bx readiness is constant false
+    under --x-initial 0, where a 4-state simulator starts ready.  CONTROL
+    divergence, recorded -- not a bug in the mechanism."""
+    b = Bvi(so, contract)
+    _startup(b)
+    rdy = b.observe("RDYX")
+    assert rdy == 0, f"two-state x-probe readiness: {rdy} != 0"
+    b.commit_edge({"CLK": 1})
+    assert b.observe("RDYX") == 0
+    b.close()
+    return "xprobe: X-probing RDY constant-false under two-state (4-state would start true) -- accepted limitation"
+
+SCENARIOS["liar"] = scenario_liar
+SCENARIOS["xing"] = scenario_xing
+SCENARIOS["violator"] = scenario_violator
+SCENARIOS["xprobe"] = scenario_xprobe
+
 
 
 

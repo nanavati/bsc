@@ -1,0 +1,60 @@
+<?xml version="1.0" ?>
+<!-- DESCRIPTION: Verilator output: XML representation of netlist -->
+<verilator_xml>
+  <files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviXProbe.v" language="1800-2017"/>
+    <file id="c" filename="/usr/share/verilator/include/verilated_std.sv" language="1800-2017"/>
+    <file id="a" filename="&lt;built-in&gt;" language="1800-2017"/>
+    <file id="b" filename="&lt;command-line&gt;" language="1800-2017"/>
+  </files>
+  <module_files>
+    <file id="d" filename="/home/user/bsc-matx/src/trs/spike/bvi-m0/rtl/BviXProbe.v" language="1800-2017"/>
+  </module_files>
+  <cells>
+    <cell loc="d,4,8,4,17" name="BviXProbe" submodname="BviXProbe" hier="BviXProbe"/>
+  </cells>
+  <netlist>
+    <module loc="d,4,8,4,17" name="BviXProbe" origName="BviXProbe" topModule="1">
+      <var loc="d,5,16,5,19" name="CLK" dtype_id="1" dir="input" pinIndex="1" vartype="logic" origName="CLK"/>
+      <var loc="d,5,21,5,26" name="RST_N" dtype_id="1" dir="input" pinIndex="2" vartype="logic" origName="RST_N"/>
+      <var loc="d,6,16,6,20" name="RDYX" dtype_id="1" dir="output" pinIndex="3" vartype="logic" origName="RDYX"/>
+      <var loc="d,7,16,7,17" name="Q" dtype_id="2" dir="output" pinIndex="4" vartype="logic" origName="Q"/>
+      <var loc="d,9,13,9,14" name="q" dtype_id="2" vartype="logic" origName="q"/>
+      <always loc="d,13,3,13,9">
+        <sentree loc="d,13,10,13,11">
+          <senitem loc="d,13,12,13,19" edgeType="POS">
+            <varref loc="d,13,20,13,23" name="CLK" dtype_id="1"/>
+          </senitem>
+        </sentree>
+        <if loc="d,13,25,13,27">
+          <varref loc="d,13,29,13,34" name="RST_N" dtype_id="1"/>
+          <begin>
+            <assigndly loc="d,13,38,13,40" dtype_id="2">
+              <add loc="d,13,43,13,44" dtype_id="2">
+                <const loc="d,13,45,13,49" name="8&apos;h1" dtype_id="2"/>
+                <varref loc="d,13,41,13,42" name="q" dtype_id="2"/>
+              </add>
+              <varref loc="d,13,36,13,37" name="q" dtype_id="2"/>
+            </assigndly>
+          </begin>
+        </if>
+      </always>
+      <contassign loc="d,11,15,11,16" dtype_id="1">
+        <eqcase loc="d,11,20,11,23" dtype_id="1">
+          <const loc="d,11,24,11,29" name="8&apos;bxxxxxxxx" dtype_id="2"/>
+          <varref loc="d,9,13,9,14" name="q" dtype_id="2"/>
+        </eqcase>
+        <varref loc="d,6,16,6,20" name="RDYX" dtype_id="1"/>
+      </contassign>
+      <contassign loc="d,10,12,10,13" dtype_id="2">
+        <varref loc="d,9,13,9,14" name="q" dtype_id="2"/>
+        <varref loc="d,7,16,7,17" name="Q" dtype_id="2"/>
+      </contassign>
+    </module>
+    <typetable loc="a,0,0,0,0">
+      <basicdtype loc="c,43,22,43,24" id="1" name="logic"/>
+      <voiddtype loc="c,45,18,45,27" id="3"/>
+      <basicdtype loc="d,7,10,7,11" id="2" name="logic" left="7" right="0"/>
+    </typetable>
+  </netlist>
+</verilator_xml>
