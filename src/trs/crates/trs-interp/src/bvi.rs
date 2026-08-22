@@ -147,14 +147,21 @@ impl BviPrim {
     /// `trs link`/`trs run` already ran the verilate step with clean
     /// error reporting before instantiation -- so failure panics with
     /// the full diagnosis.
-    pub fn new(c: &BviContract, strings: &[String], path: &str) -> BviPrim {
+    pub fn new(
+        c: &BviContract,
+        strings: &[String],
+        path: &str,
+        resolved: Option<Vec<trs_vlt::ResolvedParam>>,
+    ) -> BviPrim {
         let plusargs: Vec<String> = PLUSARGS.with(|p| p.borrow().clone());
         let s = |id: u32| strings.get(id as usize).map(String::as_str).unwrap_or("");
         let top = s(c.verilog_name).to_string();
         let opts = trs_vlt::BuildOptions::from_env();
-        let built = trs_vlt::build_model(c, strings, &opts).unwrap_or_else(|e| {
-            panic!("trs bvi: instance {path} ({top}): {e}")
-        });
+        let built =
+            trs_vlt::build_model_resolved(c, strings, &opts, resolved.as_deref())
+                .unwrap_or_else(|e| {
+                    panic!("trs bvi: instance {path} ({top}): {e}")
+                });
         let lib = unsafe { libloading::Library::new(&built.so_path) }
             .unwrap_or_else(|e| panic!("trs bvi: {}: {e}", built.so_path.display()));
 
@@ -569,6 +576,11 @@ fn const_value(v: &trs_ir::bvi::BviParamValue, strings: &[String], width: u32) -
         }
         P::Str(_) | P::Real(_) => {
             panic!("trs bvi: string/real constant port arguments are not supported")
+        }
+        P::FromArg { .. } => {
+            // const_args carry literal values only (forwarding applies
+            // to -G parameters, not construction-time port drives)
+            panic!("trs bvi: forwarded constant port arguments are not supported")
         }
     }
 }

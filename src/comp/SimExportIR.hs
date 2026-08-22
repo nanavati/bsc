@@ -58,7 +58,7 @@ import SimMakeCBlocks (cvtActions, mkAVMethTmpId)
 import SimPrimitiveModules (primMap, tickElem, tickIsPos, tickIsNeg)
 import SimBvi (BviInfo(..), BviPortI(..), BviMethodI(..), BviClockI(..),
                BviResetI(..), BviParamValueI(..), BviDirI(..), BviKindI(..),
-               BviMethodKindI(..), deriveBvi, isBviImport)
+               BviMethodKindI(..), RefKindI(..), deriveBvi, isBviImport)
 import SimDomainInfo (DomainInfo(..))
 import ForeignFunctions (ForeignFunction(..), ForeignType(..))
 import ASyntax
@@ -1011,6 +1011,14 @@ encBviContract (vpath, defs) avi =
                               , ("hex", hE) ]
             encPV (PVStr s) = encVariant "Str" <$> strE s
             encPV (PVReal d) = return $ encVariant "Real" (C.encodeDouble d)
+            encPV (PVFromArg i w k) = return $ encVariant "FromArg" $
+                encStruct [ ("arg", encW32 (fromIntegral i))
+                          , ("width", encW32 (fromIntegral w))
+                          , ("kind", encUnitVariant (case k of
+                                                       RKBits -> "Bits"
+                                                       RKReal -> "Real"
+                                                       RKStr -> "Str"))
+                          ]
             splitDef s = case break (== '=') s of
                            (k, '=' : v) -> (k, Just v)
                            (k, _)       -> (k, Nothing)

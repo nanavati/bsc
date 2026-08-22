@@ -25,6 +25,7 @@ module SimBvi (
     BviResetI(..), BviParamValueI(..),
     BviDirI(..), BviKindI(..), BviMethodKindI(..),
     bviPropReg, bviPropInhigh,
+    RefKindI(..),
     deriveBvi,
     checkBviPackage,
     isBviImport,
@@ -110,7 +111,15 @@ data BviParamValueI = PVIntSigned Integer Integer  -- width, value
                     | PVBits Integer String        -- width, hex digits
                     | PVStr String
                     | PVReal Double
+                    -- a parameter FORWARDED across a synthesis
+                    -- boundary: instantiation-arg index + the
+                    -- serialization class from the arg's type; the
+                    -- interpreter resolves it in the parent context
+                    | PVFromArg Int Integer RefKindI  -- arg, width, kind
   deriving (Show)
+
+data RefKindI = RKBits | RKReal | RKStr
+  deriving (Show, Eq)
 
 data BviInfo = BviInfo {
       bi_verilog_name :: String,
@@ -253,15 +262,28 @@ deriveBvi avi =
         ported_rsts = [ (i, vn) | (i, (Just vn, _)) <- input_resets rstinfo ]
 
         -- ----------
-        -- params and constant Port args, aligned with avi_iargs
-        param_args = [ (getVNameString vn, e)
-                     | (Param vn, e) <- getInstArgs avi ]
+        -- params and constant Port args, aligned with avi_iargs (the
+        -- arg INDEX is the position in vArgs; forwarded parameters are
+        -- resolved from Instance.args at instantiation)
+        param_args = [ (i, getVNameString vn, e)
+                     | (i, (Param vn, e)) <- zip [0 ..] (getInstArgs avi) ]
         port_args  = [ (vp, e) | (Port vp _ _, e) <- getInstArgs avi ]
 
+        -- a non-literal parameter is a closed function of the
+        -- enclosing module's own parameters (bsc's iParams inlined
+        -- everything else during elaboration); classify its
+        -- serialization from the argument's type
+        fwdParam i e = case aType e of
+            ATReal      -> Just (PVFromArg i 64 RKReal)
+            ATString _  -> Just (PVFromArg i 0 RKStr)
+            ATBit w     -> Just (PVFromArg i w RKBits)
+            _           -> Nothing
+
         param_refusals =
-            [ "parameter '" ++ n ++ "' is not a compile-time constant: " ++
-              ppReadable e
-            | (n, e) <- param_args, isNothing (constVal e) ] ++
+            [ "parameter '" ++ n ++ "' has an unsupported forwarded " ++
+              "type: " ++ ppReadable (aType e)
+            | (i, n, e) <- param_args, isNothing (constVal e)
+            , isNothing (fwdParam i e) ] ++
             [ "port argument '" ++ vpName vp ++
               "' is not a compile-time constant (dynamic port arguments " ++
               "are not supported): " ++ ppReadable e
@@ -269,7 +291,11 @@ deriveBvi avi =
             [ "port argument '" ++ vpName vp ++ "' is marked (*reg*)"
             | (vp, _) <- port_args, VPreg `elem` vpProps vp ]
 
-        params = [ (n, v) | (n, e) <- param_args, Just v <- [constVal e] ]
+        params = [ (n, v)
+                 | (i, n, e) <- param_args
+                 , Just v <- [case constVal e of
+                                Just v -> Just v
+                                Nothing -> fwdParam i e] ]
 
         -- ----------
         -- the physical port table

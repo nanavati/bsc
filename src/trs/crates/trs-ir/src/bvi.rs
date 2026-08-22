@@ -166,6 +166,24 @@ pub enum BviParamValue {
     Str(StrId),
     /// Real parameter — round-trip formatted.
     Real(f64),
+    /// A parameter FORWARDED across a synthesis boundary: its value is
+    /// not a literal at the import site but a closed function of the
+    /// enclosing module's own parameters (`mkWrap#(Integer w) ...
+    /// parameter W = w`).  `arg` indexes the instance's generic args;
+    /// the interpreter evaluates it in the parent context at
+    /// instantiation and the verilate step runs with the RESOLVED
+    /// value (each distinct valuation is its own cache class).
+    FromArg { arg: u32, width: u32, kind: BviParamRefKind },
+}
+
+/// The serialization class of a forwarded parameter, from the
+/// import-site argument's type (the resolved runtime Value alone
+/// cannot distinguish a real from a 64-bit vector).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BviParamRefKind {
+    Bits,
+    Real,
+    Str,
 }
 
 impl BviContract {

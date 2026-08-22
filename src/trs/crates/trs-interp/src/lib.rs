@@ -1067,9 +1067,98 @@ impl Interp {
                 ir::InstanceKind::Bvi(c) => {
                     // BVI import: a Verilator-compiled model behind the
                     // prim ABI (bvi.rs).  The verilate-or-cache step ran
-                    // at link/run start; this hits a warm cache.
-                    let prim =
-                        bvi::BviPrim::new(&c, &self.d.strings, &cpath);
+                    // at link/run start; this hits a warm cache -- except
+                    // FORWARDED parameters (FromArg), which resolve here
+                    // in the parent context and verilate per valuation.
+                    use trs_ir::bvi::{BviParamRefKind, BviParamValue};
+                    let has_fwd = c
+                        .params
+                        .iter()
+                        .any(|p| matches!(p.value, BviParamValue::FromArg { .. }));
+                    let resolved: Option<Vec<trs_vlt::ResolvedParam>> = if has_fwd {
+                        Some(
+                            c.params
+                                .iter()
+                                .map(|p| match p.value {
+                                    BviParamValue::FromArg { arg, width, kind } => {
+                                        let e = args.get(arg as usize).unwrap_or_else(|| {
+                                            panic!(
+                                                "trs bvi: {cpath}: forwarded parameter \
+                                                 references instantiation arg {arg} but \
+                                                 only {} args are present",
+                                                args.len()
+                                            )
+                                        });
+                                        match kind {
+                                            BviParamRefKind::Str => {
+                                                let sid = match e {
+                                                    Expr::Str(sid) => Some(*sid),
+                                                    Expr::Param(p2) | Expr::Port(p2) => {
+                                                        self.str_param_of(slot, *p2)
+                                                    }
+                                                    _ => {
+                                                        let mut cx = Ctx::default();
+                                                        self.eval(slot, &mut cx, e)
+                                                            .as_str_id()
+                                                    }
+                                                };
+                                                let sid = sid.unwrap_or_else(|| {
+                                                    panic!(
+                                                        "trs bvi: {cpath}: forwarded \
+                                                         string parameter did not \
+                                                         resolve to a string"
+                                                    )
+                                                });
+                                                trs_vlt::ResolvedParam::Str(
+                                                    self.s(sid).to_string(),
+                                                )
+                                            }
+                                            BviParamRefKind::Real => {
+                                                let mut cx = Ctx::default();
+                                                let v = self.eval(slot, &mut cx, e);
+                                                let d = v.as_real().unwrap_or_else(|| {
+                                                    panic!(
+                                                        "trs bvi: {cpath}: forwarded \
+                                                         real parameter did not \
+                                                         resolve to a real"
+                                                    )
+                                                });
+                                                trs_vlt::ResolvedParam::Real(d)
+                                            }
+                                            BviParamRefKind::Bits => {
+                                                let mut cx = Ctx::default();
+                                                let v = self.eval(slot, &mut cx, e);
+                                                let mut hex = String::new();
+                                                for l in v.limbs64().iter().rev() {
+                                                    if hex.is_empty() && *l == 0 {
+                                                        continue;
+                                                    }
+                                                    if hex.is_empty() {
+                                                        hex = format!("{l:x}");
+                                                    } else {
+                                                        hex.push_str(&format!("{l:016x}"));
+                                                    }
+                                                }
+                                                if hex.is_empty() {
+                                                    hex = "0".into();
+                                                }
+                                                trs_vlt::ResolvedParam::Bits { width, hex }
+                                            }
+                                        }
+                                    }
+                                    _ => trs_vlt::ResolvedParam::Contract,
+                                })
+                                .collect(),
+                        )
+                    } else {
+                        None
+                    };
+                    let prim = bvi::BviPrim::new(
+                        &c,
+                        &self.d.strings,
+                        &cpath,
+                        resolved,
+                    );
                     let idx = self.insts.len();
                     self.insts.push(Inst {
                         path: cpath.clone(),

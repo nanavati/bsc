@@ -130,6 +130,18 @@ pub struct BuiltModel {
 // ---------------------------------------------------------------
 // Typed -G parameter serialization (v4 sec 4.5: semantics, not text)
 
+/// A forwarded (FromArg) parameter's value after the interpreter
+/// evaluated the instantiation argument in the parent context.  Aligns
+/// 1:1 with the contract's params list where used.
+#[derive(Debug, Clone)]
+pub enum ResolvedParam {
+    /// Take the contract's own literal value (non-forwarded slots).
+    Contract,
+    Bits { width: u32, hex: String },
+    Str(String),
+    Real(f64),
+}
+
 fn serialize_param(
     name: &str,
     v: &BviParamValue,
@@ -146,7 +158,30 @@ fn serialize_param(
             format!("-G{name}=\"{esc}\"")
         }
         BviParamValue::Real(d) => format!("-G{name}={d:?}"),
+        BviParamValue::FromArg { .. } => {
+            return Err(VltError::refuse(
+                "param-unresolved",
+                format!(
+                    "parameter '{name}' is forwarded from the enclosing \
+                     module and has no value yet (it resolves at \
+                     instantiation; `trs vlt build` cannot verilate this \
+                     class standalone)"
+                ),
+            ))
+        }
     })
+}
+
+fn serialize_resolved(name: &str, r: &ResolvedParam) -> String {
+    match r {
+        ResolvedParam::Contract => unreachable!("caller resolves Contract slots"),
+        ResolvedParam::Bits { width, hex } => format!("-G{name}={width}'h{hex}"),
+        ResolvedParam::Str(s) => {
+            let esc = s.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("-G{name}=\"{esc}\"")
+        }
+        ResolvedParam::Real(d) => format!("-G{name}={d:?}"),
+    }
 }
 
 // ---------------------------------------------------------------
@@ -269,10 +304,26 @@ fn run_logged(mut cmd: Command, stage: &str) -> Result<std::process::Output, Vlt
 }
 
 /// Build (or reuse from cache) the verilated model for one contract.
+/// Every parameter must be a literal in the contract; forwarded
+/// (FromArg) parameters need [`build_model_resolved`].
 pub fn build_model(
     c: &BviContract,
     strings: &[String],
     opts: &BuildOptions,
+) -> Result<BuiltModel, VltError> {
+    build_model_resolved(c, strings, opts, None)
+}
+
+/// Build with instantiation-resolved parameter values.  `resolved`
+/// aligns 1:1 with the contract's params; `ResolvedParam::Contract`
+/// slots take the contract's own literal.  Each distinct valuation
+/// serializes to different -G arguments and therefore its own cache
+/// class.
+pub fn build_model_resolved(
+    c: &BviContract,
+    strings: &[String],
+    opts: &BuildOptions,
+    resolved: Option<&[ResolvedParam]>,
 ) -> Result<BuiltModel, VltError> {
     let s = |id: u32| strings.get(id as usize).map(String::as_str).unwrap_or("");
     let top = s(c.verilog_name).to_string();
@@ -289,9 +340,27 @@ pub fn build_model(
         .map_err(|e| VltError::resolve(format!("{}: {e}", top_file.display())))?;
 
     // ---- typed params and defines
+    if let Some(r) = resolved {
+        if r.len() != c.params.len() {
+            return Err(VltError::tool(
+                "param resolve",
+                format!(
+                    "{top}: {} resolved values for {} contract parameters",
+                    r.len(),
+                    c.params.len()
+                ),
+            ));
+        }
+    }
     let mut gparams = Vec::new();
-    for prm in &c.params {
-        gparams.push(serialize_param(s(prm.name), &prm.value, strings)?);
+    for (i, prm) in c.params.iter().enumerate() {
+        let over = resolved.and_then(|r| r.get(i));
+        match over {
+            Some(ResolvedParam::Contract) | None => {
+                gparams.push(serialize_param(s(prm.name), &prm.value, strings)?)
+            }
+            Some(r) => gparams.push(serialize_resolved(s(prm.name), r)),
+        }
     }
     let defines: Vec<(String, Option<String>)> = c
         .defines
@@ -562,6 +631,23 @@ pub fn build_all(
         for inst in &m.instances {
             if let trs_ir::InstanceKind::Bvi(c) = &inst.kind {
                 let iname = design.strings[inst.name as usize].clone();
+                // forwarded parameters resolve at instantiation (in the
+                // parent context); those classes verilate during load,
+                // which still happens inside `trs link`
+                if c.params
+                    .iter()
+                    .any(|p| matches!(p.value, BviParamValue::FromArg { .. }))
+                {
+                    if opts.verbose {
+                        eprintln!(
+                            "trs-vlt: {} ({}) has forwarded parameters; \
+                             verilating at instantiation",
+                            iname,
+                            design.strings[c.verilog_name as usize]
+                        );
+                    }
+                    continue;
+                }
                 let cjson = shim::contract_json(c, &design.strings);
                 let key = sha256::digest_hex(cjson.as_bytes());
                 let built = match done.iter().find(|(k, _)| *k == key) {

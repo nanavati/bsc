@@ -90,6 +90,7 @@ differ PosTwins sysPosTwins
 differ PosTwoRst sysPosTwoRst
 differ PosTime sysPosTime
 RUNARGS="+doit +lvl=7" differ PosPlus sysPosPlus
+differ PosWrap sysPosWrap
 differ ParamOrder sysParamOrder "$REPO/testsuite/bsc.verilog/v95"
 
 golden Rams mkTop "$REPO/testsuite/bsc.bsv_examples/RAMS" Test.bsv \
@@ -98,20 +99,12 @@ golden SimpleReal sysSimpleRealImport \
        "$REPO/testsuite/bsc.verilog/parameters/real" SimpleRealImport.bsv \
        sysSimpleRealImport.out.expected
 
-# forwarded-parameter refusal pin (sysTwoLevelReal: a real parameter
-# crossing a synthesis boundary is not a compile-time constant at the
-# BVI instantiation; refused loudly, candidate lift post-v1)
-d="$WK/TwoLevelReal"; rm -rf "$d"; mkdir -p "$d"; cd "$d"
-cp "$REPO"/testsuite/bsc.verilog/parameters/real/*.bsv .
-cp "$REPO"/testsuite/bsc.verilog/parameters/real/*.v . 2>/dev/null
-$BSC -sim -u -g sysTwoLevelReal TwoLevelReal.bsv >b.out 2>&1
-if $BSC -sim -trs -e sysTwoLevelReal >link.out 2>&1; then
-    echo "FAIL TwoLevelReal-refusal (unexpectedly linked)"; fail=1
-elif grep -q "not a compile-time constant" link.out; then
-    echo "PASS TwoLevelReal-refusal"
-else
-    echo "FAIL TwoLevelReal-refusal (wrong error)"; head -5 link.out; fail=1
-fi
+# forwarded parameters (v1.1 lift): a real parameter crossing a
+# synthesis boundary resolves at instantiation and verilates per
+# valuation -- byte-compared against the stored golden
+golden TwoLevelReal sysTwoLevelReal \
+       "$REPO/testsuite/bsc.verilog/parameters/real" TwoLevelReal.bsv \
+       sysTwoLevelReal.out.expected
 
 # the lying import: a clean run diverges SILENTLY (that is the threat
 # model); TRS_BVI_CHECK=observe produces a sound DYNAMIC_LIE witness
