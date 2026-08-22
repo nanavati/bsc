@@ -224,8 +224,35 @@ assertion edge onward.
   Verilator byte-identical AND matching the existing golden — no
   re-record needed; before rule 2 the two simulators disagreed on every
   line (one extra gated edge in the two-state run).
-* Full-testsuite validation table: appended at the end of this
-  document when the runs complete.
+* Full testsuite, Icarus 12.0: **18,828 pass / 4 fail / 129 xfail** —
+  every failure pre-existing and environmental (two chmod-as-root
+  tests, DupInclude, one VCD truncated by the harness file-size
+  ulimit).  The reference simulator is fully green on the new
+  contract.
+* Full testsuite, Verilator 5.051 (automatic per-design timing):
+  **18,626 pass / 40 fail / 237 xfail**, down from 79 failures before
+  this branch.  The 40 decompose completely:
+  - 12 upstream Verilator defects/behavior: the $signed-slice display
+    regression (6 checks), the trace+timing initial-#0 regression (3,
+    all in positivereset/Reset), and the parallel_case runtime
+    assertion (3);
+  - 6 custom-testbench link failures (bsv_examples/MacTestBench),
+    a pre-existing flow gap unrelated to reset;
+  - 7 same-instant display-ordering differences (sysRstTest x2
+    polarities, sysSyncFIFOCountTest) — candidates for the testsuite's
+    sorted-comparison convention;
+  - 9 residual four-state startup differences (one extra
+    X-window edge or print in specific derived-clock paths:
+    sysClockDiv2's crossing register, sysClockDivFifo/2,
+    sysTestMkClock's tail count, sysNullSyncTest2's duplicated line,
+    sysGatedClockCycle) — the continuing primitive audit;
+  - 3 flips *introduced by the initial-state-consistency fix itself*
+    (sysResetMux, sysResetEither, SpecialSyncReg): Verilator now
+    resets these designs correctly while Icarus's X-passthrough
+    preserves the old never-reset behavior their goldens recorded —
+    the ResetMux/ResetEither select paths are the audit's next round;
+  - 3 environmental (chmod-as-root, DupInclude), simulator-independent.
+  One XPASS marks an XFAIL screen now too broad.
 
 ## Migration
 
