@@ -148,19 +148,24 @@ module main();
       // scheduler luck.
       #0
       RST = `BSV_RESET_VALUE;
-      // t=1..2: one deassert/assert pulse, making the assertion a
+      // t=1: first clock edge, under reset.  This comes BEFORE the
+      // deassert/assert pulse so synchronously-reset state is defined
+      // before the reset is ever seen deasserted: level-sensitive
+      // reset-gated logic (e.g. assertion checkers) samples during the
+      // pulse window, and a two-state simulator has no X-guard to
+      // suppress it -- with this ordering it samples post-reset state.
+      #1;
+      CLK = 1'b1;
+      // t=2..3: one deassert/assert pulse, making the assertion a
       // genuine value EDGE.  Two-state simulators (no X, no time-0
       // edge) and BSV_NO_INITIAL_BLOCKS builds (no initialized state)
       // rely on this edge alone; four-state simulators see the same
       // edge, so the async-assert primitives fire identically
-      // everywhere.  No clock edge coincides with either transition.
+      // everywhere.  No clock edge coincides with any transition.
       #1;
       RST = !`BSV_RESET_VALUE;
       #1;
       RST = `BSV_RESET_VALUE;
-      // t=3: first clock edge, under reset
-      #1;
-      CLK = 1'b1;
       // t=4: release, between clock edges; deassertion is synchronized
       // per-domain by the reset primitives
       #1;

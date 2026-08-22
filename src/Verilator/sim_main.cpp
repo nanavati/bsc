@@ -160,9 +160,9 @@ int main (int argc, char **argv, char **env) {
 #endif
 
     // Reset sequence (matches main.v): asserted as a level at time 0,
-    // one deassert/assert pulse at times 1..2 so the assertion is also
-    // a genuine EDGE, first clock edge under reset at time 3, release
-    // at time 4 between clock edges.  Two-state Verilator has no X and
+    // first clock edge under reset at time 1, one deassert/assert
+    // pulse at times 2..3 so the assertion is also a genuine EDGE,
+    // release at time 4 between clock edges.  Two-state Verilator has no X and
     // no time-0 edge, so the async-assert primitives' 'always @(RST
     // edge)' blocks fire only because of the explicit pulse; the
     // time-0 asserted level matches what a four-state simulator's
@@ -176,14 +176,17 @@ int main (int argc, char **argv, char **env) {
     TOP->CLK = 0;
     step(TOP, 1);
 
-    // t=1..2: deassert, then assert -- the assertion edge
+    // t=1: first CLK edge, under reset -- BEFORE the pulse, so
+    // synchronously-reset state is defined before the reset is ever
+    // seen deasserted (a two-state simulator has no X-guard to keep
+    // level-sensitive reset-gated logic quiet during the pulse)
+    TOP->CLK = 1;
+    step(TOP, 1);
+
+    // t=2..3: deassert, then assert -- the assertion edge
     TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
     step(TOP, 1);
     TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
-    step(TOP, 1);
-
-    // t=3: first CLK edge, under reset
-    TOP->CLK = 1;
     step(TOP, 1);
 
     // t=4: de-assert reset, between clock edges
@@ -210,23 +213,25 @@ int main (int argc, char **argv, char **env) {
     TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
     eval_now (TOP);
 
-    // t=1..2: deassert, then assert -- the genuine edge, which the
-    // async-assert primitives' 'always @(RST edge)' blocks key on
+    // t=1: first CLK edge, under reset -- BEFORE the pulse, so
+    // synchronously-reset state is defined before the reset is ever
+    // seen deasserted (no X-guard exists in two-state simulation)
     advance_to (TOP, 1);
+    if (! contextp->gotFinish ()) {
+        TOP->CLK = 1;
+        eval_now (TOP);
+    }
+
+    // t=2..3: deassert, then assert -- the genuine edge, which the
+    // async-assert primitives' 'always @(RST edge)' blocks key on
+    advance_to (TOP, 2);
     if (! contextp->gotFinish ()) {
         TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
         eval_now (TOP);
     }
-    advance_to (TOP, 2);
-    if (! contextp->gotFinish ()) {
-        TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
-        eval_now (TOP);
-    }
-
-    // t=3: first CLK edge, under reset
     advance_to (TOP, 3);
     if (! contextp->gotFinish ()) {
-        TOP->CLK = 1;
+        TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
         eval_now (TOP);
     }
 
