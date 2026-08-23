@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.13 — strawman distilled from a design discussion
+**Status:** Draft v0.14 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache).
 
 ---
 
@@ -257,6 +257,55 @@ explicitly signed can publish iface from parsed + symtab with no
 inference — importers unblock before typechecking starts.
 Signature-completeness becomes an opt-in latency lever and a candidate
 monorepo convention.
+
+### The node vocabulary is the public API
+
+The cabalized library currently exposes the compiler wholesale — every
+module of src/comp in `exposed-modules` — expedient scaffolding that
+reproduces GHC's API problem at birth: everything visible, nothing
+promised. The natural public interface is instead exactly this
+section's vocabulary: **the node representations (CSyntax, ISyntax,
+ASyntax/ABin, the iface and contract types as they land) plus the
+derivations between them** — parse, typecheck+conv, elaborate,
+schedule, generate, link as typed functions — plus the driver/query
+surface (§3, §5). Passes, utilities, and the interning machinery stay
+internal.
+
+These types are **more stable than they look at first glance**, for
+structural reasons. They are the compiler's phase boundaries: passes
+between them have been rewritten repeatedly across the compiler's
+two-decade life while the representations' names and roles persisted.
+The serialized subset already lives under conscious versioning
+discipline — `.bo` carries CSignature + ISyntax and `.ba` carries
+ABin/ASyntax behind deliberately-bumped format tags — so schema change
+is an *event* there, not drift. And they are the de facto API today,
+exercised continuously by every in-tree consumer that outlives a
+release: bluetcl's browsing surface, dumpbo/dumpba/showrules, the trs
+BIR consumers, the bluehs utilities.
+
+The artifact-graph architecture then upgrades "more stable than you'd
+think" to "stable by obligation": nodes need canonical serializations
+and schema-versioned cache keys (§15's definition-cache key already
+carries a simplifier version; generalized, **every node key includes
+its schema/pass version**). That yields a clean unification: **API
+versioning and cache keying are the same mechanism.** A representation
+change bumps the schema tag; the bump invalidates exactly the affected
+cache entries; and the same bump is the version signal a library
+consumer reads. One discipline, two audiences. Precedents: LLVM — the
+IR *is* the interface, and that choice turned a compiler into an
+ecosystem; MLIR's dialects as typed node vocabularies; nanopass
+compilers, where representations are the inter-pass contract by
+construction; GHC as the cautionary tale, where expose-everything plus
+churn spawned the ghc-lib shim industry.
+
+Honesty: the stability is of **role, not schema**. This RFC's own
+program is the largest planned schema churn (VModInfo splitting into
+IfcContract × BoundaryBinding; §15 changing what a `.bo`'s ISyntax
+contains). The API story is therefore two-layer: Haskell types for
+in-repo and version-pinned consumers; tagged serialized schemas as the
+cross-version surface. The exposed-modules set should converge on the
+vocabulary as the node work lands — wholesale exposure is the
+scaffolding, not the contract.
 
 ## 7. Contracts: precise and declared
 
@@ -728,6 +777,9 @@ Consequences:
   (an SDC subset? an attribute schema?), vlink's composition and
   re-scoping of obligations, and the waiver surface for deliberately
   undischarged ones.
+- The supported exposed-modules set (§6's API subsection): which node
+  types and derivations constitute the promised surface, and the
+  deprecation path for everything currently exposed as scaffolding.
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
