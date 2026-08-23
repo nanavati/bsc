@@ -49,6 +49,33 @@ static BscTraceC* tfp = NULL;    // harness trace file (guarded by VM_TRACE)
 // so defining it in terms of the context would recurse.)
 static VerilatedContext* contextp = NULL;
 
+#ifdef VL_USER_FINISH
+#include <stdio.h>
+// $finish handling: Verilator's default vl_finish prints its notice
+// ("- file:line: Verilog $finish") the moment $finish executes, but the
+// model keeps evaluating to the end of the current time slot, so
+// $display output scheduled in that same slot -- one module's done-rule
+// $finish racing another module's display block -- can legally land
+// AFTER the notice on stdout.  Consumers that treat the notice as an
+// output trailer (the testsuite truncates everything from it on) then
+// lose that output.  This override (enabled by -DVL_USER_FINISH from
+// bsc_build_vsim_verilator, which verilated.cpp keys its default on)
+// only records the $finish; the harness prints the identical notice
+// after the last eval, where a trailer belongs.
+static bool finish_seen = false;
+static char finish_note[600];
+void vl_finish (const char* filename, int linenum, const char* hier)
+{
+    (void)hier;
+    if (!finish_seen) {
+        finish_seen = true;
+        snprintf (finish_note, sizeof(finish_note),
+                  "- %s:%d: Verilog $finish\n", filename, linenum);
+    }
+    Verilated::threadContextp()->gotFinish(true);
+}
+#endif // VL_USER_FINISH
+
 #ifndef BSC_VERILATOR_TIMING
 
 // Model built without --timing: delays inside the Verilog are ignored,
@@ -263,6 +290,13 @@ int main (int argc, char **argv, char **env) {
     }
 
 #endif // BSC_VERILATOR_TIMING
+
+#ifdef VL_USER_FINISH
+    // The deferred $finish notice: after every eval (all of the finish
+    // slot's output has flushed), before final blocks (whose output the
+    // notice conventionally precedes).
+    if (finish_seen) VL_PRINTF ("%s", finish_note);
+#endif
 
     TOP->final ();    // Done simulating
 

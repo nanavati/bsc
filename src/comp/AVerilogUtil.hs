@@ -280,11 +280,25 @@ buildVerilogTask :: VConvtOpts -> VId -> [VExpr] -> VStmt
 buildVerilogTask vco fatal (code:es) | vco_sv_tasks vco == False &&
                                        fatal == vFatalTask =
   VSeq [VTask vDisplayTask es,
+        VZeroDelay,
         VTask vFinishTask [code]]
 buildVerilogTask vco etask es | vco_sv_tasks vco == False &&
                                 etask `elem` vErrorTasks =
   -- add $error, $warning, $info here?
   VTask vDisplayTask es
+-- $finish ends simulation the moment it executes, racing ahead of
+-- same-timestep display output from OTHER modules' system-task blocks:
+-- every such block defers behind its own leading #0, and the LRM
+-- leaves the resume order of same-time #0-suspended processes
+-- unspecified, so which displays flush before a cross-module $finish
+-- is simulator luck.  Suspend once more immediately before finishing
+-- (the #0 sits inside the finish's own guard, so it costs nothing on
+-- cycles that don't finish): all blocks' first-batch output flushes
+-- first, making end-of-simulation output deterministic across
+-- simulators and consistent with Bluesim, which completes the cycle's
+-- actions before stopping.
+buildVerilogTask vco taskid es | taskid == vFinishTask =
+  VSeq [VZeroDelay, VTask taskid es]
 -- if task is $swrite (or friends) add a #0 to get "expected" blocking assignment behavior
 buildVerilogTask vco taskid es | isMappedAVId (vidToId taskid) = VSeq [VTask taskid es, VZeroDelay]
 buildVerilogTask vco taskid es = VTask taskid es
