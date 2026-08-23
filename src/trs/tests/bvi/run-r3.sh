@@ -1,8 +1,12 @@
 #!/bin/sh
-# BVI R3 gate battery: the trs link verilate-or-cache pipeline.
+# BVI R3 gate battery: the trs BUILD-STEP verilate-or-cache pipeline.
 #   - counter contract verilates end-to-end into a dlopen-checked .so
 #   - cache hit on re-invocation; content invalidation via the depfile
 #     manifest; per-class lock survives concurrent builds
+#   - VERILATION IS A BUILD STEP (v1.5, Q3 ratified per-project):
+#     `trs run` is load-only off the byid index (no verilator, no
+#     sources at run); a cold cache refuses with a rebuild message;
+#     the default cache is trs-vlt beside the .bir
 #   - delay constructs select the timing link mode (the build always
 #     verilates --timing; VM_TIMING in the products says whether the
 #     model uses it) and still build end-to-end
@@ -109,6 +113,27 @@ cp "$RTL/BviCounter.v" .
 if TRS_VLT_CACHE=$C $BSC -sim -trs -e sysPosCounter >link.out 2>&1; then
     ok link-chain
 else bad link-chain "$(tail -5 link.out)"; fi
+
+# ---- run side is LOAD-ONLY (v1.5): a linked design runs off the
+# byid index without touching verilator or the sources...
+if out=$(TRS_VLT_CACHE=$C timeout 60 "$TRS" run sysPosCounter.bir -m 20 2>&1); then
+    ok run-warm
+else bad run-warm "$out"; fi
+
+# ---- ...and a cold cache is a REBUILD INSTRUCTION, never a silent
+# runtime verilation
+if out=$(TRS_VLT_CACHE=$WK/cache-cold timeout 60 "$TRS" run sysPosCounter.bir -m 20 2>&1); then
+    bad run-cold "(unexpectedly ran)" "$out"
+elif echo "$out" | grep -q "verilation is a build step"; then ok run-cold
+else bad run-cold "(missing build-step message)" "$out"; fi
+
+# ---- Q3 default (ratified per-project): with no TRS_VLT_CACHE the
+# cache lands in trs-vlt beside the .bir
+mkdir -p defloc && cp sysPosCounter.bir defloc/
+if out=$(env -u TRS_VLT_CACHE "$TRS" vlt build defloc/sysPosCounter.bir --vpath "$RTL" 2>&1) \
+   && echo "$out" | grep -q "contract" && [ -d "$WK/defloc/trs-vlt/vlt" ]; then
+    ok default-cache
+else bad default-cache "$out"; fi
 
 # ---- cross-release positives: the stable-interface metadata (V<top>.h
 # port macros + VM_TIMING in classes.mk) must work on a DIFFERENT 5.x

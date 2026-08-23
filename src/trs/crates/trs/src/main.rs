@@ -208,6 +208,9 @@ fn main() -> ExitCode {
         // print the built shared objects — the standalone entry to the
         // verilate-or-cache pipeline that link/run also perform.
         ["vlt", "build", path, rest @ ..] => {
+            // the standalone BUILD entry point: resolve the per-project
+            // cache beside the .bir and allow verilation
+            ensure_vlt_env(path, true);
             let mut opts = trs_vlt::BuildOptions::from_env();
             opts.verbose = true;
             let mut it = rest.iter();
@@ -255,8 +258,24 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            let has_bvi = design.modules.iter().any(|m| {
+                m.instances
+                    .iter()
+                    .any(|i| matches!(i.kind, trs_ir::InstanceKind::Bvi(_)))
+            });
+            let has_fwd = design.modules.iter().any(|m| {
+                m.instances.iter().any(|i| match &i.kind {
+                    trs_ir::InstanceKind::Bvi(c) => c.params.iter().any(|p| {
+                        matches!(
+                            p.value,
+                            trs_ir::bvi::BviParamValue::FromArg { .. }
+                        )
+                    }),
+                    _ => false,
+                })
+            });
             match trs_vlt::build_all(&design, &opts) {
-                Ok(models) if models.is_empty() => {
+                Ok(_) if !has_bvi => {
                     println!("trs vlt: no BVI instances in {path}");
                     ExitCode::SUCCESS
                 }
@@ -268,6 +287,51 @@ fn main() -> ExitCode {
                             if m.cached { "cached" } else { "built" },
                             m.contract_hash
                         );
+                    }
+                    // forwarded-parameter classes resolve in parent
+                    // context: an elaboration pass builds them with the
+                    // exact instantiation semantics of a real load, so
+                    // `trs vlt build` is a COMPLETE build step (the run
+                    // side is load-only since v1.5).  Flags reach the
+                    // pass through the env (the house pattern): opts is
+                    // written back so BviPrim::new resolves identically.
+                    if has_fwd {
+                        std::env::set_var("TRS_VLT_CACHE", &opts.cache_dir);
+                        std::env::set_var("TRS_VERILATOR", &opts.verilator);
+                        let join = |v: &[std::path::PathBuf]| {
+                            v.iter()
+                                .map(|p| p.display().to_string())
+                                .collect::<Vec<_>>()
+                                .join(":")
+                        };
+                        if !opts.extra_vpath.is_empty() {
+                            std::env::set_var(
+                                "TRS_VLT_VPATH",
+                                join(&opts.extra_vpath),
+                            );
+                        }
+                        if !opts.extra_vfiles.is_empty() {
+                            std::env::set_var(
+                                "TRS_VLT_VFILES",
+                                join(&opts.extra_vfiles),
+                            );
+                        }
+                        trs_interp::prim::set_load_memfiles(false);
+                        match trs_interp::startup::load_file_fresh(
+                            path,
+                            &[],
+                            &[],
+                            None,
+                        ) {
+                            Ok(_) => println!(
+                                "trs vlt: forwarded-parameter classes \
+                                 verilated via elaboration"
+                            ),
+                            Err(e) => {
+                                eprintln!("trs vlt: {e}");
+                                return ExitCode::FAILURE;
+                            }
+                        }
                     }
                     ExitCode::SUCCESS
                 }
@@ -381,9 +445,15 @@ fn main() -> ExitCode {
             // constructed, so the artifact written here opens its own
             // when it runs (see prim::LOAD_MEMFILES)
             trs_interp::prim::set_load_memfiles(false);
-            // BVI imports: verilate-or-cache their models before load,
-            // so every source/toolchain/refusal error fires at link
-            // (the artifact then finds warm cache entries at run)
+            // BVI imports: link is a BUILD step -- verilate-or-cache
+            // the models before load, so every source/toolchain/
+            // refusal error fires at link and the run side (load-only
+            // since v1.5) finds finished artifacts.  Forwarded-
+            // parameter classes build during the load below (the
+            // elaboration resolves them in parent context).  The cache
+            // default resolves beside the OUTPUT artifact (`base`),
+            // which is where the wrapper and its .bir copy look at run.
+            ensure_vlt_env(&base, true);
             if let Err(e) = bvi_prebuild(path) {
                 eprintln!("trs link: {e}");
                 return ExitCode::FAILURE;
@@ -618,6 +688,7 @@ fn main() -> ExitCode {
                      \x20 -c|-f)\n\
                      \x20   if test -f \"$d/$b.capi.so\"; then\n\
                      \x20     TRS_CAPI_FORMATS=\"{fmt_arg}\"; export TRS_CAPI_FORMATS\n\
+                     \x20     TRS_VLT_CACHE=\"${{TRS_VLT_CACHE:-$d/trs-vlt}}\"; export TRS_VLT_CACHE\n\
                      \x20     BLUESPECDIR=`echo 'puts $env(BLUESPECDIR)' | bluetcl`\n\
                      \x20     exec $BLUESPECDIR/tcllib/bluespec/bluesim.tcl \"$d/$b.capi.so\" {top} --script_name \"$b\" ${{1+\"$@\"}}\n\
                      \x20   fi\n\
@@ -1495,6 +1566,7 @@ fn link_interactive(bir_path: &str, base: &str, top: &str) -> ExitCode {
         r##"#!/bin/sh
 
 BLUESPECDIR=`echo 'puts $env(BLUESPECDIR)' | bluetcl`
+TRS_VLT_CACHE="${{TRS_VLT_CACHE:-`dirname $0`/trs-vlt}}"; export TRS_VLT_CACHE
 
 for arg in $@
 do
@@ -1518,10 +1590,33 @@ exec $BLUESPECDIR/tcllib/bluespec/bluesim.tcl $0.so {top} --script_name `basenam
     ExitCode::SUCCESS
 }
 
+/// Verilation is a BUILD step (Q3 ratified per-project, 2026-08-23):
+/// resolve the model cache next to the design's .bir when the user
+/// did not choose one, and mark build entry points (link, vlt build)
+/// as allowed to verilate.  Written to the env early -- these arms are
+/// single-threaded here, before any load or workers -- so every later
+/// BuildOptions::from_env in this process (and in BviPrim::new during
+/// elaboration) resolves identically.
+fn ensure_vlt_env(bir_path: &str, build_step: bool) {
+    if std::env::var_os("TRS_VLT_CACHE").is_none() {
+        let dir = std::path::Path::new(bir_path)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let dir = dir.canonicalize().unwrap_or(dir);
+        std::env::set_var("TRS_VLT_CACHE", dir.join("trs-vlt"));
+    }
+    if build_step {
+        std::env::set_var("TRS_VLT_BUILD", "1");
+    }
+}
+
 /// Verilate-or-cache every BVI model class in the design (design v4
-/// sec 5.2) before the interpreter loads it.  A design with no Bvi
-/// instances is untouched.  Errors are user errors (refusals, missing
-/// sources, toolchain failures), reported with the `bvi:` prefix.
+/// sec 5.2) before the interpreter loads it.  BUILD entry points only
+/// (trs link, trs vlt build).  A design with no Bvi instances is
+/// untouched.  Errors are user errors (refusals, missing sources,
+/// toolchain failures), reported with the `bvi:` prefix.
 fn bvi_prebuild(path: &str) -> Result<Vec<(String, trs_vlt::BuiltModel)>, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let design = trs_ir::Design::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
@@ -1536,6 +1631,51 @@ fn bvi_prebuild(path: &str) -> Result<Vec<(String, trs_vlt::BuiltModel)>, String
     let mut opts = trs_vlt::BuildOptions::from_env();
     opts.verbose = true;
     trs_vlt::build_all(&design, &opts).map_err(|e| format!("bvi: {e}"))
+}
+
+/// LOAD-ONLY check that the build step already produced every BVI
+/// model this design needs -- `trs run` (and the artifact wrappers
+/// that re-enter it) never verilate.  Forwarded-parameter classes
+/// resolve at instantiation and are checked there (load-only too);
+/// this precheck covers the literal classes with a clean error before
+/// elaboration starts.
+fn bvi_precheck(path: &str) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let design = trs_ir::Design::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let opts = trs_vlt::BuildOptions::from_env();
+    let mut missing: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for m in &design.modules {
+        for inst in &m.instances {
+            let trs_ir::InstanceKind::Bvi(c) = &inst.kind else { continue };
+            if c.params.iter().any(|p| {
+                matches!(p.value, trs_ir::bvi::BviParamValue::FromArg { .. })
+            }) {
+                continue;
+            }
+            let top = design.strings[c.verilog_name as usize].clone();
+            if seen.contains(&top) {
+                continue;
+            }
+            seen.push(top.clone());
+            match trs_vlt::find_model_resolved(c, &design.strings, &opts, None) {
+                Ok(Some(_)) => {}
+                Ok(None) => missing.push(top),
+                Err(e) => return Err(format!("bvi: {top}: {e}")),
+            }
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "bvi: verilated models not built for: {} (cache {}); \
+             verilation is a build step -- re-link the design \
+             (bsc -sim -trs -e <top>) or run `trs vlt build {path}` first",
+            missing.join(", "),
+            opts.cache_dir.display()
+        ))
+    }
 }
 
 fn run_script(
@@ -1553,8 +1693,11 @@ fn run_script(
     // sim advances — pin the sim's stdout sink to the same LineWriter
     // so the two cannot reorder (out.rs)
     trs_interp::stdout_force_line();
-    // BVI imports: verilate-or-cache their models before load
-    if let Err(e) = bvi_prebuild(path) {
+    // BVI imports: LOAD-ONLY (v1.5) -- verilation happened at the
+    // build step (trs link / trs vlt build); a cold cache is a rebuild
+    // instruction, never a runtime verilation
+    ensure_vlt_env(path, false);
+    if let Err(e) = bvi_precheck(path) {
         eprintln!("trs run: {e}");
         return ExitCode::FAILURE;
     }

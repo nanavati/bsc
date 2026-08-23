@@ -2,16 +2,25 @@
 //! draft "KB: BVI-via-Verilator design (trs)", v4 sec 5.2; validated
 //! end-to-end by the M0 spike at src/trs/spike/bvi-m0/).
 //!
-//! `trs link` and `trs run` call [`build_all`] before instantiating a
-//! design that carries `InstanceKind::Bvi` contracts.  Per contract
-//! class -- (verilator version, shim-generator revision, contract
-//! shape, typed parameters, defines, resolved top file) -- the pipeline
-//! resolves sources, verilates ONCE with `--timing`, reads the model
-//! metadata from that build's stable products (V<top>.h port macros +
-//! VM_TIMING in classes.mk; v1.4, see meta.rs), applies the refusals
-//! (DPI via the V<top>__Dpi.h backstop), generates the engine-neutral
-//! shim, builds a shared object, and caches it content-addressed over
-//! the depfile closure with a per-class lock.
+//! VERILATION IS A BUILD STEP (v1.5, ratified 2026-08-23): only the
+//! build entry points -- `trs link` and `trs vlt build` -- verilate,
+//! via [`build_all`] plus the elaboration pass that resolves
+//! forwarded-parameter classes.  The run side (`trs run`, artifact
+//! wrappers) is LOAD-ONLY through [`find_model_resolved`], which walks
+//! the vlt/byid run-key index the build wrote -- no verilator binary,
+//! no source tree, no staleness re-check at run; a cold cache is a
+//! rebuild instruction.  The cache is PER-PROJECT (Q3 ratified):
+//! TRS_VLT_CACHE, defaulting to `trs-vlt` beside the design.
+//!
+//! Per contract class -- (verilator version, shim-generator revision,
+//! contract shape, typed parameters, defines, resolved top file) --
+//! the pipeline resolves sources, verilates ONCE with `--timing`,
+//! reads the model metadata from that build's stable products
+//! (V<top>.h port macros + VM_TIMING in classes.mk; v1.4, see
+//! meta.rs), applies the refusals (DPI via the V<top>__Dpi.h
+//! backstop), generates the engine-neutral shim, builds a shared
+//! object, and caches it content-addressed over the depfile closure
+//! with a per-class lock.
 //!
 //! `--timing` is always passed; Verilator itself reports through
 //! VM_TIMING whether the model USES timing, which selects
@@ -90,31 +99,33 @@ pub struct BuildOptions {
 }
 
 impl BuildOptions {
-    /// Defaults per the design's provisional Q3 answer: per-user cache
-    /// (~/.cache/trs) with TRS_VLT_CACHE override; TRS_VERILATOR picks
-    /// the binary (default: `verilator` on PATH).
+    /// Defaults per the RATIFIED Q3 answer (2026-08-23): the cache is
+    /// PER-PROJECT.  TRS_VLT_CACHE when set; otherwise `trs-vlt` --
+    /// the trs entry points resolve that next to the design's .bir and
+    /// export it, so a bare library call (no env, no entry point)
+    /// lands on ./trs-vlt under the working directory.  TRS_VERILATOR
+    /// picks the binary (default: `verilator` on PATH).  TRS_VLT_VPATH
+    /// / TRS_VLT_VFILES (colon-separated) carry `trs vlt build`'s
+    /// --vpath/--vfile extras into the elaboration pass that builds
+    /// forwarded-parameter classes.
     pub fn from_env() -> Self {
         let verilator = std::env::var_os("TRS_VERILATOR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("verilator"));
         let cache_dir = std::env::var_os("TRS_VLT_CACHE")
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std::env::var_os("XDG_CACHE_HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| {
-                        let home = std::env::var_os("HOME")
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|| PathBuf::from("."));
-                        home.join(".cache")
-                    })
-                    .join("trs")
-            });
+            .unwrap_or_else(|| PathBuf::from("trs-vlt"));
+        let split_paths = |var: &str| -> Vec<PathBuf> {
+            std::env::var(var)
+                .ok()
+                .map(|v| v.split(':').filter(|s| !s.is_empty()).map(PathBuf::from).collect())
+                .unwrap_or_default()
+        };
         BuildOptions {
             verilator,
             cache_dir,
-            extra_vpath: Vec::new(),
-            extra_vfiles: Vec::new(),
+            extra_vpath: split_paths("TRS_VLT_VPATH"),
+            extra_vfiles: split_paths("TRS_VLT_VFILES"),
             verbose: false,
         }
     }
@@ -174,6 +185,76 @@ fn serialize_param(
             ))
         }
     })
+}
+
+/// The full -G serialization for a contract's parameter list, with
+/// instantiation-resolved values overriding the forwarded slots.
+fn serialize_params(
+    c: &BviContract,
+    strings: &[String],
+    resolved: Option<&[ResolvedParam]>,
+) -> Result<Vec<String>, VltError> {
+    let s = |id: u32| strings.get(id as usize).map(String::as_str).unwrap_or("");
+    if let Some(r) = resolved {
+        if r.len() != c.params.len() {
+            return Err(VltError::tool(
+                "param resolve",
+                format!(
+                    "{}: {} resolved values for {} contract parameters",
+                    s(c.verilog_name),
+                    r.len(),
+                    c.params.len()
+                ),
+            ));
+        }
+    }
+    let mut gparams = Vec::new();
+    for (i, prm) in c.params.iter().enumerate() {
+        let over = resolved.and_then(|r| r.get(i));
+        match over {
+            Some(ResolvedParam::Contract) | None => {
+                gparams.push(serialize_param(s(prm.name), &prm.value, strings)?)
+            }
+            Some(r) => gparams.push(serialize_resolved(s(prm.name), r)),
+        }
+    }
+    Ok(gparams)
+}
+
+/// The RUN-KNOWABLE identity of a model class: everything a load-only
+/// consumer can compute from the contract and the resolved parameter
+/// values alone -- no verilator binary (whose version is part of the
+/// class key) and no source tree (whose resolved top file is too).
+/// Builds record class-key-by-run-key under vlt/byid/ so `trs run`
+/// finds the artifact the build step produced; when several build
+/// environments share one identity (a pin bump re-verilates), the
+/// LAST BUILD WINS -- the build step decides what the run consumes.
+fn run_key(c: &BviContract, strings: &[String], gparams: &[String]) -> String {
+    let s = |id: u32| strings.get(id as usize).map(String::as_str).unwrap_or("");
+    let mut src = String::new();
+    src.push_str(&format!("shimgen={}\n", shim::SHIMGEN_REV));
+    src.push_str(&format!("contract={}\n", shim::contract_json(c, strings)));
+    for g in gparams {
+        src.push_str(&format!("gparam={g}\n"));
+    }
+    for &d in &c.vpath {
+        src.push_str(&format!("vpath={}\n", s(d)));
+    }
+    sha256::digest_hex(src.as_bytes())[..32].to_string()
+}
+
+/// Record run-key -> class-key (atomic: tmp + rename); best-effort --
+/// a failed pointer write degrades to a run-side miss, never a wrong
+/// artifact.
+fn write_byid(cache_dir: &Path, runkey: &str, class: &str) {
+    let dir = cache_dir.join("vlt").join("byid");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let tmp = dir.join(format!("{runkey}.tmp{}", std::process::id()));
+    if std::fs::write(&tmp, class).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join(runkey));
+    }
 }
 
 fn serialize_resolved(name: &str, r: &ResolvedParam) -> String {
@@ -344,28 +425,8 @@ pub fn build_model_resolved(
         .map_err(|e| VltError::resolve(format!("{}: {e}", top_file.display())))?;
 
     // ---- typed params and defines
-    if let Some(r) = resolved {
-        if r.len() != c.params.len() {
-            return Err(VltError::tool(
-                "param resolve",
-                format!(
-                    "{top}: {} resolved values for {} contract parameters",
-                    r.len(),
-                    c.params.len()
-                ),
-            ));
-        }
-    }
-    let mut gparams = Vec::new();
-    for (i, prm) in c.params.iter().enumerate() {
-        let over = resolved.and_then(|r| r.get(i));
-        match over {
-            Some(ResolvedParam::Contract) | None => {
-                gparams.push(serialize_param(s(prm.name), &prm.value, strings)?)
-            }
-            Some(r) => gparams.push(serialize_resolved(s(prm.name), r)),
-        }
-    }
+    let gparams = serialize_params(c, strings, resolved)?;
+    let runkey = run_key(c, strings, &gparams);
     let defines: Vec<(String, Option<String>)> = c
         .defines
         .iter()
@@ -408,6 +469,7 @@ pub fn build_model_resolved(
     // ---- cache hit: manifest present AND every dep content unchanged
     if so_path.is_file() && manifest.is_file() && manifest_valid(&manifest) {
         dlopen_check(&so_path, &expect_hash)?;
+        write_byid(&opts.cache_dir, &runkey, &class);
         return Ok(BuiltModel {
             so_path,
             contract_hash: expect_hash,
@@ -626,6 +688,7 @@ pub fn build_model_resolved(
     deps.sort();
     write_manifest(&manifest, &deps)?;
     dlopen_check(&so_path, &expect_hash)?;
+    write_byid(&opts.cache_dir, &runkey, &class);
 
     Ok(BuiltModel {
         so_path,
@@ -634,6 +697,50 @@ pub fn build_model_resolved(
         class,
         verilog_name: top,
     })
+}
+
+/// LOAD-ONLY lookup: find the model artifact a prior BUILD step (trs
+/// link / trs vlt build) produced for this contract and parameter
+/// valuation, without touching the verilator binary or the source
+/// tree.  Verilation is a build step (Ravi, 2026-08-23): the run side
+/// never verilates, so a miss here is the caller's cue to report
+/// "rebuild", not to build.  Staleness is deliberately NOT re-checked
+/// (the manifest's dep contents belong to the build environment) --
+/// like any compiled artifact, a stale model runs until the build step
+/// is re-run; the contract hash is still verified on load.
+pub fn find_model_resolved(
+    c: &BviContract,
+    strings: &[String],
+    opts: &BuildOptions,
+    resolved: Option<&[ResolvedParam]>,
+) -> Result<Option<BuiltModel>, VltError> {
+    let s = |id: u32| strings.get(id as usize).map(String::as_str).unwrap_or("");
+    let top = s(c.verilog_name).to_string();
+    let gparams = serialize_params(c, strings, resolved)?;
+    let runkey = run_key(c, strings, &gparams);
+    let byid = opts.cache_dir.join("vlt").join("byid").join(&runkey);
+    let Ok(class) = std::fs::read_to_string(&byid) else {
+        return Ok(None);
+    };
+    let class = class.trim().to_string();
+    let so_path = opts
+        .cache_dir
+        .join("vlt")
+        .join(&class)
+        .join(format!("lib{top}_shim.vlt.so"));
+    if !so_path.is_file() {
+        return Ok(None);
+    }
+    let cjson = shim::contract_json(c, strings);
+    let expect_hash = sha256::digest_hex(cjson.as_bytes())[..16].to_string();
+    dlopen_check(&so_path, &expect_hash)?;
+    Ok(Some(BuiltModel {
+        so_path,
+        contract_hash: expect_hash,
+        cached: true,
+        class,
+        verilog_name: top,
+    }))
 }
 
 /// dlopen the built model and confirm it reports the expected contract

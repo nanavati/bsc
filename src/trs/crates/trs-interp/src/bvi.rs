@@ -180,11 +180,30 @@ impl BviPrim {
         let s = |id: u32| strings.get(id as usize).map(String::as_str).unwrap_or("");
         let top = s(c.verilog_name).to_string();
         let opts = trs_vlt::BuildOptions::from_env();
-        let built =
+        // Verilation is a BUILD step (ratified 2026-08-23): only the
+        // build entry points (trs link, trs vlt build) set
+        // TRS_VLT_BUILD and may verilate here; every other load --
+        // trs run, artifact runs -- is LOAD-ONLY and a cache miss is a
+        // rebuild instruction, never a silent runtime verilation.
+        let build_mode = std::env::var_os("TRS_VLT_BUILD").is_some();
+        let built = if build_mode {
             trs_vlt::build_model_resolved(c, strings, &opts, resolved.as_deref())
                 .unwrap_or_else(|e| {
                     panic!("trs bvi: instance {path} ({top}): {e}")
-                });
+                })
+        } else {
+            match trs_vlt::find_model_resolved(c, strings, &opts, resolved.as_deref()) {
+                Ok(Some(b)) => b,
+                Ok(None) => panic!(
+                    "trs bvi: instance {path} ({top}): verilated model not \
+                     found in cache {} -- verilation is a build step: \
+                     re-link the design (bsc -sim -trs -e <top>) or run \
+                     `trs vlt build <design>.bir` first",
+                    opts.cache_dir.display()
+                ),
+                Err(e) => panic!("trs bvi: instance {path} ({top}): {e}"),
+            }
+        };
         let lib = unsafe { libloading::Library::new(&built.so_path) }
             .unwrap_or_else(|e| panic!("trs bvi: {}: {e}", built.so_path.display()));
 
