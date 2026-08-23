@@ -48,7 +48,28 @@ module ClockDiv(CLK_IN, RST, PREEDGE,  CLK_OUT);
    wire [width-1:0]     upper_w ;
    wire [width-1:0]     lower_w ;
 
+`ifdef VERILATOR
+   // Two-state emulation of the four-state virgin-counter behavior,
+   // needed when RST is tied off (reset_by noReset): with no reset
+   // edge to define it, a four-state counter is X until the first
+   // CLK_IN edge, where (X < upper) is false and the else arm loads
+   // 'lower' -- a defined phase.  Two-state C++-zero would instead
+   // INCREMENT from zero, putting the divided clock one fast period
+   // early.  Start the counter at all-ones (>= upper at any width, so
+   // the first edge loads 'lower' identically), and gate CLK_OUT low
+   // until the first always firing so the init itself makes no time-0
+   // output transition (rule 1); a reset assertion opens the gate at
+   // the assertion edge, matching the four-state X -> value edge.
+   reg                  cd_started ;
+   assign               CLK_OUT = cd_started ? cntr[width-1] : 1'b0 ;
+   initial
+     begin
+        cd_started = 1'b0 ;
+        cntr = {width{1'b1}} ;
+     end
+`else
    assign               CLK_OUT = cntr[width-1] ;
+`endif
    assign               upper_w = upper ;
    assign               lower_w = lower ;
 
@@ -75,6 +96,9 @@ module ClockDiv(CLK_IN, RST, PREEDGE,  CLK_OUT);
         // updates occur. see
         // http://www.sunburst-design.com/papers/CummingsSNUG2002Boston_NBAwithDelays.pdf
 
+`ifdef VERILATOR
+        cd_started = 1'b1 ;
+`endif
         if ( RST == `BSV_RESET_VALUE )
           cntr = upper - offset ;
         else
