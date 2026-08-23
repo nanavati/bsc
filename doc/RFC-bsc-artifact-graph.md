@@ -670,23 +670,98 @@ precise. One source can generate the whole family (the conditional
 bypass/pipeline mux idiom already hand-rolls this), with the schedule
 parameter as a specialization-key component.
 
-## 15. The cost of giving up cross-module inlining: an experiment
+## 15. The pre-.bo eager layer: giving up early inlining
 
-The question: compiling against signature rather than implementation
-arguably gains a lot — do we know what it costs? **We do not; it is
-measurable; here is the decomposition and the experiment.**
+The question, precisely: bsc does *some elaboration-style inlining in
+advance*, at package-compile time, baked into the `.bo` — a structural
+echo of CtxRed. What would giving it up gain, and do we know what it
+costs? **The gains are the identity properties this whole RFC is built
+on; the cost is unmeasured, decomposable, and the instrumentation
+half-exists.**
 
-**Sharpen the question first.** Function-level cross-module inlining
-must stay: elaboration *is* inlining for ordinary definitions — there
-is no "call" in hardware. The real candidate is **cross-package module
-instantiation**: auto-boundary every legal cross-package module use
-(compile parents against contracts, never bodies). Note also that the
-*.bo-level* gain — body edits not recompiling importers — is already
-captured by the iface/impl split *without giving anything up* (impl is
-demanded only at elaboration). The additional gains of auto-boundary
-are elaboration-level: per-package elaboration artifacts and reuse,
-smaller elaboration closures (the 20–30 GB elaborations shrink when
-children are boundaries), redaction by default, and the whole contract
+**Anatomy of the layer** (post-typecheck, pre-`.bo`-write, bsc.hs
+~540–600): `LiftDicts` lifts dictionary expressions to top-level CAF
+definitions carrying evidence identities; `fixupDefs` **redirects local
+lifted dictionaries to evidence-equal imported ones** (first verified
+candidate in import order — a cross-package dependence of my `.bo`
+bytes on the imports' lifted-dictionary *inventory and order*);
+`iSimpDicts` expands lifted dictionary CAFs to manifest tuple form
+"so ISimplify can inline them efficiently"; and `iSimplify` — run
+twice, with an XXX — beta-reduces, inlines through definition heads,
+and simplifies, with a TODO list written "from looking at .bo". The
+layer's purpose is CtxRed's purpose one phase later: make dictionaries
+cheap, eagerly, package-wide, with the output baked into the durable
+artifact.
+
+**What "give up" should mean — the CtxRed-retirement principle applies
+verbatim** (*the written form is identity; solved facts are a cache*):
+the `.bo` impl stratum stores the **raw** post-typecheck/IConv
+definitions (identity), and the simplified/deduplicated forms become a
+**derived node** — `simp(pkg)`, keyed on (impl, simplifier version) —
+with dictionary deduplication moving to the elaboration-time evidence
+cache the CtxRed retirement's P2 already plans. Not lost work: moved
+out of the identity artifact into cache, where heuristic drift is
+harmless. The in-tree precedent for the mechanics is sitting in the
+IPackage record itself: the ATF cache is already a per-package annex.
+
+**Gains, now precise:**
+
+- **True iface-keyed `.bo` production.** Today a dictionary added
+  *inside* an import can change my `.bo` bytes (the fixupDefs redirect
+  target shifts with inventory/import order) with nothing semantic
+  changed for me. Raw-identity impl kills that: `.bo` = f(source,
+  import ifaces).
+- **Canonicality.** Simplifier-heuristic drift stops churning `.bo`s —
+  the alpha/cache-stability theme of this RFC, at the artifact that
+  matters most. The double-run XXX is this smell made visible.
+- **Clean per-definition impl nodes** (definitions not pre-fused into
+  each other), and faster package compiles on the critical path.
+- **Better dedup, lazily**: fixupDefs dedups against direct imports in
+  import order; an evidence-keyed elaboration-time cache dedups
+  globally and order-independently.
+
+**Costs, decomposed (the honest unknown):**
+
+1. *Amortization loss*: simplification once per definition per
+   consuming design, instead of once per definition — for Prelude-class
+   definitions used by everything, real. Bounded by the fact that
+   elaboration re-simplifies whatever it inlines anyway.
+2. *Evaluator pathologies on raw forms* — the scary tail: unsimplified
+   dictionary spines at every use site are exactly the class of
+   superlinear evaluator blowups the primitive-fixes work documented.
+   Any experiment must include the perf-stress designs, not
+   microbenchmarks.
+3. *`.bo` size and load time* (raw bodies are bigger). Modest;
+   measurable.
+4. *Elaboration-time dictionary duplication*: fixupDefs' redirects also
+   mean evidence-equal dictionaries elaborate once because they are one
+   definition; the lazy replacement must catch this in the evidence
+   cache or pay per-name re-elaboration.
+
+**The experiment** (instrumentation half-exists: `-trace-drop-dicts`
+and `-trace-simp-dicts` are already in the tree): a flag skipping
+iSimpDicts + iSimplify (and optionally fixupDefs redirects) at
+`.bo`-write; compile the library, the testsuite corpus, and the
+perf-stress designs both ways; measure package-compile time, `.bo`
+sizes, full-design elaboration time and memory, and `.bo` byte-stability
+across simplifier tweaks; use the traces to size redirect and
+simplification hit rates. The middle target is the likely winner and is
+this RFC's shape anyway: keep the eager work but store it as the
+derived `simp(pkg)` node/annex beside a raw impl — identity properties
+and amortization at once, at the cost of carrying both forms.
+
+### 15.b The adjacent question: auto-boundary for cross-package modules
+
+(Distinct from the above — the question first answered in this
+section's earlier draft; retained because it is real and complements
+it.) Function-level cross-module inlining at *elaboration* stays:
+elaboration is inlining; hardware has no calls. The elaboration-level
+candidate is **auto-boundary for cross-package module instantiation**
+(compile parents against contracts, never bodies). The `.bo`-level gain
+is already captured by the iface/impl split; auto-boundary's additional
+gains are elaboration-level: per-package elaboration artifacts and
+reuse, smaller elaboration closures (the 20–30 GB elaborations shrink
+when children are boundaries), redaction by default, and the contract
 economy applying to every cross-package edge.
 
 **Cost classes**, with recoverability noted:
