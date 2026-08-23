@@ -34,7 +34,16 @@ test_c_veri_bsv_modules_options_separately GatedClock_TwoModTwoSyn \
 # (This test was originally written when the prim had no register,
 # and we were testing that BSC catches the cycle.)
 
-test_c_veri_bsv GatedClockCycle
+# The shared golden's first line ("rg2 = 170") is a four-state time-0
+# artifact: the gate is initially closed, so GatedClock's initial block
+# takes CLK_OUT from X to 0 at time 0 -- a negedge that fires the
+# system-task block, whose rg2 display is unguarded (mkRegU: no reset).
+# That accidental line keeps iverilog aligned with Bluesim's first-cycle
+# display.  A two-state simulator starts CLK_OUT at a solid 0 and cannot
+# produce a time-0 negedge (any manufactured pulse would first rise,
+# falsely clocking gated-domain registers), so verilator's output starts
+# one line later, at the first real negedge.
+test_c_veri_bsv GatedClockCycle "" "" verilator
 
 # ==========
 # This design makes two identical clocks.

@@ -184,6 +184,30 @@ triggered processes in, "asserted" wins.  Asynchronous assertion is
 also *required*, not just safe: clock-generating logic sits upstream of
 its own domain's clock and can only be reset without one.
 
+**Propagation through reset synchronizers.**  The manufactured pulse
+reaches only consumers wired to the harness reset itself; a reset
+synchronizer swallows it.  Its hold register initializes asserted
+(initial-state consistency, above), so the re-assert edge writes the
+value already held, and the deassert half can only move the hold
+register at a clock edge — and the pulse window is clock-free by
+construction.  The synchronizer's output therefore never edges, and
+async-assert consumers *downstream* of it wait for an asserting edge
+that never comes.  A four-state simulator delivers that edge at time 0
+anyway (the output leaves X when the hold register initializes); a
+two-state simulator delivers nothing — observably wrong in the window
+before the destination clock's first edge (`sysClockDiv2`'s crossing
+register, clocked by a divided clock whose first edge lands after the
+first read, kept its `mkRegU` fill).  Under `` `ifdef VERILATOR ``
+each synchronizer (`SyncResetA`, `SyncReset`, `SyncReset0`) therefore
+*regenerates* the pulse locally on its output — deassert at 2,
+re-assert at 3, the same reserved window — putting the emulated time-0
+edge exactly where four-state delivers it, stage by stage down the
+tree.  Regeneration rather than forwarding keeps synchronizers fed by
+generated resets (which never pulse, e.g. the `MakeReset` family's
+internal synchronizer) correct: when the hold register is genuinely
+deasserted by time 3 the output mux simply returns to it and no
+spurious assert edge is produced.
+
 **Internal synchronized deassertion** changes at destination-clock
 edges by design — and is safe there because it is produced by a flop
 clocked by that same edge: the new value arrives through a nonblocking
@@ -226,6 +250,46 @@ identical by construction, matches the behavior existing goldens
 recorded, and defines the gate under `BSV_NO_INITIAL_BLOCKS` from the
 assertion edge onward.
 
+**A companion task rule — `$finish` defers behind the timestep's
+output.**  Every generated system-task block opens with `#0`, so all of
+a timestep's display blocks resume together in the first inactive
+batch — in an order the LRM leaves unspecified.  A `$finish` in one
+module's block (a `done` rule) racing display output in another's is
+therefore simulator luck: an event-driven simulator that resumes the
+finish first terminates mid-timestep and the other block's line is
+never printed.  Two changes make the end of simulation deterministic:
+
+* The compiler emits one more `#0` immediately before `$finish`
+  (inside its own guard, so cycles that don't finish pay nothing).  In
+  an event-driven simulator displays flush in batch one and the finish
+  runs in batch two — the order becomes a property of the text rather
+  than of the scheduler, consistent with Bluesim, which completes the
+  cycle's actions before stopping.  iverilog happened to flush
+  displays first already, so its output is unchanged.  This is emitted
+  unconditionally (not under `` `ifdef VERILATOR ``).
+
+* Verilator needs one more step, for a different reason: it keeps
+  evaluating to the end of the time slot after `$finish` (no output is
+  lost), but its default `vl_finish` prints the "`Verilog $finish`"
+  notice the moment the task executes — and its zero-delay rounds
+  interleave with cross-module signal propagation, so the notice can
+  legally land *ahead* of same-slot display output on stdout
+  (`sysTestMkClock`, `sysNullSyncTest2`: the testsuite truncates
+  output at the notice line and the last display vanished from the
+  comparison).  The harness (`sim_main.cpp`, via `-DVL_USER_FINISH`)
+  now records the `$finish` and prints the identical notice after the
+  last eval, where a trailer belongs.
+
+One four-state artifact remains recorded in a shared golden and is
+*not* emulated: an initially-closed gated clock leaves X at time 0,
+whose falling edge fires an unguarded (`mkRegU`-domain) display block
+once before any real clock edge (`sysGatedClockCycle`).  A two-state
+clock output starts at a solid 0 and cannot produce a time-0 negedge;
+any manufactured pulse would first *rise*, falsely clocking
+gated-domain registers whose enables do not include the gate.  That
+compare is marked expected-to-differ under Verilator instead, with the
+mechanism documented at the test.
+
 ## What changes, concretely
 
 * `main.v`: the initial block's reset choreography (shown above).
@@ -241,6 +305,12 @@ assertion edge onward.
 * `SyncResetA.v`, `SyncReset.v`, `ClockSelect.v`,
   `UngatedClockSelect.v`, `MakeReset{,0,A}.v`: initial state agrees
   with the time-0 asserted level (initial-state consistency, above).
+* `SyncResetA.v`, `SyncReset.v`, `SyncReset0.v`: under `` `ifdef
+  VERILATOR ``, the output regenerates the startup pulse in the
+  reserved window (propagation through reset synchronizers, above).
+* The compiler emits `#0` before `$finish` in the generated
+  system-task blocks, and the verilator harness defers the `$finish`
+  notice line to after the last eval (companion task rule, above).
 * The `#0` prefix is stripped from the initial blocks of the reset- and
   clock-network primitives (the two families above plus `ClockDiv`,
   `GatedClockDiv`, `GatedClock`, `ClockMux`, `UngatedClockMux`,
