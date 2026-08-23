@@ -128,6 +128,10 @@ blowup recurs.
   (the conditional arm), since those are the heads whose meaning could shift.
 - Acceptance census: programs that typecheck **only because** CtxRed reduced something early
   (run the testsuite with the pass's output discarded-but-checked to find them).
+- **Provenance split**: attribute predicate counts and solver time to user-written vs
+  Deriving-generated vs GenWrap-generated definitions. This decides how much the companion lane
+  (§3.5) buys; expectation to test: generated code dominates predicate traffic in typical
+  packages.
 - **Regime census** (per the §1 validity criterion): classify every constraint CtxRed discharges
   in the wild as (a) computed-class head (StdPrel `genInsts` — world-closed, safe), (b) single
   total instance NOT intended for override (safe in practice, world-open in principle),
@@ -157,6 +161,38 @@ blowup recurs.
 **Exit:** VTA's FD-target tests pass locally and through separately compiled `.bo`s; byte-level
 signature parity for all defs the Phase 0 census marked telescope-stable; adapter annex
 round-trips; `.bo` tag bump coordinated (see §5).
+
+### §3.5 Companion lane (with Phase 1): born-reduced generated code
+
+The no-rewriting rule protects *written* telescopes; generated code has none — its declared
+types are the generator's choice, so the generator may (and should) discharge constraints at
+emission time. Generation runs in the defining package's environment, at ground heads, and for
+width arithmetic against the closed computed classes: it is a pick-time solver in exactly the
+right regime. Today it emits the opposite: `doDEq` builds contexts with duplicate preds and
+preds at concrete types (`Deriving.hs:272-275` — the identical heads `joinNeededCtxs` merges
+quadratically), and `doDBits` manufactures fresh tyvars and `Bits`/`Add`/`Max` proviso chains
+even for fully monomorphic types (`Deriving.hs:440-510`), leaving CtxRed/typecheck to solve
+puzzles the generator could have not posed.
+
+- **Rule:** generate ground where resolvable in scope (monomorphic instances get computed
+  widths and **empty contexts** — the P3 discharge win with no machinery); generate minimal,
+  deduplicated contexts where genuinely polymorphic; fall back to the constrained form on
+  same-package forward references, so this stays a pure optimization with no ordering cliff.
+- **Discipline:** resolve with the same machinery the typechecker uses (`genInsts` +
+  `matchTop`, specificity and coherence flags honored — precedent: Deriving's auto-derive gate
+  already runs a mini-TI, `Deriving.hs:957-993`), and seed the ATF/evidence caches with the
+  generator's solves rather than bypassing them.
+- **Why it is a P1 prerequisite, not a P4 nicety:** the audit's blowup benchmark (52× `.bo`,
+  unfinished typecheck) measured reducible provisos preserved in signatures and re-solved at
+  every importing use. Under P1, signatures stop being reduced — so constraint-laden derived
+  instances (the highest-volume proviso source) would ship raw to every importer and recreate
+  that shape. Born-reduced generation delivers generated code already in the form the retired
+  pass used to produce.
+- Scope companions: the CtxRed audit's "Deriving Generic must generate its hidden
+  representation obligations explicitly" is this move for one class; GenWrap's pick-time
+  boundary derivation (J2/J9) is this move for the wrapper machinery.
+- Bonus: generation-time failures blame the right thing ("field f of MyUnion has no Bits
+  instance") instead of surfacing as solver residue.
 
 ### Phase 2 — Internal canonicalizer + evidence cache
 
