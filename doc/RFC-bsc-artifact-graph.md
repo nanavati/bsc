@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.10 — strawman distilled from a design discussion
+**Status:** Draft v0.11 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output.
 
 ---
 
@@ -550,6 +550,66 @@ semantic) — and the recent InitialReset fix is the miniature precedent:
 moving its hold register to a polarity-independent encoding was exactly
 a physical-encoding-leaked-into-semantics repair.
 
+### Realization strategies: structural vs macro
+
+§14.c's dissolution is a semantic-layer event only. At the realization
+layer the choice does not disappear — it bifurcates: **either
+implement with flops and EHRs, or with macros and external
+constraints.** Naming the two strategies completes the physical layer:
+
+- **Structural realization** — flops plus derived forwarding: the
+  compiler materializes the coordinate structure as wires, an
+  EHR-shaped netlist (today's CRegN5.v minus the hand-writing and the
+  magic arity). Conformance is **derived**: every license is
+  discharged by construction inside the netlist; nothing leaks out.
+- **Macro realization** — the element binds to a hard cell: a vendor
+  register file, a BRAM, a latch array, a custom multi-port register,
+  a double-pumped single-port macro. The coordinate structure cannot
+  be expressed inside the black box, so the schedule facts it must
+  honor become **external constraint obligations** attached to the
+  binding: write-mode configuration, port-phase assignments
+  (multi-pumping maps coordinates to time slots and exports an STA
+  obligation), usage rules ("never assert these two enables in one
+  cycle"), SDC.
+
+The tree already exhibits both poles. CRegN5.v is the structural pole.
+BRAM1.v is the macro pole in miniature: its wrapper hand-encodes
+write-first read-during-write behavior (`DO_R <= DI` under WE,
+BRAM1.v:47-55) precisely so inference maps it onto the macro's
+write-mode configuration — a Bluespec-level schedule fact (which
+coordinate a same-cycle read observes) discharged by macro
+configuration plus an obligation on the synthesis tool to honor it.
+And every `import "BVI"` scheduling annotation is an external
+constraint in exactly this sense — asserted today, carried nowhere.
+
+Consequences:
+
+- **Constraint obligations are first-class physical-layer artifacts.**
+  A binding manifest = port map + sharing classes + obligations, each
+  obligation with a discharge status on the provenance lattice:
+  derived (discharged by construction — the structural case), asserted
+  (carried), validated (checked by STA, formal, or the vendor spec).
+- **vlink grows a second output**: alongside the composed netlist, the
+  composed design-level constraint set — obligations accumulated from
+  bound realizations, re-scoped to instance paths — with the rule that
+  an undischarged obligation is an **error, not a comment**. Dropped
+  constraints are the classic silent-unsoundness channel of IP
+  integration; shipping IP as netlist-plus-SDC is the industry form of
+  exactly this manifest.
+- **The RFC already contained the shape, unnamed.** ICG glitch-safety
+  obligations and async-reset recovery/removal timing (clocks above;
+  §12) are macro-realization obligations; the EHR family adds the
+  third instance; §14.c's indexed-state bypass elision (non-aliasing
+  facts licensing forwarding omission) the fourth. One mechanism:
+  every non-structural realization discharges its licenses through
+  carried obligations; structural realizations discharge them by
+  construction.
+- **Structural vs macro is a per-instance binding choice** —
+  QoR-driven (mux-chain depth against macro timing and area), made at
+  bind/link time against the same semantic layer, without
+  re-elaboration: the split's payoff restated at the state-element
+  scale.
+
 ## 11. Migration order
 
 1. **External Shake driver** over today's artifacts (§3) — ships
@@ -601,6 +661,10 @@ a physical-encoding-leaked-into-semantics repair.
 - Derived forwarding for indexed state (register files →
   address-compare bypass networks): whether to admit it beyond v1's
   scalar-register scope, and under what non-aliasing obligations.
+- The constraint-obligation vocabulary carried by macro realizations
+  (an SDC subset? an attribute schema?), vlink's composition and
+  re-scoping of obligations, and the waiver surface for deliberately
+  undischarged ones.
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
@@ -904,7 +968,10 @@ partial-schedule window, and it earns entity status exactly at
 boundaries, where the window is genuinely partial. The §10 one-family
 reading remains the right migration vehicle, but the family is a
 facade over (element × schedule coordinates × realization), not the
-foundation.
+foundation. And the dissolution is semantic-layer only: at realization
+the choice bifurcates — flops plus derived forwarding, or macros plus
+external constraint obligations — developed in §10's
+realization-strategies subsection.
 
 ## 15. The pre-.bo eager layer: giving up early inlining
 
