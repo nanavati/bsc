@@ -1,3 +1,7 @@
+// This file is written in Verilog-2001, and uses "do" as an
+// identifier.  Mark the keyword set explicitly so SystemVerilog-
+// default tools (e.g. Verilator) parse it.
+`begin_keywords "1364-2001"
 //////////////////////////////////////////////////////////////////////
 ////                                                              ////
 ////  eth_wishbone.v                                              ////
@@ -2549,3 +2553,5 @@ assign Busy_IRQ = Busy_IRQ_sync2 & ~Busy_IRQ_sync3;
 
 
 endmodule
+
+`end_keywords

@@ -1,3 +1,7 @@
+// This file is written in Verilog-2001, and uses "do" as an
+// identifier.  Mark the keyword set explicitly so SystemVerilog-
+// default tools (e.g. Verilator) parse it.
+`begin_keywords "1364-2001"
 //////////////////////////////////////////////////////////////////////
 ////                                                              ////
 ////  eth_spram_256x32.v                                          ////
@@ -295,3 +299,5 @@ module eth_spram_256x32(
 `endif  // !ETH_XILINX_RAMB4
 
 endmodule
+
+`end_keywords
