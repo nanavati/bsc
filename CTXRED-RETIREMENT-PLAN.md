@@ -406,6 +406,22 @@ P0–P5 depends on it.
   the numeric theory component compose in the same store — width-indexed encodings typecheck
   per branch. This changes P2's cost accounting from "cleanup enabler" to shared type-system
   infrastructure with three consumers.
+- **The headline language payoff — numeric refinement case — needs less than full GADTs.**
+  A case over a type-level number via compiler-provided *views* (`Zero`/`Succ m`, comparison
+  views yielding `≤` givens) keeps the definition `forall n` while each arm typechecks under a
+  branch-local numeric given (`n ~ 0`, `n ~ m+1`) that the numeric theory component propagates
+  into the arm's width arithmetic — `Bit n` splits as `Bit 1 ++ Bit m` with no coercion, the
+  recursive call at `m` typechecks. Requirements are exactly the stack above: store levels,
+  numeric theory component, a small view construct, and an exhaustiveness-checker extension
+  (T0165/T0166) for view completeness — no user-visible GADT constructors. BSC does this
+  *better* than the GHC/Clash encoding it resembles: no KnownNat plague (the compiler owns
+  numerals; `valueOf` already bridges), and no runtime-representation question (elaboration is
+  total static evaluation and synthesis grounds `n`, so the case is a staged conditional —
+  today's `if (valueOf(n) == 0)` generator idiom made type-sound). It retires the
+  typeclass-instance recursion encoding for width-recursive generators (adder trees, shifters,
+  encoders) — the catch-all/overlap world — in favor of one polymorphic definition with
+  branch-local knowledge. Termination and never-grounding are today's stories (steps budget;
+  synthesis monomorphization).
 
 ## 7. What stays forever
 
