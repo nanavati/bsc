@@ -93,11 +93,25 @@ verbatim (`Eq (List a)` inside its own instance, cross-reference chains for mutu
 families; `Deriving.hs:275`), and it is CtxRed that erases it today. The body-side knot and the
 declared-context cleanup are therefore two separate jobs: the tiering here covers the first;
 J11/§3.5 owns the second. So
-the rule is per-class: (a) declared-open classes always defer; (b) ordinary classes commit at
-non-ground heads when the unify-guard is clean — exactly current behavior, zero migration,
-residual exposure identical to today's; (c) the sound long-term footing is Haskell's own
-argument — with no-overlap as the default (overlap only by explicit declaration), every
-ordinary head is world-closed by construction, upgrading (b) from status-quo-sound to sound.
+the rule is per-class: (a) declared-open classes always defer until the wanted is ground in
+the matching positions, then pick most-specific among the visible instances; (b) ordinary
+classes commit at non-ground heads when the unify-guard is clean — exactly current behavior,
+zero migration, residual exposure identical to today's; (c) the sound long-term footing is
+Haskell's own argument — with no-overlap as the default (overlap only by explicit
+declaration), every ordinary head is world-closed by construction, upgrading (b) from
+status-quo-sound to sound. **Precision on (c)** (2026-08-23, prompted by Ravi): no-overlap is
+a rule on instance *declarations*, not on commitment — an ordinary instance's head stakes an
+exclusive claim to the entire cone of types unifying with it, settled the moment the instance
+is accepted (and locally enforceable given the orphan ban: contesting `instance C (List Foo)`
+requires importing `List`, so both claimants are in scope at the offending definition). There
+is no "wait until the world closes" stage and no groundness condition: commitment falls out —
+a clean unify-guard at *any* wanted, non-ground or even variable-headed-with-improvement
+(wanted `C t p`, sole instance `C a (F a)`, commit improves `p := F t` before `t` is known),
+is world-sound forever, because any instance that could catch some instantiation would have to
+unify with the committed head and is banned from existing. This is exactly why Haskell 98
+reduces `Eq [a]` without apology. Groundness gating is only tier (a)'s rule: declaring overlap
+opts a class out of the exclusive-claim regime, and the price of admission is losing
+non-ground commitment — which is why SplitPorts needs the marker and `Eq` does not.
 The open/overridable marker thus serves discharge admission, sacrificial-instance retirement,
 catch-all deferral, and recursive-instance commitment. Three regimes follow: (i) coherent ∧ closed → early reduction is a pure
 optimization, valid anywhere (the only regime P3 discharge and unrestricted evidence reuse may
