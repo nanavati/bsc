@@ -342,7 +342,57 @@ dead code guarded by a flag.
 - **ATF cache line**: the coherent-only + per-package-ownership discipline just landed at HEAD
   is the template for the Phase 2 evidence cache and the Phase 1 adapter annex.
 
-## 6. What stays forever
+## 6. Open exploration (separable from the retirement plan): the numeric engine
+
+A design position from the 2026-08-22 discussion, recorded for a future proposal; nothing in
+P0–P5 depends on it.
+
+- **Interface stays structural.** `TAdd` and friends are `TIabstract` type constructors
+  (`Type.hs:116`), not ATFs — referring to `TAdd#(a,b)` costs nothing, and it must stay that
+  way. Reifying numerics into per-reference constraints is GHC's mistake (the
+  `ghc-typelits-natnormalise` / KnownNat experience: reference-tax noise from the encoding, an
+  engine patch that cannot remove it). The compiler's existing prim-TF vs `TIatf` split
+  (`isPrimTFunName`) is the right architecture. Principled version: primitive numerics have a
+  closed decidable equational theory → structure in the type algebra; user ATFs' theory is the
+  instance table → reified and ground-solved. Uniformity in either direction is wrong.
+- **The ground tier stays fused into substitution.** `apSub` itself evaluates ground numeric
+  applications (`Subst.hs:218` → `normTAp`/`opNumT`) — algebra applies immediately at type
+  formation, and the satisfy↔apSub cascade (forced fact → substitution → downstream arithmetic
+  collapses → more instances match) is how inference makes progress. Any engine change must
+  keep feeding this cascade.
+- **The replacement candidate is the symbolic tier inside satisfy** — and only that: `mgu` is
+  deliberately theory-free (numeric and ATF disagreements become deferred equalities,
+  `Unify.hs:56-77`), so every non-syntactic numeric fact already pools at one choke point. What
+  would be replaced: the per-class inversion pattern tables (`genAddInsts` etc.), the
+  cancellation laws encoded as NumEq implied instances (`StdPrel.hs:143-160`), and the
+  `satMany'`/`joinNeededCtxs` fixpoint — for the numeric fragment only; user-class fundep
+  matching stays in `matchTop`.
+- **Spec: an incremental solved-form constraint store, not an end-of-inference certifier.**
+  Assert numeric preds as they arrive; keep the store simplified in flight; emit *entailed*
+  facts (forced values, forced equalities) as substitutions immediately so the cascade
+  continues. Embodiments: Dutertre–de Moura incremental simplex with theory propagation
+  (Yices2's core — vendored in-tree, though today used only by the scheduler); CLP(X)/HM(X)
+  constraint stores; GHC's inert set — which converges with P2: the numeric engine becomes a
+  theory component of the same store the evidence cache lives in. Batch QE (Omega/Cooper;
+  pure-Haskell `presburger`) demotes to generalization-boundary completeness checks and
+  unsat-core error reporting.
+- **Guardrail (the validity criterion again):** propagate only entailed facts — never the
+  solver's internal model. A model value is a guess: order- and version-dependent, incoherent.
+  Solve, no search.
+- **What it buys:** subtraction/partiality handled natively (where SOP-normalization engines
+  die; `opNumT`'s `x >= y` guard marks the spot); first-class `≤` retiring the
+  `Add#(pad,b,c)` dummy-variable idiom in user code and in `doDBits`' generated padding vars;
+  order-independent improvement (the R3 bug class dead for numerics by construction);
+  completeness for the linear fragment (fewer solver-hint provisos).
+- **Sizing:** extend the P0 census to log which inversion patterns and `num_eqs` shapes fire in
+  the wild; expected: the demanded fragment is overwhelmingly Presburger (mul/div by constants
+  are linear), with symbolic `TLog`/`TExp`/`TMul n m` residue kept on today's special cases.
+- **Prior-art verdicts:** Cryptol (production Z3-backed numeric typing for a decade;
+  version-sensitivity and blame pains), GHC `type-nat-solver` (Diatchki 2015 — improvement via
+  forced-value extraction works; never mainstreamed), `ghc-typelits-natnormalise` (evidence
+  against reified interfaces, not against engines).
+
+## 7. What stays forever
 
 Constraint solving itself (`sat`/`reducePred` in the typechecker), the ATF solve-no-search
 machinery, coherence enforcement (T0158), and the raw written telescope as the single source of
