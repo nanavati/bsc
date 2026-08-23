@@ -2,11 +2,11 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.2 — strawman distilled from a design discussion
+**Status:** Draft v0.3 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
-v0.2 adds: the ba as witness (connect, not conflate); clocks and resets
-under the semantic/physical split.
+v0.2 added: the ba as witness (connect, not conflate); clocks and resets
+under the semantic/physical split. v0.3 adds: import strata.
 
 ---
 
@@ -316,6 +316,63 @@ Contracts are ordinary elaboration-time values. Consequences:
   construction and strengthening yield "asserted"; conformance or
   differential validation upgrades asserted toward validated.
 
+### Import strata
+
+Finer dependencies and better caching demand that importing a package's
+*contracts* and importing its *implementations* be distinguishable —
+demand-tracking alone gives the exact dependency cone, but not a
+*guarantee*. The layout that avoids both "two same-named packages with
+shadowing magic" and "a differently-named generated package that breaks
+mode-neutral sources": **strata as sibling sub-artifacts of one package
+identity**, which the iface/impl split already established. A package
+Foo has stratum artifacts `Foo.iface`, `Foo.impl`, `Foo.contracts`
+(the generated contract stratum, produced post-elaboration and attached
+to the same identity), each an independent node with its own key.
+
+Import syntax then selects strata:
+
+- `import Foo` — resolver-merged (mode-sensitive): the tracked
+  `resolve()` node, keyed by mode, decides whether names resolve to
+  source-backed or contract-backed definitions. Keeps sources
+  byte-identical across combined/separate — the property the
+  differential compatibility test depends on. The "weird shadowing
+  relationship" becomes a *defined stratum-merge policy* under the
+  tracked resolver.
+- `import contracts Foo` (spelling TBD) — bound to the promise stratum;
+  provably never touches `Foo.impl`, so the importer's key excludes
+  implementations *statically*, at typecheck, not merely dynamically.
+  This is also the redaction-consumer form: it works when only the
+  contract stratum ships.
+- `import concrete Foo` (spelling TBD) — never shadowed; guarantees
+  source semantics (inlining available) for consumers where combined
+  behavior is the point.
+
+Division of labor stands: **syntax declares the dependency stratum;
+configuration selects implementations within it** — binding stays
+configuration, and full source-level pinning of realizations stays out
+of the language.
+
+Precedents: GHC's `{-# SOURCE #-}` imports (hs-boot) are exactly
+stratum-selecting import syntax with a two-artifact consistency check —
+which maps onto this design's conformance node — and hs-boot's chronic
+pain (hand-maintained boot files drifting) is solved here because the
+contract stratum is *generated*, with hand-written contracts checked by
+conformance. Backpack distinguishes signature-dependencies from
+module-dependencies as differently-keyed edge types. OCaml's universal
+compile-against-interface is the limiting design, unavailable here only
+because impl-stratum consumption (cross-module inlining) is
+elaboration-demand-driven — which is precisely why the contract-stratum
+import's static exclusion guarantee is worth surface syntax.
+
+Build consequences: an import edge is (package identity, stratum,
+stratum-artifact hash); contract-stratum edges make parents immune to
+child implementation churn at the typecheck key, not just the
+elaboration key; the dependency scanner classifies stratum from syntax,
+so stratum-typed import graphs — and the frozen-mode manifests of §4 —
+are computable without running elaboration; and dynamic independence
+still refines within the declared bound (exact cone ⊆ declared stratum,
+checkable).
+
 ## 10. The semantic/physical split
 
 Treating "the contract" as a VModInfo conflates two layers:
@@ -486,6 +543,9 @@ a physical-encoding-leaked-into-semantics repair.
 - Whether enable-folding should be expressible as a user-visible
   realization annotation (per boundary) rather than only an automatic
   fallback.
+- Import-strata surface spelling; the exact stratum-merge policy for
+  plain `import`; whether `import concrete` is needed or an attractive
+  nuisance; whether export lists also want stratum annotations.
 
 ## References
 
