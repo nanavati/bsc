@@ -6,18 +6,19 @@
 //! design that carries `InstanceKind::Bvi` contracts.  Per contract
 //! class -- (verilator version, shim-generator revision, contract
 //! shape, typed parameters, defines, resolved top file) -- the pipeline
-//! resolves sources, extracts model metadata through the JSON adapter
-//! (pinned Verilator, floor >= 5.046 checked by --json-only CAPABILITY;
-//! 2026-08-22), applies the inspection refusals (DPI), generates the
-//! engine-neutral shim, builds a shared object, and caches it
-//! content-addressed over the depfile closure with a per-class lock.
+//! resolves sources, verilates ONCE with `--timing`, reads the model
+//! metadata from that build's stable products (V<top>.h port macros +
+//! VM_TIMING in classes.mk; v1.4, see meta.rs), applies the refusals
+//! (DPI via the V<top>__Dpi.h backstop), generates the engine-neutral
+//! shim, builds a shared object, and caches it content-addressed over
+//! the depfile closure with a per-class lock.
 //!
-//! Delay-bearing models build with `--timing` (verilated_timing.o +
-//! coroutines; the shim's vlt_advance drains internal delayed events);
-//! delay-free models build `--no-timing` as before.  The metadata
-//! INSPECTION dump always runs `--timing` so delay constructs survive
-//! into the dumped AST and select the mode (an M0 discovery; see
-//! meta.rs).
+//! `--timing` is always passed; Verilator itself reports through
+//! VM_TIMING whether the model USES timing, which selects
+//! verilated_timing.o and the platform coroutine flags at link (the
+//! shim's vlt_advance drain loop is shape-independent).  The floor is
+//! any --timing-capable Verilator (5.x); a binary that rejects the
+//! option gets a clear error naming TRS_VERILATOR.
 
 use std::fmt;
 use std::os::unix::io::AsRawFd;
@@ -27,7 +28,6 @@ use std::process::Command;
 use trs_ir::bvi::{BviContract, BviParamValue};
 use trs_ir::Design;
 
-pub mod json;
 pub mod meta;
 pub mod resolve;
 pub mod sha256;
@@ -421,46 +421,15 @@ pub fn build_model_resolved(
         eprintln!("trs-vlt: verilating {top} (class {class}, verilator {vmaj}.{vmin:03})");
     }
 
-    // ---- metadata inspection (JSON adapter; --timing dump)
-    let meta_dir = class_dir.join("meta");
-    let m = meta::extract(
-        &opts.verilator,
-        &top,
-        std::slice::from_ref(&top_file),
-        &vpath,
-        &defines,
-        &gparams,
-        &meta_dir,
-    )?;
-    // delay constructs select the --timing build mode (the shim's
-    // vlt_advance then drains internal delayed events between the
-    // kernel's timeslices)
-    let timing = m.has_delay;
-    if timing && !c.out_clocks.is_empty() {
-        return Err(VltError::refuse(
-            "timing-outclock",
-            format!(
-                "{top} has both delay constructs and output clocks; a \
-                 --timing drain can move an output clock through several \
-                 edges between commits, which the derived-clock network \
-                 cannot observe"
-            ),
-        ));
-    }
-    if m.has_dpi {
-        return Err(VltError::refuse(
-            "dpi",
-            format!("{top} imports or exports DPI (not supported)"),
-        ));
-    }
-
     let decl_path = class_dir.join("trs_printf_decl.h");
     std::fs::write(&decl_path, shim::PRINTF_DECL_H)
         .map_err(|e| VltError::tool("shim write", format!("{}: {e}", decl_path.display())))?;
 
-    // ---- verilate (--timing iff the model has delays) with depfiles.
-    // This runs BEFORE shim generation so the __Dpi.h backstop below
-    // catches DPI models before any contract-vs-model port check.
+    // ---- verilate (always --timing; VM_TIMING in the build products
+    // then says whether the model USES timing) with depfiles.  This is
+    // also the metadata source (v1.4): ports come from V<top>.h and
+    // the timing bit from classes.mk, so there is no separate
+    // inspection run and no version-sensitive dump format.
     let obj = class_dir.join("obj");
     let cflags = format!(
         "-DVL_USER_FATAL -DVL_USER_FINISH -DVL_PRINTF=trs_vlt_printf -include {} -fPIC",
@@ -468,7 +437,7 @@ pub fn build_model_resolved(
     );
     let mut cmd = Command::new(&opts.verilator);
     cmd.arg("--cc")
-        .arg(if timing { "--timing" } else { "--no-timing" })
+        .arg("--timing")
         .arg("--x-assign")
         .arg("0")
         .arg("--x-initial")
@@ -496,17 +465,56 @@ pub fn build_model_resolved(
         cmd.arg(g);
     }
     cmd.arg(&top_file);
-    run_logged(cmd, "verilate")?;
+    run_logged(cmd, "verilate").map_err(|e| {
+        // capability floor: a verilator without --timing (pre-5.0)
+        // rejects the OPTION itself -- report the requirement, not the
+        // design
+        if let VltError::Tool { detail, .. } = &e {
+            let lc = detail.to_ascii_lowercase();
+            if lc.contains("timing")
+                && (lc.contains("invalid option") || lc.contains("unknown option"))
+            {
+                let found = meta::verilator_version(&opts.verilator)
+                    .map(|(_, _, full)| full)
+                    .unwrap_or_else(|_| "unknown".into());
+                return VltError::tool(
+                    "verilator floor",
+                    format!(
+                        "{} does not support --timing; trs requires \
+                         Verilator >= 5.0 (found: {found}). Point \
+                         TRS_VERILATOR at the pinned build.",
+                        opts.verilator.display()
+                    ),
+                );
+            }
+        }
+        e
+    })?;
 
-    // ---- DPI backstop: V<top>__Dpi.h emission is deterministic on
-    // every version.  Kept deliberately even though the JSON metadata
-    // carries dpiImport/dpiExport flags: the dump schema is documented
-    // as unstable between releases, and this file-existence check is
-    // the version-proof armor against a quiet field drift.
+    // ---- DPI refusal: V<top>__Dpi.h emission is deterministic on
+    // every version -- a version-proof file-existence check, the only
+    // DPI detection since v1.4.
     if obj.join(format!("V{top}__Dpi.h")).is_file() {
         return Err(VltError::refuse(
             "dpi",
             format!("{top} imports or exports DPI (V{top}__Dpi.h emitted)"),
+        ));
+    }
+
+    // ---- metadata from the build products; timing selects the
+    // verilated_timing.o + coroutine link inputs and refuses the
+    // out-clock combination
+    let m = meta::scrape(&obj, &top)?;
+    let timing = m.vm_timing;
+    if timing && !c.out_clocks.is_empty() {
+        return Err(VltError::refuse(
+            "timing-outclock",
+            format!(
+                "{top} has both delay constructs and output clocks; a \
+                 --timing drain can move an output clock through several \
+                 edges between commits, which the derived-clock network \
+                 cannot observe"
+            ),
         ));
     }
 

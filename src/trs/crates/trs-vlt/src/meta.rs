@@ -1,34 +1,41 @@
-//! Verilator metadata adapter (design v4 sec 5.2 item 2; JSON-only
-//! since the pinned-Verilator floor, 2026-08-22).
+//! Verilator metadata adapter (v1.4 stable-interface, 2026-08-23;
+//! supersedes the --json-only frontend dump).
 //!
-//! The model metadata -- port name mapping (origName -> possibly
-//! mangled member name), widths, directions, parameter list, the delay
-//! presence that selects the --timing build mode, and the DPI presence
-//! that powers the DPI refusal -- is read from the `--json-only`
-//! frontend dump (Verilator >= 5.046; the FLOOR is checked by
-//! CAPABILITY, not version string: a verilator that rejects the option
-//! produces a clear floor error).  The dump schema is documented as
-//! unstable between releases, so the pin is the real guarantee --
-//! re-run the r3 battery on any pin change.  Drift failure modes are
-//! loud: port drift -> contract-mismatch refusal, missed delays ->
-//! Verilator's own NOTIMING error, missed DPI -> the version-proof
-//! V<top>__Dpi.h backstop in the builder (kept for exactly this).
+//! Everything trs needs about the model is read from STABLE build
+//! products of the verilate step itself -- no frontend dump, no
+//! version-sensitive schema:
 //!
-//! M0 discovery baked in: the inspection dump runs with --timing so
-//! delay constructs SURVIVE into the AST; a --no-timing dump discards
-//! them before dumping, so it cannot power delay detection.
-//! (has_delay selects whether the model BUILD runs --timing or
-//! --no-timing.)
+//!   - ports: the VL_IN*/VL_OUT*/VL_INOUT* declarations in V<top>.h
+//!     (this grammar has been stable across Verilator majors): the
+//!     direction and size class come from the macro name, the width
+//!     from the msb/lsb arguments, and the member name is Verilator's
+//!     C++ identifier, whose __0xx escapes decode back to the source
+//!     port name for contract matching.  Only primary ports appear in
+//!     the top wrapper header -- exactly the set the contract binds.
+//!   - timing: the build ALWAYS passes --timing, and Verilator itself
+//!     reports through VM_TIMING in the generated V<top>_classes.mk
+//!     whether the model actually uses timing constructs (a delay-free
+//!     source under --timing gets VM_TIMING=0, verified on 5.020 and
+//!     5.050).  VM_TIMING selects verilated_timing.o and the coroutine
+//!     flags at link; the shim's drain loop is shape-independent
+//!     because eventsPending()/nextTimeSlot() are declared on the
+//!     model class either way (false/never-called when untimed).
+//!   - DPI: the V<top>__Dpi.h backstop in the builder (file emission
+//!     is deterministic on every version) is the ONLY check.
+//!
+//! The floor is therefore any --timing-capable Verilator (5.x): a
+//! binary that rejects the option gets a clear error naming
+//! TRS_VERILATOR (see the builder).  The pin remains the plan of
+//! record -- re-run the r3 battery on any pin change.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-use crate::json::{self, Value};
 use crate::VltError;
 
 #[derive(Debug, Clone)]
 pub struct MetaPort {
-    /// Verilator's member name (possibly mangled).
+    /// Verilator's C++ member name (possibly escape-encoded).
     pub name: String,
     /// The source-level port name; contract ports match against this.
     pub orig_name: String,
@@ -45,11 +52,11 @@ pub enum PortDir {
 
 #[derive(Debug, Clone)]
 pub struct ModelMeta {
-    pub format: &'static str,
     pub ports: Vec<MetaPort>,
-    pub params: Vec<String>,
-    pub has_delay: bool,
-    pub has_dpi: bool,
+    /// VM_TIMING from the generated classes.mk: the model uses timing
+    /// constructs (delays), so the link needs verilated_timing.o and
+    /// the platform coroutine flags.
+    pub vm_timing: bool,
 }
 
 pub fn verilator_version(vlt: &Path) -> Result<(u32, u32, String), VltError> {
@@ -79,238 +86,141 @@ pub fn verilator_version(vlt: &Path) -> Result<(u32, u32, String), VltError> {
     Ok((major, minor, text))
 }
 
-/// Run the inspection dump and parse it.  `gparams` are the typed -G
-/// arguments (a -G on an undeclared parameter is a native hard error on
-/// every supported version -- no bespoke absent-parameter check).
-pub fn extract(
-    vlt: &Path,
-    top: &str,
-    sources: &[PathBuf],
-    ydirs: &[PathBuf],
-    defines: &[(String, Option<String>)],
-    gparams: &[String],
-    mdir: &Path,
-) -> Result<ModelMeta, VltError> {
-    std::fs::create_dir_all(mdir)
-        .map_err(|e| VltError::tool("meta dir", format!("{}: {e}", mdir.display())))?;
-    let mut cmd = Command::new(vlt);
-    cmd.arg("--cc")
-        .arg("--timing")
-        .arg("--json-only")
-        .arg("--top-module")
-        .arg(top)
-        .arg("-Mdir")
-        .arg(mdir);
-    for d in ydirs {
-        cmd.arg("-y").arg(d);
-    }
-    cmd.arg("+libext+.v+.sv");
-    for (k, v) in defines {
-        match v {
-            Some(v) => cmd.arg(format!("-D{k}={v}")),
-            None => cmd.arg(format!("-D{k}")),
-        };
-    }
-    for g in gparams {
-        cmd.arg(g);
-    }
-    for s in sources {
-        cmd.arg(s);
-    }
-    let out = cmd
-        .output()
-        .map_err(|e| VltError::tool("metadata dump", e.to_string()))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).to_string();
-        // capability floor: a verilator without --json-only (< 5.046)
-        // rejects the OPTION itself -- report the requirement, not the
-        // design
-        if err.to_ascii_lowercase().contains("json-only") {
-            let found = verilator_version(vlt)
-                .map(|(_, _, full)| full)
-                .unwrap_or_else(|_| "unknown".into());
-            return Err(VltError::tool(
-                "verilator floor",
-                format!(
-                    "{} does not support --json-only metadata; trs \
-                     requires Verilator >= 5.046 (found: {found}). Point \
-                     TRS_VERILATOR at the pinned build.",
-                    vlt.display()
-                ),
-            ));
-        }
-        return Err(VltError::tool("metadata dump", err));
-    }
-    let dump = find_dump(mdir)?;
-    let text = std::fs::read_to_string(&dump)
-        .map_err(|e| VltError::tool("metadata read", format!("{}: {e}", dump.display())))?;
-    parse_json(&text, top)
-}
-
-fn find_dump(mdir: &Path) -> Result<PathBuf, VltError> {
-    let mut candidates = Vec::new();
-    let rd = std::fs::read_dir(mdir)
-        .map_err(|e| VltError::tool("meta dir", format!("{}: {e}", mdir.display())))?;
-    for ent in rd.flatten() {
-        let p = ent.path();
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.ends_with(".tree.json") || name.ends_with(".json") {
-            candidates.push(p);
-        }
-    }
-    // prefer .tree.json over .meta.json when both exist
-    candidates.sort_by_key(|p| {
-        let n = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        (!n.ends_with(".tree.json"), n)
-    });
-    candidates.into_iter().next().ok_or_else(|| {
-        VltError::tool("metadata dump", format!("no json dump in {}", mdir.display()))
-    })
-}
-
-// ---------------------------------------------------------------
-// JSON adapter
-
-fn walk<'a>(v: &'a Value, f: &mut dyn FnMut(&'a Value)) {
-    match v {
-        Value::Obj(m) => {
-            f(v);
-            for x in m.values() {
-                walk(x, f);
+/// Decode Verilator's C++ identifier escaping: a character outside
+/// [a-zA-Z0-9_] is encoded as "__0" + two hex digits (e.g. "$" ->
+/// "__024").  Names without escapes pass through unchanged.
+fn decode_name(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < b.len() {
+        if i + 5 <= b.len() && &b[i..i + 3] == b"__0" {
+            if let Ok(c) = u8::from_str_radix(&s[i + 3..i + 5], 16) {
+                out.push(c as char);
+                i += 5;
+                continue;
             }
         }
-        Value::Arr(items) => {
-            for x in items {
-                walk(x, f);
-            }
-        }
-        _ => {}
+        out.push(b[i] as char);
+        i += 1;
     }
+    out
 }
 
-fn parse_json(text: &str, top: &str) -> Result<ModelMeta, VltError> {
-    let tree = json::parse(text)
-        .map_err(|e| VltError::tool("metadata parse", format!("JSON: {e}")))?;
-
-    // pass 1: dtype table (addr-referenced nodes with a bit range like
-    // "7:0"; range absent = width 1)
-    let mut widths: Vec<(String, u32)> = Vec::new();
-    walk(&tree, &mut |n| {
-        let is_dtype = n
-            .get("type")
-            .and_then(|t| t.as_str())
-            .map(|t| t.contains("DTYPE"))
-            .unwrap_or(false);
-        if !is_dtype {
-            return;
-        }
-        let addr = match n.get("addr").and_then(|a| a.as_str()) {
-            Some(a) => a.to_string(),
-            None => return,
-        };
-        let w = match n.get("range").and_then(|r| r.as_str()) {
-            Some(r) => match r.split_once(':') {
-                Some((l, rr)) => {
-                    let l: i64 = l.trim().parse().unwrap_or(0);
-                    let rr: i64 = rr.trim().parse().unwrap_or(0);
-                    ((l - rr).unsigned_abs() as u32) + 1
-                }
-                None => 1,
-            },
-            None => 1,
-        };
-        widths.push((addr, w));
-    });
-    let width_of = |addr: &str| {
-        widths
-            .iter()
-            .find(|(a, _)| a == addr)
-            .map(|(_, w)| *w)
-            .unwrap_or(1)
-    };
+/// Scrape the model metadata from a completed verilate output
+/// directory (the -Mdir the builder just ran `--cc --timing` into).
+pub fn scrape(mdir: &Path, top: &str) -> Result<ModelMeta, VltError> {
+    let hdr_path = mdir.join(format!("V{top}.h"));
+    let hdr = std::fs::read_to_string(&hdr_path)
+        .map_err(|e| VltError::tool("metadata scrape", format!("{}: {e}", hdr_path.display())))?;
 
     let mut ports = Vec::new();
-    let mut params = Vec::new();
-    let mut has_delay = false;
-    let mut has_dpi = false;
-    let mut found_top = false;
-
-    walk(&tree, &mut |m| {
-        if m.get("type").and_then(|t| t.as_str()) != Some("MODULE")
-            || m.get("name").and_then(|n| n.as_str()) != Some(top)
-        {
-            return;
+    for line in hdr.lines() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("VL_") else { continue };
+        let (dir, rest) = if let Some(r) = rest.strip_prefix("INOUT") {
+            (PortDir::Inout, r)
+        } else if let Some(r) = rest.strip_prefix("IN") {
+            (PortDir::Input, r)
+        } else if let Some(r) = rest.strip_prefix("OUT") {
+            (PortDir::Output, r)
+        } else {
+            continue;
+        };
+        // VL_IN8(&name,msb,lsb); VL_IN(&name,31,0); VL_INW(&name,msb,lsb,words);
+        let Some(open) = rest.find('(') else { continue };
+        let (suffix, args) = rest.split_at(open);
+        if !matches!(suffix, "" | "8" | "16" | "64" | "W") {
+            continue;
         }
-        found_top = true;
-        walk(m, &mut |n| {
-            let t = n.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if t == "VAR" {
-                let direction = n.get("direction").and_then(|d| d.as_str());
-                let primary = n
-                    .get("isPrimaryIO")
-                    .and_then(|b| b.as_bool())
-                    .unwrap_or(false);
-                if primary && direction.is_some() && direction != Some("NONE") {
-                    let name = n
-                        .get("verilogName")
-                        .or_else(|| n.get("name"))
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let orig = n
-                        .get("origName")
-                        .or_else(|| n.get("name"))
-                        .and_then(|s| s.as_str())
-                        .unwrap_or(&name)
-                        .to_string();
-                    let d = match direction.unwrap() {
-                        "INPUT" | "input" => PortDir::Input,
-                        "OUTPUT" | "output" => PortDir::Output,
-                        _ => PortDir::Inout,
-                    };
-                    let w = n
-                        .get("dtypep")
-                        .and_then(|a| a.as_str())
-                        .map(width_of)
-                        .unwrap_or(1);
-                    ports.push(MetaPort {
-                        name,
-                        orig_name: orig,
-                        dir: d,
-                        width: w,
-                    });
-                } else if n.get("varType").and_then(|s| s.as_str()) == Some("GPARAM") {
-                    let name = n
-                        .get("origName")
-                        .or_else(|| n.get("name"))
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    params.push(name);
-                }
-            }
-            if matches!(t, "DELAY" | "DELAYSCHEDULER" | "TIMINGCONTROL") {
-                has_delay = true;
-            }
-            if n.get("dpiImport").and_then(|b| b.as_bool()).unwrap_or(false)
-                || n.get("dpiExport").and_then(|b| b.as_bool()).unwrap_or(false)
-            {
-                has_dpi = true;
-            }
+        let mut it = args[1..].trim_end().trim_end_matches(';').trim_end_matches(')').split(',');
+        let name = it
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_start_matches('&')
+            .to_string();
+        let parse_bound = |tok: Option<&str>| -> Result<i64, VltError> {
+            tok.map(str::trim)
+                .and_then(|v| v.parse().ok())
+                .ok_or_else(|| {
+                    VltError::tool(
+                        "metadata scrape",
+                        format!("{}: unparseable port line: {line}", hdr_path.display()),
+                    )
+                })
+        };
+        let msb = parse_bound(it.next())?;
+        let lsb = parse_bound(it.next())?;
+        let width = ((msb - lsb).unsigned_abs() as u32) + 1;
+        ports.push(MetaPort {
+            orig_name: decode_name(&name),
+            name,
+            dir,
+            width,
         });
+    }
+
+    let cls_path = mdir.join(format!("V{top}_classes.mk"));
+    let cls = std::fs::read_to_string(&cls_path)
+        .map_err(|e| VltError::tool("metadata scrape", format!("{}: {e}", cls_path.display())))?;
+    let vm_timing = cls.lines().any(|l| {
+        l.split_once('=')
+            .map(|(k, v)| k.trim() == "VM_TIMING" && v.trim() == "1")
+            .unwrap_or(false)
     });
 
-    if !found_top {
-        return Err(VltError::tool(
-            "metadata parse",
-            format!("top module {top:?} not found in JSON dump"),
-        ));
+    Ok(ModelMeta { ports, vm_timing })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_grammar() {
+        let dir = std::env::temp_dir().join(format!("trs-vlt-meta-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("VShapes.h"),
+            "class VShapes {\n\
+             \x20   // PORTS\n\
+             \x20   VL_IN8(&CLK,0,0);\n\
+             \x20   VL_INOUT8(&IO,3,0);\n\
+             \x20   VL_IN(&A,31,0);\n\
+             \x20   VL_INW(&W,99,0,4);\n\
+             \x20   VL_OUT(&Q,31,0);\n\
+             \x20   VL_OUT16(&H,14,0);\n\
+             \x20   VL_IN64(&B,63,0);\n\
+             \x20   VL_IN8(&esc__024x,0,0);\n\
+             };\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("VShapes_classes.mk"), "VM_TIMING = 0\n").unwrap();
+        let m = scrape(&dir, "Shapes").unwrap();
+        assert!(!m.vm_timing);
+        let find = |o: &str| m.ports.iter().find(|p| p.orig_name == o).unwrap();
+        assert_eq!(find("CLK").width, 1);
+        assert_eq!(find("IO").dir, PortDir::Inout);
+        assert_eq!(find("A").width, 32);
+        assert_eq!(find("W").width, 100);
+        assert_eq!(find("Q").dir, PortDir::Output);
+        assert_eq!(find("H").width, 15);
+        assert_eq!(find("B").width, 64);
+        // escape decode: "__024" -> '$'
+        assert_eq!(find("esc$x").name, "esc__024x");
+        std::fs::remove_dir_all(&dir).ok();
     }
-    Ok(ModelMeta {
-        format: "json",
-        ports,
-        params,
-        has_delay,
-        has_dpi,
-    })
+
+    #[test]
+    fn vm_timing_on() {
+        let dir = std::env::temp_dir().join(format!("trs-vlt-meta-test2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("VDly.h"), "VL_OUT8(&P,7,0);\n").unwrap();
+        std::fs::write(dir.join("VDly_classes.mk"), "# gen\nVM_TIMING = 1\n").unwrap();
+        let m = scrape(&dir, "Dly").unwrap();
+        assert!(m.vm_timing);
+        assert_eq!(m.ports.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

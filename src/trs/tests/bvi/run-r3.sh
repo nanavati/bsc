@@ -3,17 +3,22 @@
 #   - counter contract verilates end-to-end into a dlopen-checked .so
 #   - cache hit on re-invocation; content invalidation via the depfile
 #     manifest; per-class lock survives concurrent builds
-#   - delay constructs select the --timing build mode (detected via the
-#     --timing inspection dump) and still build end-to-end
-#   - refusals: DPI (metadata + __Dpi.h backstop), contract/model
-#     mismatch, unresolvable source
-#   - the verilator FLOOR is a --json-only capability check: a pre-5.046
-#     binary produces the clear floor error (negative leg below)
-# REQUIRES a pinned Verilator >= 5.046: set TRS_VERILATOR (and
-# VERILATOR_ROOT for a source build), or have one on PATH as `verilator`.
-# Optional: TRS_VERILATOR_OLD=/path/to/pre-5.046/verilator adds the
-# floor-refusal negative (defaults to /usr/bin/verilator when that is
-# present and old enough).
+#   - delay constructs select the timing link mode (the build always
+#     verilates --timing; VM_TIMING in the products says whether the
+#     model uses it) and still build end-to-end
+#   - refusals: DPI (the __Dpi.h backstop), contract/model mismatch,
+#     unresolvable source
+#   - the verilator FLOOR is a --timing capability check (any 5.x): the
+#     stable-interface metadata (V<top>.h port macros + classes.mk)
+#     works across releases, proven by the system-verilator positive
+#     legs below; a pre-5.0 binary produces the clear floor error
+#     (negative leg, skipped when no such binary exists)
+# REQUIRES a pinned Verilator (the plan of record): set TRS_VERILATOR
+# (and VERILATOR_ROOT for a source build), or have one on PATH as
+# `verilator`.  Optional: TRS_VERILATOR_SYS=/path/to/other/5.x adds the
+# cross-release positive legs (defaults to /usr/bin/verilator when
+# present); TRS_VERILATOR_OLD=/path/to/pre-5.0/verilator adds the
+# floor-refusal negative.
 # BSC=/path/bsc TRS=/path/trs sh run-r3.sh [workdir]
 BSC=${BSC:-bsc}
 TRS=${TRS:-trs}
@@ -105,18 +110,36 @@ if TRS_VLT_CACHE=$C $BSC -sim -trs -e sysPosCounter >link.out 2>&1; then
     ok link-chain
 else bad link-chain "$(tail -5 link.out)"; fi
 
-# ---- floor-refusal negative: a pre-5.046 verilator must produce the
+# ---- cross-release positives: the stable-interface metadata (V<top>.h
+# port macros + VM_TIMING in classes.mk) must work on a DIFFERENT 5.x
+# release than the pin -- plain and timing builds both
+SYS=${TRS_VERILATOR_SYS:-/usr/bin/verilator}
+if [ -x "$SYS" ] && env -u VERILATOR_ROOT "$SYS" --version 2>/dev/null | \
+       awk '{ split($2, v, "."); exit !(v[1] >= 5) }'; then
+    if out=$(env -u VERILATOR_ROOT TRS_VLT_CACHE=$C TRS_VERILATOR="$SYS" \
+             "$TRS" vlt build sysPosCounter.bir --vpath "$RTL" 2>&1) \
+       && echo "$out" | grep -q "built, contract"; then ok sysver-build
+    else bad sysver-build "$out"; fi
+    if out=$(env -u VERILATOR_ROOT TRS_VLT_CACHE=$C TRS_VERILATOR="$SYS" \
+             "$TRS" vlt build sysPosCounter.bir --vpath "$WK/rtl-delay" 2>&1) \
+       && echo "$out" | grep -q "built, contract"; then ok sysver-timing
+    else bad sysver-timing "$out"; fi
+else
+    echo "SKIP sysver-build/sysver-timing (no other 5.x verilator; set TRS_VERILATOR_SYS)"
+fi
+
+# ---- floor-refusal negative: a pre-5.0 verilator must produce the
 # capability floor error, not a parse failure
 OLD=${TRS_VERILATOR_OLD:-/usr/bin/verilator}
 if [ -x "$OLD" ] && env -u VERILATOR_ROOT "$OLD" --version 2>/dev/null | \
-       awk '{ split($2, v, "."); exit !(v[1] < 5 || (v[1] == 5 && v[2]+0 < 46)) }'; then
+       awk '{ split($2, v, "."); exit !(v[1] < 5) }'; then
     if out=$(env -u VERILATOR_ROOT TRS_VLT_CACHE=$C TRS_VERILATOR="$OLD" \
              "$TRS" vlt build sysPosCounter.bir --vpath "$RTL" 2>&1); then
         bad floor-refusal "unexpectedly succeeded on $OLD" "$out"
-    elif echo "$out" | grep -q "does not support --json-only"; then ok floor-refusal
+    elif echo "$out" | grep -q "does not support --timing"; then ok floor-refusal
     else bad floor-refusal "(missing floor message)" "$out"; fi
 else
-    echo "SKIP floor-refusal (no pre-5.046 verilator found; set TRS_VERILATOR_OLD)"
+    echo "SKIP floor-refusal (no pre-5.0 verilator found; set TRS_VERILATOR_OLD)"
 fi
 
 exit $fail
