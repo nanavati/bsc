@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.19 — strawman distilled from a design discussion
+**Status:** Draft v0.20 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling. v0.20 adds §16: the testsuite follows the engine — the morning's DejaGNU-vs-Cabal question reframed (Ravi) to "after bsc switches to Shake, should the testsuite follow?"; answer yes, conditional and sequenced, with the four multiplicative win mechanisms, the three cons re-priced, and the never-link-the-bsc-under-test rule.
 
 ---
 
@@ -1416,6 +1416,101 @@ boundary-cost question is really about *library-heavy, inlining-
 dependent* code; and the middle path already exists in this RFC —
 import strata let consumers opt into signature-only per edge, so the
 default can follow the measurements rather than precede them.
+
+## 16. The testsuite follows the engine
+
+The standing testsuite recommendation (the 2026-08-23 morning
+analysis: do not migrate off DejaGNU; freeze through the build switch;
+harvest checker wins in place) answered "should the testsuite leave
+DejaGNU for *Cabal*?" — which turned out to be the wrong question.
+The right question: **after bsc itself switches to Shake (§3's
+ladder), should the testsuite follow?** Answer: **yes — conditional on
+the premise landing, sequenced after it, gated as below.** The
+reasoning inverts cleanly once the engine lives inside the compiler.
+
+**The wins are structural and multiply with the matrix.** Price the
+matrix (checks × backends × simulators × combined/separate modes ×
+BVI paths × engines) under the two orchestrators: DejaGNU re-executes
+Θ(cells) per sweep; the graph re-executes Θ(unique stale work). Four
+mechanisms produce the gap, and none is available from DejaGNU's
+position outside the graph:
+
+1. **Cutoff through compiled artifacts.** Verdict nodes hang off the
+   same content-addressed compile/sim nodes the build uses. A compiler
+   change re-runs compiles, but sim and compare legs re-run only where
+   artifacts actually changed: an emitter-neutral bsc change cuts off
+   every Bluesim leg at byte-identical cxx; the alpha-equivalence
+   comparator upgrades the cutoff past naming drift. Today a one-phase
+   compiler change re-runs all ~48k checks; under the graph it re-runs
+   the compile sweep plus only the genuinely affected legs. This
+   requires the orchestrator to *see* artifacts as nodes — impossible
+   from outside.
+2. **Cross-cell leg sharing.** The matrix's newest assertions are
+   differential (cell vs cell), and differential nodes share legs:
+   trs-vs-Bluesim shares the `.ba`; BVI-via-Verilator vs the oracle
+   simulator shares the generated netlist; combined-vs-separate shares
+   the parse. DejaGNU/make re-derives shared work per cell, linearly
+   in cells.
+3. **Verdict caching in the share.** `verdict(check)` was a §6 node
+   from the start — "the primary shared object for CI": a verdict
+   computed anywhere in the fleet is "(cached) PASSED" everywhere,
+   delivered by the same share the build already runs.
+4. **A whole layer deletes.** The repo's own make+perl execution layer
+   (the parallel and all-tests make fragments, timing feedback,
+   TESTDIRS sharding, `.sum` aggregation) exists precisely because
+   DejaGNU has no execution semantics. Under the graph, Shake owns
+   parallelism, load balance, sharding, and aggregation natively — the
+   layer is not ported, it is *deleted*, and runtest/expect/tcl leave
+   the toolchain. The harness's 228 procs split accordingly: test
+   *semantics* (tag checks, filters, comparators — ported to typed
+   rules and the S1 checker library, which is the same code either
+   way) versus execution *plumbing* (deleted).
+
+Evidence the matrix already outgrew the harness: diffsweep — the first
+differential population — already lives outside DejaGNU.
+
+**The morning's three structural cons, re-priced under the premise:**
+
+- *Silent coverage loss* — still the top risk, now with the graph's
+  own help: stable check IDs map one-to-one from `.exp` checks to
+  verdict nodes, and a per-directory **dual-run equivalence gate**
+  (old `.sum` versus new verdict set) is itself a differential node
+  the graph runs throughout the migration. Mechanical translation is
+  realistic: the morning census measured ~757 control-flow constructs
+  across 26,368 `.exp` lines — the corpus is overwhelmingly
+  straight-line proc calls.
+- *The upstream `.exp` translation tax* — dissolves **with** the
+  premise: "after bsc switches" means upstream has accepted the engine
+  into the compiler, so the follow-on is argued to maintainers who
+  already run Shake inside bsc — at which point DejaGNU + make + perl
+  is the last redundant orchestrator in the repository, and the
+  complexity burden flips sides. If the premise lands fork-only, the
+  tax stands and so does the morning recommendation: do not migrate
+  the corpus ahead of upstream.
+- *The self-hosting inversion* — solved by policy, stated as a hard
+  rule: **the test orchestrator never links the bsc under test.** It
+  is its own executable (bsc-make grown, or `bsc-test`) built from
+  shake plus at most a *pinned* bsc library — and mostly neither,
+  since the suite exercises bsc as a black box (CLI, diagnostics,
+  artifacts) — testing an arbitrary install. That preserves the A/B
+  compiler-leg workflows and GHC's python-driver decoupling lesson,
+  in Shake clothes.
+
+**Sequencing.** Testsuite-follows is a *consumer* of §11's rungs, not
+a rung: the freeze holds through the build switch (the suite is the
+oracle proving cabal-built equals make-built); migration begins once
+the internalized engine (rung 2) is proven; each later rung raises the
+cutoff (iface/impl split → signature-level; vseg/vlink →
+emitter-level). The suite is the artifact graph's **largest
+consumer** — ~48k terminal verdict nodes — and its migration is what
+makes the share/cutoff investment pay at fleet scale. The morning
+staircase revises accordingly: S1/S2 unchanged (checker tools and
+structured per-check verdicts land under DejaGNU now and carry over
+unchanged — they are the semantics layer either way); S3's shadow
+orchestrator stops being speculative machinery and becomes a rules
+file over the existing engine; and the migration trigger is no longer
+"measured harness-extension-velocity bottleneck" but simply **"the
+engine landed."**
 
 ## References
 
