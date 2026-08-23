@@ -249,8 +249,8 @@ puzzles the generator could have not posed.
   see the jurisdiction bullet below.
 - **Recursive types: the reducer's last legitimate jurisdiction** (2026-08-23, Ravi). The width
   lane never meets recursion — a recursive type has no finite width, hence no `Bits` instance to
-  derive — but the structural classes (`Eq`/`Ord`/`FShow`/…) do, and there Deriving *free-rides
-  on the pass being retired*: `doDEq` emits `Eq t` for every constructor-argument type verbatim
+  derive — but the structural classes do (census in the next bullet), and there Deriving
+  *free-rides on the pass being retired*: `doDEq` emits `Eq t` for every constructor-argument type verbatim
   (`Deriving.hs:275`), so `data List a` ships context `(Eq a, Eq (List a))` and mutually
   recursive families ship cross-reference chains; CtxRed is what reduces these to `(Eq a)`.
   Under P1 with nothing else done, every derived instance of a recursive type would carry its
@@ -274,6 +274,30 @@ puzzles the generator could have not posed.
   via the imported `List` instance → `Eq (Rose a)` → group-self → discharge, residue `(Eq a)`.
   Parity criterion: inferred contexts must equal today's reduced ones across List/Rose/mutual-
   family shapes.
+- **Exposure census, by generator** (2026-08-23): *not* just `Eq`. Every generator that emits
+  structural per-field contexts is exposed: `doDEq`/`doSEq` (`Eq t` per constructor
+  argument/field, `Deriving.hs:275`/`:251`); `doDFShow`/`doSFShow` (per-tag/per-field `FShow`,
+  `:632-634`/`:559-561`; enums get empty contexts); `doDBounded`/`doSBounded` (per-field
+  `Bounded`, `:674-675`/`:710` — whose in-source comment already concedes the context is "more
+  restrictive than it needs to be": derived contexts are acknowledged generator policy, the J11
+  jurisdiction argument in the tree's own words); `doDDefaultValue` (first constructor's
+  argument only, `:692` — recursive exposure depends on constructor order: Stream-shaped yes,
+  List-with-Nil-first no). BSC does not derive `Ord`, so it is not on the list. Decisive for
+  the design: the **isomorphic-inheritance rule** (`:172-196` data, `:218-237` struct) derives
+  *any* in-scope class for single-constructor-single-field types with context `C fieldtype`
+  verbatim — user-defined classes inherit the same recursive exposure, including the multi-step
+  shape (`data T = MkT (Maybe T) deriving (MyClass)` → context `MyClass (Maybe T)`), so the J11
+  fixpoint must be **class-generic**, never a lookup table of blessed classes. Two clean
+  exemptions: `Generic` — the representation is shallow (`Conc t` leaves, `:789`), so its
+  context (`:749-750`, `:830`) carries only the fields' own written preds, no per-field
+  `Generic t`; and the width lane — a recursive type has no finite width, so no `Bits` instance
+  is derivable, **but the failure mode must be preserved**: today the declaration itself fails
+  to resolve, and under J11's leave-on-cap rule a residual self-referential width pred would
+  instead ship in the context and move the blame to the first use site. Rule: depth-cap residue
+  mentioning the instance's own head in a width class is a declaration-time derive error, never
+  context residue. (`Bounded`/`DefaultValue` on recursive types typecheck but denote infinite
+  values — that is elaboration's problem, not J11's; their contexts reduce by the ordinary
+  knot.)
 
 ### Phase 2 — Internal canonicalizer + evidence cache
 
