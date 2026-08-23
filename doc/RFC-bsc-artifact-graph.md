@@ -2,11 +2,13 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.3 — strawman distilled from a design discussion
+**Status:** Draft v0.4 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
-under the semantic/physical split. v0.3 adds: import strata.
+under the semantic/physical split. v0.3 added: import strata. v0.4 adds:
+§13, the relation to the post-GenWrap design (July 2026), adopting its
+vocabulary where it is sharper, and the link-time-replacement result.
 
 ---
 
@@ -546,6 +548,68 @@ a physical-encoding-leaked-into-semantics repair.
 - Import-strata surface spelling; the exact stratum-merge policy for
   plain `import`; whether `import concrete` is needed or an attractive
   nuisance; whether export lists also want stratum annotations.
+
+## 13. Relation to the post-GenWrap design (July 2026)
+
+`doc/design/post-genwrap-compiler.md` on nanavati branch
+`claude/model-rqj7c1` (the "Post GenWrap bsc step 2" session, 2026-07;
+4,092 lines, with an implementation lane: `BoundaryDesc.hs`,
+`GenBoundary.hs`, `ContractCheck.hs`, the as-built increments of its
+§12–§13, and `src/trs/docs/BOUNDARY-CONTRACT.md`) is the direct ancestor
+of §§7–10 here, worked out at the compiler-internal level. This RFC and
+that document interlock: it supplies the in-compiler mechanism; this one
+supplies the build-graph organization, the testsuite/verdict layer, the
+clock refinement, and import strata. The correspondence, with its
+vocabulary **adopted** where sharper:
+
+| This RFC | Post-GenWrap design |
+|---|---|
+| Semantic contract | **IfcContract** (§3.1.1/A15): a *type-indexed value* — method→domain in formal domain variables, resets, scheduling matrix, paths; travels wherever the type travels, attaches even to interface *arguments* with no module behind them (its §3.5) |
+| Physical realization | **BoundaryBinding**: names, multiplicity, presence, kind, per-port declared surface type (A16), dressing — per (implementation, specialization key), the *output of library rendering code* |
+| "The ba connects, not conflates" | Its altitude summary, verbatim in spirit: VModInfo is the **materialized join**, so `avi_vmi` and everything downstream stay byte-for-byte |
+| Sharing classes + justification obligations | **Licenses** (adopted): *every collapse in the mapping needs a license from the semantic half* — RDY drop ⇐ always_ready; port sharing ⇐ declared conflicting (#658's soundness condition: a scheduling fact licensing a port fact); port drop ⇐ zero width at this key; the one genuine impossibility is a kind mismatch in the dynamic direction |
+| Derived / asserted + conformance | **fill / verify**: one function, two modes; equality where the contract is total (ports), refinement where it is a bound (schedule, paths); contracts validated at construction |
+| Contract-value hash as specialization key | §4.2–4.3, sharper: key = (module Id, type instantiation, **resolved dictionary-tree hashes**) computed in the evaluator — dictionaries hashed because bsc classes are not coherent; incoherence becomes *observable*; the key recorded in the parent's ba; "dictionaries are nameable, hashable values resolved before elaboration" |
+| Demand-driven ba(inst) | §4.4: nested, memoized, **reentrant genModule** with a demand stack (cycle detection with a blame chain; decreasing-measure self-demand terminates); precedent: AAddSchedAssumps already nests runTI→iExpand→aConv mid-compile |
+| Frozen/manifest mode; pattern D | §4.5, pre-invented: a machine-readable manifest of demanded specializations per compile, plus a mode where a specialization artifact is produced by a *separate build-system-invoked command from the recorded key* (keys are reconstructible — pure functions of boundary-crossing information); atomic publish; determinism as a CI invariant (bit-identical double-compile); the #290 preprocessor-blind staleness fix |
+| Mocks fall out of binding | **stubOf : IfcContract → Impl a** — stubs *generated from the contract* (all-CF refines anything; drift impossible); every synthesized module stubbable, subtree stubbing with no re-elaboration |
+| Adapter between realizations | **A21/A23/A24**: adapters are arbitrary functions `toB ∘ fromA` elaborated by the evaluator (data plane), with RDY/EN/clock/reset staying structural under the licenses (control plane); the round-trip law `from ∘ to = id`; bindings carry **rendering witnesses** — name+hash references to the rendering dictionary, never bodies |
+| The split's governing principle | **A20** (adopted): *design for type and schedule/clocking compatibility, never wire compatibility — port names stop being API*; the boundary ABI is (interface type, IfcContract); "the same inversion typed languages made when the compiler took ownership of the calling convention" |
+
+**Link-time replacement arrives for free.** In the July design,
+link-time module replacement existed as a *feature*: `mkOneOf ::
+IfcContract → [(String, Impl a)] → Module a` — a static, literal
+candidate list, all N bodies elaborated at the module's own compile
+(the artifact-ownership wall), the parent scheduling against the
+declared contract, and link merely *selecting* by name; open-world,
+link-time-discovered substitution was a stated restriction. In this
+RFC's formulation it is the default path: the parent's vseg holds
+method-level wires with symbolic instantiation sites and never bakes a
+binding, vlink applies whichever bound realization's binding at link,
+and the parent schedules against the semantic contract — so replacing a
+module at link with *any* conforming implementation requires no
+combinator, no pre-enumeration, and no parent recompilation. The July
+restriction survives in exactly one refined form: **witnessed
+(arbitrary-function) renderings need adapter elaboration.** Free
+substitution therefore covers binding-compatible and structural
+(witness-less) realizations outright; a witnessed realization needs
+either a link-time re-render step — possible in this RFC's world
+precisely because A24 witnesses are name+hash references vlink can
+rehydrate and elaborate — or falls back to mkOneOf-style
+pre-enumeration. mkOneOf itself demotes to sugar: still the source-level
+way to declare a variant set (and stubOf's home), no longer the only
+door to substitution.
+
+**One deliberate tension to resolve.** The July design's load-bearing
+invariant is conservatism: backends and parents read only `avi_vmi`
+(the join), so *nothing downstream changes*. This RFC's §10 endgame
+(vseg/vlink) deliberately revises that invariant to complete backend
+symmetry. Reconciliation: the invariant governs every rung up to and
+including contracts-as-values; vseg/vlink is a later rung that replaces
+the join-consumption *consciously*, with the sealed mode preserving the
+old path. The July doc's ClockContract (osc/gate port names in the
+record) likewise predates §10's clock refinement: under this RFC those
+fields move from IfcContract to BoundaryBinding.
 
 ## References
 
