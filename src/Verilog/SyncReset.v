@@ -32,7 +32,29 @@ module SyncReset (
    reg [RSTDELAY:0]   reset_hold ;
    wire [RSTDELAY+1:0] next_reset = {reset_hold, ~ `BSV_RESET_VALUE} ;
 
+`ifdef VERILATOR
+   // Two-state startup-edge emulation: regenerate the harness's
+   // deassert/assert pulse (main.v, t=2..3) locally on the output, so
+   // downstream async-assert consumers see the asserting edge that a
+   // four-state simulator delivers at time 0 (X -> asserted when the
+   // initial block below runs).  The synchronous-assert contract is
+   // touched only inside the reserved clock-free window, exactly where
+   // four-state delivers its time-0 edge.  See SyncResetA.v for the
+   // full rationale.  Deliberately not guarded by
+   // BSV_NO_INITIAL_BLOCKS: this is edge synthesis, not state
+   // initialization, and no-initial builds rely on the pulse alone.
+   reg     startup_pulse ;
+   assign  OUT_RST = startup_pulse ? ~ `BSV_RESET_VALUE
+                                   : reset_hold[RSTDELAY] ;
+   initial
+     begin
+        startup_pulse = 1'b0 ;
+        #2 startup_pulse = 1'b1 ;
+        #1 startup_pulse = 1'b0 ;
+     end
+`else
    assign  OUT_RST = reset_hold[RSTDELAY] ;
+`endif
 
    always @( posedge CLK )      // reset is read synchronous with clock
      begin
