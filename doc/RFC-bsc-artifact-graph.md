@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.20 — strawman distilled from a design discussion
+**Status:** Draft v0.21 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling. v0.20 adds §16: the testsuite follows the engine — the morning's DejaGNU-vs-Cabal question reframed (Ravi) to "after bsc switches to Shake, should the testsuite follow?"; answer yes, conditional and sequenced, with the four multiplicative win mechanisms, the three cons re-priced, and the never-link-the-bsc-under-test rule.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling. v0.20 adds §16: the testsuite follows the engine — the morning's DejaGNU-vs-Cabal question reframed (Ravi) to "after bsc switches to Shake, should the testsuite follow?"; answer yes, conditional and sequenced, with the four multiplicative win mechanisms, the three cons re-priced, and the never-link-the-bsc-under-test rule. v0.21 adds §16's cacheability classes and gate ladder (external review, Codex 2026-08-23): cached PASS only for checks with a declared-complete effect surface — hermetic / environment-scoped / non-cacheable classes with attached manifests, asymmetric failure caching (§6 refined: deterministic failures cache, infrastructure failures never do), the gate ladder as graph dependencies (build → format/engine → functional → oracle → performance), and periodic uncached audits of the share itself.
 
 ---
 
@@ -247,10 +247,15 @@ identity.
 
 **Diagnostics are values.** Every node's result is (artifacts,
 structured diagnostics — tag, span, rendered text); failures are
-cacheable values, not absences; a cache hit replays its warnings (GHC's
-lost-warnings lesson). The error-message test population becomes
-assertions over cached diagnostics keyed on the stable T/G-tag
-vocabulary.
+cacheable values, not absences — *deterministic* failures, that is: a
+compiler error or a real check diff caches like any value, while
+infrastructure failures (resource exhaustion, an interrupted tool, a
+missing license or simulator) are non-hermetic and never cache (an
+external-review refinement — Codex, 2026-08-23; §16's cacheability
+classes are the same rule at verdict grain). A cache hit replays its
+warnings (GHC's lost-warnings lesson). The error-message test
+population becomes assertions over cached diagnostics keyed on the
+stable T/G-tag vocabulary.
 
 **The fully-signed fast path.** A package whose exports are all
 explicitly signed can publish iface from parsed + symtab with no
@@ -925,6 +930,11 @@ Consequences:
   COMPLETE-pragma synonym surface; the exact conversion seams at
   instantiation and generalization; and whether Pred/Scheme/Qual take
   the same index.
+- The cacheability census (§16): classifying the existing check
+  corpus into hermetic / environment-scoped / non-cacheable — which
+  populations carry undeclared effect surfaces today (perf tests,
+  BDPI and mutable-file tests, race-sensitive output) — and the
+  schema of the environment/capability manifest a verdict carries.
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
@@ -1454,7 +1464,8 @@ position outside the graph:
 3. **Verdict caching in the share.** `verdict(check)` was a §6 node
    from the start — "the primary shared object for CI": a verdict
    computed anywhere in the fleet is "(cached) PASSED" everywhere,
-   delivered by the same share the build already runs.
+   delivered by the same share the build already runs. Scoped below:
+   only checks that have *earned* a cacheable class participate.
 4. **A whole layer deletes.** The repo's own make+perl execution layer
    (the parallel and all-tests make fragments, timing feedback,
    TESTDIRS sharding, `.sum` aggregation) exists precisely because
@@ -1495,6 +1506,58 @@ differential population — already lives outside DejaGNU.
   artifacts) — testing an arbitrary install. That preserves the A/B
   compiler-leg workflows and GHC's python-driver decoupling lesson,
   in Shake clothes.
+
+**Cacheability classes and the gate ladder** (adopted from external
+review — Codex, 2026-08-23). Mechanism 3's "(cached) PASSED" is a
+soundness claim, not an optimization: a fleet-wide cached verdict
+asserts that the verdict node's key captured the check's *entire*
+effect surface. That holds only for deterministic, hermetic checks
+with a complete action manifest — and the record documents the ways
+the current suite is not that: silent engine fallback, partial
+generators, mutable BDPI/load files, race-sensitive output,
+contaminated partial installs. So every verdict node declares a
+**cacheability class**, and hermeticity is *earned by declaration*,
+never assumed:
+
+- **Hermetic**: a deterministic check over a closed,
+  manifest-complete input set → fleet-cacheable. The manifest
+  (inputs, tools, environment/capability facts) attaches to the
+  verdict, and an engine substitution is a key change, never a
+  fallback.
+- **Environment-scoped**: depends on declared environment facts
+  (simulator version, OS, hardware) → cacheable keyed on the attached
+  environment manifest — shared exactly as far as the manifest
+  matches, no further.
+- **Non-cacheable**: performance and resource tests, timing-sensitive
+  tests, random or interactive inputs, mutable shared files,
+  shared-library effects → always re-execute. A cached performance
+  PASS is not merely stale; it is meaningless.
+- The default for an unclassified check is non-cacheable: **never
+  cache PASS for an incompletely declared effect surface.**
+
+Failures cache asymmetrically, completing §6's rule at verdict grain:
+a deterministic check failure (a real diff, a compiler error) is a
+cacheable value like any other; an infrastructure failure (resource
+exhaustion, an interrupted tool, a missing license or simulator) is
+non-hermetic and is never cached — retry, don't replay.
+
+**The gate ladder.** Verdicts are also *ordered*: a later gate cannot
+validate an earlier failure — a performance win proves nothing about
+a semantically broken build. The order is expressed as graph
+dependencies, not run-book convention: (1) clean root build plus
+manifest validation; (2) strict format and engine checks — no silent
+fallback anywhere; (3) the full functional corpus at zero unexpected
+failures; (4) the declared semantic-oracle differentials; (5)
+performance and QoR last. A performance verdict node *depends on* the
+semantic gate node, so the graph is structurally unable to report a
+perf win against a red semantic gate.
+
+**The share is itself under test.** Periodic uncached audit sweeps —
+full re-execution with caching disabled, diffed against the cached
+verdicts — catch manifest incompleteness the same way the migration's
+dual-run equivalence gates catch translation drift. The dual-run
+check IDs are retained after migration and re-purposed for exactly
+this audit.
 
 **Sequencing.** Testsuite-follows is a *consumer* of §11's rungs, not
 a rung: the freeze holds through the build switch (the suite is the
