@@ -2,13 +2,14 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.4 — strawman distilled from a design discussion
+**Status:** Draft v0.5 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
-under the semantic/physical split. v0.3 added: import strata. v0.4 adds:
-§13, the relation to the post-GenWrap design (July 2026), adopting its
-vocabulary where it is sharper, and the link-time-replacement result.
+under the semantic/physical split. v0.3 added: import strata. v0.4 added:
+§13, the relation to the post-GenWrap design (July 2026). v0.5 adds:
+§14 schedule polymorphism, and §15 the cross-module-inlining cost
+experiment.
 
 ---
 
@@ -610,6 +611,122 @@ the join-consumption *consciously*, with the sealed mode preserving the
 old path. The July doc's ClockContract (osc/gate port names in the
 record) likewise predates §10's clock refinement: under this RFC those
 fields move from IfcContract to BoundaryBinding.
+
+## 14. Schedule polymorphism
+
+Unifying the contract lattice with the polymorphic-scheduling view:
+schedules have type-like relationships, and the machinery of §§7–9
+already contains everything needed to treat them that way.
+
+**The lattice.** Per method pair, the scheduling relations order by
+permissiveness: `CF ⊒ SB(a<b), SB(b<a) ⊒ C` — a diamond, with the two
+orderings incomparable siblings. Matrix-level order is pointwise. Then:
+
+- The **precise** contract's schedule is the *principal* schedule —
+  bsc's scheduler already computes it (principal-type inference, already
+  implemented).
+- A **declared** schedule is an *ascription*, checked by subsumption —
+  the July design's verify mode is literally the subsumption check.
+- **Weakening** is upcast; **conformance ⊑ is the subtyping relation.**
+- The **subsumption lemma** (the soundness core, worth stating once): a
+  parent correct against schedule `s` remains correct against any
+  `s' ⊒ s`. Substitutability is monotone in the lattice. The parent's
+  *optimal* schedule may improve under a more permissive child — but
+  that is a recompile-for-optimization choice, never a correctness one.
+  (This is combined-vs-separate mode restated in lattice vocabulary:
+  elaborating against the precise schedule is combined-mode
+  optimization; against the declared bound is separate-mode stability.)
+
+**Schedule variables.** A polymorphic contract quantifies over schedule
+variables with lattice bounds, exactly as it quantifies over types:
+`fifoFamily :: SchedPoint → IfcContract (FIFOF t)` is an ordinary
+contract-family function in the §9 algebra, and schedule parameters
+join type variables and dictionary hashes in the quantified telescope —
+including, naturally, in specialization keys, and (a pleasing tie-in)
+as *specified binders* in the visible-type-application sense:
+`mkFIFO @Pipeline` selects a family point. Two inference directions
+complete the picture:
+
+- **Principal offer**: an implementation's precise schedule (exists
+  today).
+- **Principal requirement**: the *weakest* child schedule under which a
+  parent's rules still schedule — inferable from the parent's own uses
+  (does any rule need enq and deq in one cycle, and in which
+  data-dependence order?). A schedule-polymorphic parent compiles to a
+  constraint (`requires s ⊒ needs`), and binding is the constraint
+  check. The precedent is effect systems: schedules *are* effects, this
+  is row/effect polymorphism with principal effect inference, and the
+  monotonicity lemma is what makes bounded quantification compositional.
+
+**The canonical family.** BypassFIFO and PipelineFIFO are concrete
+realizations of one polymorphic implementation at the two incomparable
+SB points; the *blocking* FIFO (enq or deq per cycle, never both) is
+their **meet** — the greatest promise both refine — and a dual-ported
+CF FIFO would be their **join**. A parent declaring only the blocking
+contract works with all of them; a parent needing same-cycle enq+deq
+must declare which ordering, and *which* is exactly the semantic
+difference between pipeline and bypass — the lattice makes the folklore
+precise. One source can generate the whole family (the conditional
+bypass/pipeline mux idiom already hand-rolls this), with the schedule
+parameter as a specialization-key component.
+
+## 15. The cost of giving up cross-module inlining: an experiment
+
+The question: compiling against signature rather than implementation
+arguably gains a lot — do we know what it costs? **We do not; it is
+measurable; here is the decomposition and the experiment.**
+
+**Sharpen the question first.** Function-level cross-module inlining
+must stay: elaboration *is* inlining for ordinary definitions — there
+is no "call" in hardware. The real candidate is **cross-package module
+instantiation**: auto-boundary every legal cross-package module use
+(compile parents against contracts, never bodies). Note also that the
+*.bo-level* gain — body edits not recompiling importers — is already
+captured by the iface/impl split *without giving anything up* (impl is
+demanded only at elaboration). The additional gains of auto-boundary
+are elaboration-level: per-package elaboration artifacts and reuse,
+smaller elaboration closures (the 20–30 GB elaborations shrink when
+children are boundaries), redaction by default, and the whole contract
+economy applying to every cross-package edge.
+
+**Cost classes**, with recoverability noted:
+
+1. *Constant/parameter propagation into children* — **recoverable**:
+   under specialization-first, a constant argument becomes a key
+   component; propagation is restored per key, at artifact-count cost.
+2. *Dead-method/port elimination* — partially recoverable (a used-method
+   set could join the key; artifact explosion is the tradeoff).
+3. *Condition specialization of method calls* — lost at boundaries.
+4. *Cross-boundary logic sharing / CSE* — genuinely lost to bsc;
+   largely recovered downstream by synthesis flattening for ASIC QoR,
+   not for simulation cost.
+5. *Parent–child rule composition* (urgency across the boundary; intra-
+   cycle interleaving of child internal rules with parent rules) —
+   genuinely lost; exactly what `(* synthesize *)` users already accept
+   today.
+6. *Schedule conservatism* — only under **declared** contracts; fill
+   mode gives parents the precise method matrix, so this cost is a
+   choice per edge (the subsumption tradeoff of §14), not a tax.
+7. *Expressiveness subset*: modules with function-typed or non-Bits
+   arguments cannot cross a boundary (closures are not serializable
+   keys — the July §4.3 line); polymorphic uses need specialization-
+   first as a prerequisite. These stay inline; the question is what
+   fraction of cross-package edges they are.
+
+**The experiment** (cheap with this session's tooling): an
+`-auto-boundary-cross-package` mode over the legal subset, run over the
+testsuite corpus and a production fleet, measuring — the legality
+census (what fraction of cross-package instantiations can boundary at
+all, and why not); compile time and peak RSS per package and end to
+end; generated-Verilog delta via the alpha-equivalence comparator plus
+gate counts after a synthesis pass on a sample; Bluesim/verilator
+runtime delta; and schedule diffs (any parent whose behavior-relevant
+schedule degraded). Two priors worth recording: production fleets
+already compile with heavy `(* synthesize *)` discipline, so the
+boundary-cost question is really about *library-heavy, inlining-
+dependent* code; and the middle path already exists in this RFC —
+import strata let consumers opt into signature-only per edge, so the
+default can follow the measurements rather than precede them.
 
 ## References
 
