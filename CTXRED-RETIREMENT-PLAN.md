@@ -67,6 +67,20 @@ incoherent → never reduce early; defer to the use site, as `runTI False` alrea
 also accounts for CtxRed sometimes *enlarging* predicate counts: aggressive reduction in the
 open/unground regime trades one pred for an instance context it cannot discharge.
 
+**The in-tree witness** is `SplitPorts` (`Prelude.bs:4885-4887`): *"XXX if the default instance
+is the only one, then it gets inlined in CtxReduce and other instances for this class are
+ignored"* — written directly above `instance SplitPorts () ()`, which exists (in part) as a
+**sacrificial sibling instance** whose structural job is to block that inlining. Mechanism: a
+class designed as catch-all-plus-user-overrides is *deliberately world-open*; with only the
+catch-all in scope, its context-free head force-matches even a variable-headed constraint, and
+CtxRed discharges `SplitPorts t p ↦ p := Port t` into the reduced type — downstream overrides
+are silently ignored. The reducer evidently does defer when a second in-scope instance unifies
+at a variable head (that is why the hack works: the `()` instance is the unifying sibling), but
+that in-scope guard is only the shadow of world-closedness — it cannot see instances that do
+not exist yet, and a sole-catch-all class sails past it. Corollary: GHC-style overlap pragmas
+alone cannot fix this (the sole-instance case has no sibling to trigger any overlap rule); only
+the never-commit-at-non-ground-heads rule for open classes does.
+
 ---
 
 ## 2. Job inventory: everything CtxRed does today
@@ -116,9 +130,12 @@ blowup recurs.
   (run the testsuite with the pass's output discarded-but-checked to find them).
 - **Regime census** (per the §1 validity criterion): classify every constraint CtxRed discharges
   in the wild as (a) computed-class head (StdPrel `genInsts` — world-closed, safe), (b) single
-  total instance (safe in practice, world-open in principle), or (c) other (discharge is
-  technically unsound today). Expectation to test: (a)+(b) dominate, meaning the ABI win
-  survives the criterion nearly intact.
+  total instance NOT intended for override (safe in practice, world-open in principle),
+  (c) **overridable-by-design** — a universal catch-all the class expects users to override
+  (`SplitPorts`, the `WrapField`→`WrapMethod` delegation, and any library class of that shape):
+  regime (ii)/(iii), must never discharge at non-ground heads — note today's detector for this
+  intent is *accidental* (instance count, per the §1 witness), or (d) other. Expectation to
+  test: (a)+(b) dominate, meaning the ABI win survives the criterion nearly intact.
 
 **Exit:** censuses published; fences green on baseline; no compiler change shipped.
 
@@ -152,6 +169,14 @@ round-trips; `.bo` tag bump coordinated (see §5).
   same work.
 - Persist a solved-evidence annex beside `ipkg_atf_cache` so importers reuse rather than
   re-solve.
+- **Cache admission = coherent ∧ ground.** The ATF cache already enforces the coherence half
+  (the incoherent path in `sat` refuses to record, `TCMisc.hs:400-411`) but has no visible
+  groundness guard on `recordATFs` (`:326-333, :396`) — and the guard is reachable: a
+  sole-catch-all class with an empty instance context (the §1 `SplitPorts` scenario) fully
+  discharges at a variable head, which would record `PortsOf t = Port t` — a for-all claim —
+  as if canonical. Today the sacrificial `()` instance shields the cache by accident; under
+  this plan an explicit groundness condition takes over that duty. Verify current behavior and
+  add the guard as part of this phase.
 
 **Exit:** the N=32/N=128 synthetic benchmark with raw contexts preserved internally lands
 within ~1× of today's baseline (this is the gate that proves blind-bypass costs are gone);
@@ -187,6 +212,14 @@ J4 → written instance heads + solver-side index view, delete the conditional `
 migration guidance, not a silent change); J5/J6 → require-empty annotation checker;
 J3 → ordinary typecheck of defaults; J7 → ATF-cache content parity without CtxRed's
 contribution; J8 → `recordPackageUse` in typecheck + unused-import warning parity.
+
+Also in this phase: **retire the sacrificial-instance idiom.** Once open classes are never
+committed at non-ground heads, `Prelude.bs:4885-4887`'s XXX and the instance-count workaround
+it documents become dead; declare openness explicitly instead — an `open`/overridable class
+marker, the dual of P3's closed-class marker, so the deferral regime is stated rather than
+encoded by how many instances happen to exist. Parity test: a class with ONLY a catch-all
+instance, overridden from another package — the override must win at every use site (this
+fails today; it is the acceptance test for the whole criterion).
 
 **Exit:** every row of the inventory relocated with its parity test green; `cCtxReduceIO` is
 dead code guarded by a flag.
