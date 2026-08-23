@@ -35,9 +35,8 @@ module GatedClockInverter(CLK_IN, CLK_GATE_IN, PREEDGE, CLK_OUT, CLK_GATE_OUT);
   // synopsys translate_off
   initial
     begin
-       #0 ;
        new_gate = 1 ;
-    end // initial begin   
+    end // initial begin
   // synopsys translate_on
 `endif // BSV_NO_INITIAL_BLOCKS
    

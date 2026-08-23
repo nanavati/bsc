@@ -154,6 +154,28 @@ branch triggered by the X -> asserted transition -- writes the identical
 value, so removing it is benign by value.  (`ClockDiv`'s *functional*
 `#0`, inside an always block, is unrelated and stays.)
 
+`InitialReset` is the one primitive where the `#0` must STAY: it has
+no reset input -- its own X -> asserted output transition at time 0 is
+the assertion edge derived async resets key on, and deferring the init
+to the inactive region is what guarantees every consumer process is
+already waiting at its event control.  Consistency is restored on the
+other side instead: the hold register now uses a polarity-INDEPENDENT
+encoding (0 = still asserting), inverted to the reset polarity only at
+the output, so the two-state pre-initial value (zero) equals the
+initialized value under BOTH polarities.  This matters because a
+derived clock can legitimately produce its one assertion-time edge at
+time 0 (asserting reset loads a divider's counter, whose top bit may
+rise), clocking the hold register in the same instant as the init, in
+an order the LRM leaves open across simulators.  In the old value
+encoding that race was masked under negative reset -- zero happens to
+BE the asserted pattern -- but under positive reset Verilator's shift,
+computed from the deasserted pre-initial state, clobbered the init and
+the held reset never happened (positive-reset `sysClockDivFifo`'s B
+domain counted from its first divided edge).  The encoding change also
+removes the testsuite's only manifestation of the upstream Verilator
+--trace+--timing initial-`#0` regression: losing an init that writes
+the pre-initial value loses nothing.
+
 **Internal asynchronous assertion** (the tree fanning out after time 3)
 is race-immune *by dominance*: every consumer's always block checks the
 reset level first, and the reset branch writes a value that does not
@@ -221,9 +243,13 @@ assertion edge onward.
   with the time-0 asserted level (initial-state consistency, above).
 * The `#0` prefix is stripped from the initial blocks of the reset- and
   clock-network primitives (the two families above plus `ClockDiv`,
-  `GatedClockDiv`, `GatedClock`, `ClockMux`, `UngatedClockMux`), so the
-  inits are in effect at time 0 under no-timing Verilator (initial-state
-  consistency, above).
+  `GatedClockDiv`, `GatedClock`, `ClockMux`, `UngatedClockMux`,
+  `ResetMux`, `GatedClockInverter`), so the inits are in effect at
+  time 0 under no-timing Verilator (initial-state consistency, above).
+* `InitialReset.v`: the hold register moves to a polarity-independent
+  encoding so its zero pre-initial state means "asserting" under both
+  polarities; its `#0` stays (initial-state consistency, above).
+  Output timing is unchanged in both polarities.
 * Three multi-domain tests whose goldens interleave same-instant
   `$display`s (`sysRstTest` x3 in both reset polarities,
   `sysSyncFIFOCountTest`) adopt the testsuite's existing
@@ -305,6 +331,22 @@ assertion edge onward.
   (6 $signed-slice + 3 trace+timing + 3 parallel_case) + 6 MacTestBench
   link + 10 residual startup + 3 environmental — the
   same-instant-ordering and flips classes are now empty.
+* Audit round 2 (the positive-reset-only `sysClockDivFifo` asymmetry),
+  same tree plus the `InitialReset` encoding change: probing the reset
+  network showed the mechanism described under initial-state
+  consistency above (Verilator's time-0 divided-clock edge clobbering
+  the value-encoded hold init under positive reset only).  A
+  14-directory matrix over every affected directory: Icarus 0 fails in
+  all 14 (byte-unchanged by the fix); Verilator fixes 6 checks --
+  positive-reset `sysClockDivFifo` (x2) and `sysClockDivFifo2`, and
+  all 3 positivereset/Reset checks previously attributed to the
+  upstream --trace+--timing regression (the bug still exists upstream,
+  but with the init writing the pre-initial value there is nothing
+  left for it to lose) -- with every survivor byte-identical.
+  Projected full-suite Verilator total: **25 fail** (= 31 - 6);
+  upstream class 12 -> 9 ($signed-slice 6, parallel_case 3), residual
+  startup 10 -> 7 (sysClockDiv2 x2, sysTestMkClock x2,
+  sysNullSyncTest2, sysGatedClockCycle, fast_to_slow).
 
 ## Migration
 
