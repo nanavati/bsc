@@ -2,16 +2,16 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.6 — strawman distilled from a design discussion
+**Status:** Draft v0.7 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
 under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §13, the relation to the post-GenWrap design (July 2026). v0.5 added:
-§14 schedule polymorphism and the first draft of §15. v0.6 rewrites §15
+§14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b.
+demoted to §15.b. v0.7 adds: §14.b schedules as values (the Kôika precedent).
 
 ---
 
@@ -671,6 +671,73 @@ difference between pipeline and bypass — the lattice makes the folklore
 precise. One source can generate the whole family (the conditional
 bypass/pipeline mux idiom already hand-rolls this), with the schedule
 parameter as a specialization-key component.
+
+### 14.b Schedules as values
+
+Contracts-as-values implies schedules-as-values: a contract *contains*
+a scheduling matrix, so the schedule component is already a value; the
+completion is letting it exist outside the contract — as a module
+parameter and an ascription — exactly the position Clock and Reset
+already occupy. The symmetry is worth stating as the design's slogan:
+**a module's entire control surface — clocking, reset, scheduling —
+becomes first-class semantic values with deferred realization** (data
+methods always were values: the interface). Clocks: semantic domain
+value, realized as wires or gates (§10). Schedules: semantic ordering
+value, realized as will-fire logic.
+
+**The precedent is Kôika** (Bourgeat, Pit-Claudel, Chlipala, Arvind —
+"The Essence of Bluespec", PLDI 2020): rules plus an *explicit,
+user-provided schedule* as a syntactic object, one-rule-at-a-time
+semantics proved as a theorem *for every schedule*, dynamic aborts when
+a rule's effects would violate the ordering, and a verified compiler to
+RTL. Its headline capability is exactly the claim here: performance
+tuning by changing the schedule value while rules stay untouched —
+schedule polymorphism as the design method, not a pragma bag.
+
+The bsc mapping:
+
+- **The pragma surface demotes to constructors.** `descending_urgency`,
+  `execution_order`, `preempts`, `mutually_exclusive`, `conflict_free`
+  become constructors of a typed Schedule value — one object, validated
+  at construction (the July §3.3 demotion, applied intra-module), with
+  bsc's real distinction between urgency (who wins the resource) and
+  execution order (sequential position) preserved in the type rather
+  than blurred across attributes.
+- **The fill/verify dial extends into the module.** No schedule value =
+  today's full inference. A *partial* value = today's pragmas, made
+  principled: constraints the scheduler completes (principal
+  completion). A *total* value = Kôika mode: cycle-accurate control,
+  verified legal rather than inferred — the principled exit for the
+  "fighting the scheduler" class of user pain.
+- **The forwarding semantics already exists.** Kôika's expressive power
+  rests on EHRs (Rosenband's Ephemeral History Registers) — and bsc
+  *has* them: `mkCReg` is the EHR. What bsc lacks is only the schedule
+  surface, not the register semantics that realizes aggressive orders.
+  The gap is smaller than it looks.
+- **Dynamic scheduling already shipped schedule values.** The
+  `-sched-dynamic` work's SchedAlt machinery — guard-selected schedule
+  alternatives in the composition artifact, chosen per clock edge — is
+  literally *runtime-selected schedule values*. The static story
+  completes the same move: a schedule value with guarded alternatives
+  is one more constructor, and the dynamic engine becomes an evaluation
+  strategy over schedule values.
+- **Honest v1 scope.** The value type ranges over the constraint
+  language plus totality; SAT-derived facts (ME proofs, disjointness)
+  stay inferred and are *recorded into* values, not written by hand.
+  And bsc-realizable orders are the v1 codomain — Kôika-arbitrary
+  orders are realizable exactly where CReg-style forwarding is in play,
+  which becomes a checkable legality condition rather than a semantic
+  extension.
+
+What it buys, in this RFC's terms: schedule polymorphism becomes
+ordinary value parameterization (`mkFIFO sched` — the §14 family is an
+argument, not a naming convention); the provenance lattice covers
+schedules (asserted BVI schedule annotations, derived inferred ones,
+validated verified ones); documentation and why-didn't-this-fire
+tooling fold over schedule values as they fold over contracts; and the
+differential-testing frame sharpens — two implementations of one
+declared contract differ, within the bound, exactly by their schedule
+values.
 
 ## 15. The pre-.bo eager layer: giving up early inlining
 
