@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.17 — strawman distilled from a design discussion
+**Status:** Draft v0.18 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer.
 
 ---
 
@@ -989,6 +989,13 @@ record) likewise predates §10's clock refinement: under this RFC those
 fields move from IfcContract to BoundaryBinding.
 
 ## 14. Schedule polymorphism
+
+> **Note (v0.18):** the scheduling arc now has its own RFC —
+> `RFC-polymorphic-scheduling.md` — which unifies §§14/14.b/14.c (the
+> value side) with the scheduling-complexity session's type-side arc
+> (positions as a kind, footprints as contracts, the EHR as the free
+> position-polymorphic register; companion implementation MatX-inc
+> PR 47). Sections 14–14.c remain here as the summary.
 
 Unifying the contract lattice with the polymorphic-scheduling view:
 schedules have type-like relationships, and the machinery of §§7–9
