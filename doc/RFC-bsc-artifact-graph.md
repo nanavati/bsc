@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.15 — strawman distilled from a design discussion
+**Status:** Draft v0.16 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers).
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle).
 
 ---
 
@@ -368,20 +368,39 @@ identity-vs-decoration decision per type — the position rule applied
 at value grain (does an Id's position participate in its identity? the
 intern key answers, explicitly).
 
-Costs, honestly: construction-time interning taxes hot allocation
-paths — GHC deliberately does *not* hash-cons its Type for exactly
-this reason, so CType-in-the-typechecker is an empirical question
-(bsc already crossed the bridge for IType; write-time-only sharing —
-what BinData does for Type today — remains the per-type fallback, and
-it still deletes the custom serializer). BinData's bounded-space lazy
-streaming is a real property the engine must preserve (derivation
-replaces the per-constructor bodies, not the monad). And the interning
-tables must become **threaded contexts, not more globals** —
-IType.hs's three `unsafePerformIO` IORef tables (internTable,
-tconTable, vsCanonTable) are the rung-4 reentrancy blocker in
-miniature; universalizing that pattern would deepen the blocker,
-universalizing the *context-threaded* version is a down payment on the
-audit. Design the two together.
+The hot-path question resolves at **population** granularity, not type
+granularity. Within CType, the transient inference-time population —
+metavariable-laden, churned by unification — need not and should not
+intern; the **externally-saved population absolutely must**:
+signatures, ATF-cache entries, dictionary types, pool keys. bsc
+already knows this from the ground dictionary pool: lifted
+dictionaries pool keyed by their (ground) type with evidence-collision
+checks (`dictPool :: M.Map IType [(Id, IExpr a)]`, LiftDicts.hs:93,
+309–317), and the ATF cache persists ground type-function resolutions
+into the `.bo` — the pooled and persisted type population is exactly
+where canonical shared representation pays, because dictionary ground
+types recur across an entire design. GHC turns out to instantiate the
+same principle rather than contradict it: it refuses to hash-cons its
+live inference Type, *and* its `.hi` serialization deduplicates
+IfaceType through a sharing table. **Intern what you save; exempt what
+you unify.** The natural intern point is then the
+ground/generalization boundary — where metavariables are gone is where
+values become eligible for saving — and the discipline is
+machine-checkable by making the interned form a distinct type that the
+persistence APIs demand (the pool, the ATF cache, and the GenBin root
+take interned types only), so "saved ⇒ interned" is enforced by the
+compiler and the transient population physically cannot leak into
+artifacts.
+
+Remaining costs, honestly: BinData's bounded-space lazy streaming is a
+real property the engine must preserve (derivation replaces the
+per-constructor bodies, not the monad). And the interning tables must
+become **threaded contexts, not more globals** — IType.hs's three
+`unsafePerformIO` IORef tables (internTable, tconTable, vsCanonTable)
+are the rung-4 reentrancy blocker in miniature; universalizing that
+pattern would deepen the blocker, universalizing the
+*context-threaded* version is a down payment on the audit. Design the
+two together.
 
 ## 7. Contracts: precise and declared
 
@@ -858,10 +877,11 @@ Consequences:
   deprecation path for everything currently exposed as scaffolding.
 - The intern-required set (§6's interning subsection): which types
   beyond FString/Id/Position/Type/IType earn interning (the
-  size-regression discovery loop names them); construction-time vs
-  write-time interning per type (the GHC hash-consed-Type counterpoint
-  applied to CType); and the intern-key identity discipline (positions
-  in or out, per type).
+  size-regression discovery loop names them); where each type's
+  intern point sits (the ground/generalization boundary for CType —
+  intern what you save, exempt what you unify); whether the saved form
+  is a distinct type the persistence APIs demand; and the intern-key
+  identity discipline (positions in or out, per type).
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
