@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.8 — strawman distilled from a design discussion
+**Status:** Draft v0.9 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10).
 
 ---
 
@@ -454,6 +454,47 @@ contract) and **link-time** (semantic instance → realization). And
 *foreign realization* (the port map — which always belonged to the
 realization, not the contract).
 
+### The EHR family: the split's second application
+
+Un-conflating contracts and wiring makes an **EHR-native Bluespec**
+tractable, because the state-element zoo — Reg, CReg, RWire, Wire,
+DWire, BypassWire, PulseWire — consists of elements with **different
+wiring but largely shared contractual dimensions**. The family has
+three semantic axes: *port sequencing* (port i's read observes writes
+of ports < i — which is a **schedule fact**, i.e. exactly a §14.b
+schedule value; the EHR's semantic essence is intra-cycle ordering);
+*persistence* (flop vs none — BypassWire and RWire are the
+zero-persistence points); and *per-port read/enable policy* (raw /
+Maybe / default / require-written — which are precisely the
+always-ready/always-enabled promise dimensions the semantic contract
+already carries). Everything else is realization: flop plus bypass-mux
+chain, wire-only, port-collapsed variants.
+
+The conflation cost is visible in the tree today: `CRegN5.v`,
+`CRegA5.v`, `CRegUN5.v` are hand-written Verilog files — the port
+count is a magic 5 because someone hand-wrote the five-port mux chain —
+imported via `import "BVI" CRegN5` (PreludeBSV.bsv:692), so the EHR
+family is *already* an asserted contract plus a foreign realization,
+maintained by hand, one file per (variant × port-count) point. The
+compiler side special-cases the wire family too (AAddSchedAssumps
+inserts RWire primitives; the symbol-table construction carries an XXX
+for exactly this). And `RevertingVirtualReg` is the family's extreme
+point and the split's existence proof: a "state element" whose entire
+content is a schedule fact and whose realization is **nothing**.
+
+Under the split: **one semantic contract family** — parameterized by
+port count, persistence, and per-port policy, its scheduling matrix
+*generated* from the sequencing parameter — with a small realization
+library replacing the hand-written variants. Payoffs: arbitrary port
+counts (the magic 5 dies); the scheduler treats the whole family
+uniformly instead of special-casing RWire; compiler-chosen realizations
+*within* a semantic point under the §13 licenses (unused-port elision
+licensed by the schedule; mux collapsing licensed by proven ME); one
+state-element schema for BIR/trs; and the §14.b Kôika mode becomes
+realizable **by construction** — total user schedules lower onto the
+EHR family uniformly, which is exactly how Kôika grounds its own
+semantics.
+
 ### Clocks and resets under the split
 
 The split's first concrete application inside the compiler: **the
@@ -806,6 +847,18 @@ on first demand, memoized durably. Then the comparison is strict:
   evaluator consults the cache *before inlining*, so it only ever
   inlines simplified forms; raw spines are walked exactly once, inside
   the def's own one-time simp — the same walk eager did.
+- **The honest losing case**: a library definition simped once but used
+  by many consumers loses under a *cold or unshared* cache — hermetic
+  sandboxed builds (§4 pattern A) where no share crosses action
+  boundaries re-pay simp(used) per action, and parallel consumers can
+  stampede a miss. Three answers, all already in this RFC's toolbox:
+  making simp(def) a graph **node** gives single-flight under
+  parallelism by construction; the share extends once-per-def
+  fleet-wide; and high-fan-in libraries ship **pre-warmed** caches with
+  their artifacts. The placement principle: *warm eagerly where fan-in
+  is high and the artifact ships; fill lazily where fan-in is low or
+  unknown* — one mechanism, a policy spectrum tuned by expected reuse,
+  with today's eager pass being the degenerate warm-everything point.
 - What actually moves is *placement*: first-use simp cost shifts from
   package-compile time (on the iface critical path, for everything) to
   first-elaboration time (off the critical path, parallel, only for
