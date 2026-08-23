@@ -1970,6 +1970,8 @@ instance VUse VStmt where
     vuses (VTask _ es) = vuses es
     vuses (VAssert e es) = vuses e ++ vuses es
     vuses (VZeroDelay) = []
+    vuses (VSeqLabel _ ss) = vuses ss
+    vuses (VDisable _) = []
 
 instance VUse VLValue where
     vuses (VLId i) = [i]

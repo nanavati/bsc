@@ -523,6 +523,8 @@ data VStmt
         | VTask VId [VExpr] -- calling a verilog system task as a Bluespec foreign function of type Action
         | VAssert VEventExpr [VExpr]
         | VZeroDelay -- injecting an explicit (0-tick) delay for synchronization purposes
+        | VSeqLabel String [VStmt] -- a named begin/end block (a disable target)
+        | VDisable String -- terminate the named enclosing block ("disable label;")
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
 
@@ -578,6 +580,10 @@ instance PPrint VStmt where
 
         pPrint d p  VZeroDelay     = text "#0;"
 
+        pPrint d p (VSeqLabel lbl ss) =
+            text ("begin : " ++ lbl) $+$ (text "  " <> ppLines d ss) $+$ text "end"
+        pPrint d p (VDisable lbl) = text ("disable " ++ lbl ++ ";")
+
 instance NFData VStmt where
     rnf (VAt ev stmt) = rnf2 ev stmt
     rnf (Valways stmt) = rnf stmt
@@ -593,6 +599,8 @@ instance NFData VStmt where
     rnf (VTask tid exprs) = rnf2 tid exprs
     rnf (VAssert ev exprs) = rnf2 ev exprs
     rnf VZeroDelay = ()
+    rnf (VSeqLabel lbl stmts) = rnf2 lbl stmts
+    rnf (VDisable lbl) = rnf lbl
 
 ppAssert :: PDetail -> Int -> VEventExpr -> [VExpr] -> Doc
 --ppAssert d i ev (VEString s : es) = text (pretty 78 78 (ppAs1 d i s es))

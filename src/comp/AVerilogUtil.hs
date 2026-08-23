@@ -31,7 +31,9 @@ module AVerilogUtil (
                      VConvtOpts(..)
                     ) where
 
+import Data.Char(isAlphaNum)
 import Data.List(nub, partition, genericLength, union, intersect, (\\),
+                 intercalate,
                  uncons)
 import Data.Maybe
 
@@ -191,11 +193,36 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
           -- foreign function calls trigger at the negative clock edge so
           -- values are ready (at the positive edge) from input system tasks
           foldr1 VEEOr (map (VEEnegedge . (vExpr vco)) clks)
+      -- A block containing $finish is emitted as a NAMED block with a
+      -- "disable" of itself immediately after each $finish: statements
+      -- after a taken $finish never execute in an event-driven
+      -- simulator (simulation ends at the call), but Verilator
+      -- continues the process to the end of the time slot, printing
+      -- later-scheduled output of the same block that no conforming
+      -- event-driven simulator shows.  The disable makes the
+      -- termination explicit in the text: dead code for simulators
+      -- that stop at $finish, the mandated silence for those that
+      -- keep going.  The label derives from the block's clocks, which
+      -- identify the domain uniquely within the module (sanitized:
+      -- a raw String label bypasses the VVerilogDollar renaming).
+      has_finish = any stmtHasFinish fcall_stmts
+      clk_label_part c = case vExpr vco c of
+                           VEVar vid -> getVIdString vid
+                           e -> ppString e
+      sanitizeLabelChar c = if isAlphaNum c || c == '_' then c else '_'
+      block_label = "BSC_TASKS_" ++
+                    map sanitizeLabelChar
+                        (intercalate "_" (map clk_label_part clks))
       -- the always block
       -- (starting the block with "#0" is a hack to pacify VCS and NC)
       always_stmt = Valways
                        (VAt sensitivity_list
-                         (VSeq (VZeroDelay : fcall_stmts)))
+                         (if has_finish
+                          then VSeqLabel block_label
+                                 (VZeroDelay :
+                                  map (addFinishDisable block_label)
+                                      fcall_stmts)
+                          else VSeq (VZeroDelay : fcall_stmts)))
       -- the assertions' sensitivity list
       ass_sensitivity_list =
           -- foreign function calls trigger at the negative clock edge so
@@ -262,6 +289,42 @@ vForeignCall vco f@(AForeignCall aid taskid (c:es) ids resets) ffmap =
 
 vForeignCall vco call _ =
     internalError ("unexpected foreign call" ++ ppReadable call)
+
+-- Whether a statement (recursively) contains a $finish task call
+stmtHasFinish :: VStmt -> Bool
+stmtHasFinish (VSeq ss) = any stmtHasFinish ss
+stmtHasFinish (VSeqLabel _ ss) = any stmtHasFinish ss
+stmtHasFinish (Vif _ s) = stmtHasFinish s
+stmtHasFinish (Vifelse _ s1 s2) = stmtHasFinish s1 || stmtHasFinish s2
+stmtHasFinish (Vcase { vs_case_arms = as }) = any armHasFinish as
+stmtHasFinish (Vcasex { vs_case_arms = as }) = any armHasFinish as
+stmtHasFinish (VAt _ s) = stmtHasFinish s
+stmtHasFinish (VTask tid _) = tid == vFinishTask
+stmtHasFinish _ = False
+
+armHasFinish :: VCaseArm -> Bool
+armHasFinish (VCaseArm _ s) = stmtHasFinish s
+armHasFinish (VDefault s) = stmtHasFinish s
+
+-- Append "disable <label>" immediately after every $finish in the
+-- statement (see the named-block comment at the always-block builder)
+addFinishDisable :: String -> VStmt -> VStmt
+addFinishDisable lbl = go
+  where
+    go (VSeq ss) = VSeq (concatMap goSeq ss)
+    go (VSeqLabel l ss) = VSeqLabel l (concatMap goSeq ss)
+    go (Vif c s) = Vif c (go s)
+    go (Vifelse c s1 s2) = Vifelse c (go s1) (go s2)
+    go s@(Vcase {}) = s { vs_case_arms = map goArm (vs_case_arms s) }
+    go s@(Vcasex {}) = s { vs_case_arms = map goArm (vs_case_arms s) }
+    go (VAt e s) = VAt e (go s)
+    go s@(VTask tid _) | tid == vFinishTask = VSeq [s, VDisable lbl]
+    go s = s
+    -- inside a sequence, splice the disable in as a sibling
+    goSeq s@(VTask tid _) | tid == vFinishTask = [s, VDisable lbl]
+    goSeq s = [go s]
+    goArm (VCaseArm es s) = VCaseArm es (go s)
+    goArm (VDefault s) = VDefault (go s)
 
 vFatalTask :: VId
 vFatalTask  = mkVId "$fatal"

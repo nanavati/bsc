@@ -268,17 +268,27 @@ never printed.  Two changes make the end of simulation deterministic:
   displays first already, so its output is unchanged.  This is emitted
   unconditionally (not under `` `ifdef VERILATOR ``).
 
-* Verilator needs one more step, for a different reason: it keeps
-  evaluating to the end of the time slot after `$finish` (no output is
-  lost), but its default `vl_finish` prints the "`Verilog $finish`"
-  notice the moment the task executes — and its zero-delay rounds
-  interleave with cross-module signal propagation, so the notice can
-  legally land *ahead* of same-slot display output on stdout
-  (`sysTestMkClock`, `sysNullSyncTest2`: the testsuite truncates
-  output at the notice line and the last display vanished from the
-  comparison).  The harness (`sim_main.cpp`, via `-DVL_USER_FINISH`)
-  now records the `$finish` and prints the identical notice after the
-  last eval, where a trailer belongs.
+* Verilator needs two more steps, for a different reason: it does not
+  terminate execution at `$finish`.  First, its default `vl_finish`
+  prints the "`Verilog $finish`" notice the moment the task executes —
+  and its zero-delay rounds interleave with cross-module signal
+  propagation, so the notice can legally land *ahead* of same-slot
+  display output on stdout (`sysTestMkClock`, `sysNullSyncTest2`: the
+  testsuite truncates output at the notice line and the last display
+  vanished from the comparison).  The harness (`sim_main.cpp`, via
+  `-DVL_USER_FINISH`) now records the `$finish` and prints the
+  identical notice after the last eval, where a trailer belongs.
+  Second — exposed by that relocation — the finishing *process itself*
+  keeps running: statements after a taken `$finish` in the same
+  system-task block (a whole clock domain's tasks share one block, so
+  any rule scheduled after the done rule qualifies) execute to the end
+  of the time slot and print output no event-driven simulator shows;
+  the old mid-stream notice had been *accidentally* truncating exactly
+  there.  The compiler therefore emits every finish-containing task
+  block as a NAMED block with `disable <label>` immediately after each
+  `$finish`: dead code for simulators that stop at `$finish`, the
+  mandated silence for those that keep going.  Emitted
+  unconditionally — the same text works everywhere.
 
 One four-state artifact remains recorded in a shared golden and is
 *not* emulated: an initially-closed gated clock leaves X at time 0,
