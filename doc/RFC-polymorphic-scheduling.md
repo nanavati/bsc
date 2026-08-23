@@ -2,7 +2,7 @@
 
 Schedules as types, values, and contracts.
 
-**Status:** Draft v0.2 — 2026-08-23. Unifies two arcs that reached the
+**Status:** Draft v0.3 — 2026-08-23. Unifies two arcs that reached the
 same summit independently: the *value side* — §§14/14.b/14.c of
 `RFC-bsc-artifact-graph.md` (a design discussion, Ravi Nanavati with
 Claude) — and the *type side* — the scheduling-as-types arc of the
@@ -12,7 +12,11 @@ Not proposed upstream. The artifact-graph RFC's §§14–14.c remain as
 the summary; this document is the full treatment. v0.2 resolves the
 urgency-axis question by ruling (§5.b): the new model has **one
 order** — the urgency/execution distinction is dropped; fancier
-arbitration is written down explicitly.
+arbitration is written down explicitly. v0.3 adds §4.b — positions are
+the missing *names* of scheduling (Ravi's observation): the reference
+problem that sank every prior specification mechanism, solved by
+entities that consolidate under real constraints, are shared as
+landmarks, and have solver-known relationships.
 
 ---
 
@@ -29,7 +33,11 @@ same structure types have:
   carry position *variables* constrained by relational provisos
   (`Before#` and kin) — deliberately with no literals and no
   arithmetic. Concrete positions are solver *output*, never source.
-  The machinery is the proviso/SMT engine bsc was born with. (§4)
+  The machinery is the proviso/SMT engine bsc was born with. And
+  positions are **the missing names of scheduling**: they consolidate
+  under real constraints via unification, they are shared as
+  design-level landmarks across resources and modules, and their
+  relationships are solver-known at all times. (§4, §4.b)
 - **Schedules are values**: a Schedule value is a *binding of position
   variables*. The pragma surface demotes to constructors of that
   value; the fill/verify dial (none / partial / total) is how much of
@@ -162,6 +170,78 @@ positions (the canonicalize-rule pattern).
 ride the CType phase index (artifact-graph RFC §6, v0.17): position
 *variables* are inference-form citizens; saved signatures carry
 solved, interned constraint sets — never concrete indices.
+
+### 4.b Positions are the missing names
+
+Every prior schedule-specification mechanism foundered on the same
+rock: **reference**. To nail an ordering fact down you must name what
+you are nailing, and nothing nameable was the right thing:
+
+- **Rule-name strings** (the attribute surface): fragile textual
+  references to generated, flattening-renamed identifiers — and they
+  name *pairs*, quadratically.
+- **Pairwise relations** (SchedInfo, performance specs): they name
+  relationships, not things; you cannot take one end of a relation and
+  reuse it elsewhere.
+- **EHR indices**: entities at last, but raw per-register integers —
+  hand-allocated, uninferred, unchecked, and index 2 of register A has
+  no relationship whatsoever to index 2 of register B.
+- **Kôika's whole-schedule**: sidesteps naming by demanding totality —
+  you cannot nail down *one* fact; you must write them all.
+
+Positions end this. They are **denotable entities** — the nouns of
+scheduling — with exactly the three properties a specification
+namespace needs:
+
+**They consolidate under real constraints.** The distinct-position
+count is *discovered*, not declared, by three mechanisms that are all
+unification: **atomicity** — a rule is one position for all its
+actions (the largest consolidation, and automatic); **calls** —
+invoking a method unifies the caller's position with the method's
+position parameter, so positions flow along the call graph exactly as
+types flow along application (this, not hope, is why they end up
+shared); **ascription** — two operations given the same landmark name
+share one variable. The namespace is automatically right-sized: no
+spurious distinctions to maintain, no missing ones to work around.
+
+**They are shared meaningfully.** A position is not per-register or
+per-module: one landmark can be the coordinate of many operations
+across many resources — "the writeback point," "the issue point" —
+declared once as a type-level name of the position kind, exported
+from a package, and constrained against everywhere. The register file
+and the bypass unit both position their operations relative to
+`WritebackPoint` without either exporting any wiring. Positions are
+**clock domains one level down**: bsc already manages named, shared
+temporal coordinates at cycle granularity; the position kind replays
+the same discipline intra-cycle. And the exported/internal split
+mirrors A20 exactly — deliberately exported landmarks are API (like
+method names); internal positions are existential and hidden (like
+internal rules).
+
+**Their relationships are known.** The solver holds the partial order
+over the consolidated positions at all times: queryable
+(`-show-schedule` prints a Hasse diagram over meaningful names
+instead of an n² rule-pair dump), exportable (footprints reference
+positions, and consolidation *shrinks* them — co-positioned
+operations share rows), and pinnable (the §9 lockfile nails facts
+*between named positions*, robust to refactoring because a landmark
+attaches semantically through its inhabitants, never textually
+through rule-name strings).
+
+This hands §9's gradient its missing verb. "Surface the choices" =
+print the consolidated position structure; "ratify" = name the
+landmarks you care about and pin edges between them. Specification
+stops being an essay about rule pairs and becomes **pointing at two
+nouns**.
+
+One guard keeps the property honest: distinguish
+**unification-consolidation** (semantic — forced by atomicity, calls,
+or ascription) from **linearization coincidence** (the solver's model
+happening to place two independent positions at the same slot). Only
+the former is a fact; the latter is a §8 arbitrary tie-break wearing a
+coordinate, and it must never leak into contracts, landmark names, or
+the lockfile. Tooling shows the partial order, never the model,
+unless explicitly asked for a model.
 
 ## 5. Schedules as values — and the unification
 
@@ -541,6 +621,11 @@ commitment; 5–6 are the payoff demonstration; 7–8 are the endgame.
 - Whether `Pred`/`Scheme`/`Qual` carry position provisos through the
   CType phase index unchanged, or positions want their own constraint
   syntax class.
+- Landmark surface syntax and sealing (§4.b): how a package declares
+  and exports a named position, and whether landmarks are *open*
+  (anyone may unify operations onto them) or *sealed*
+  (constraint-against only — inhabitation controlled by the exporting
+  package).
 - The typechecker substitution remedy (union-find binding forest)
   interaction: position variables join the same forest or get a
   dedicated near-linear order-solver state?
