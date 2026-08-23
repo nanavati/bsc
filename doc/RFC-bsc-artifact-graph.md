@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.11 — strawman distilled from a design discussion
+**Status:** Draft v0.12 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library.
 
 ---
 
@@ -101,6 +101,28 @@ reloading measures as dominant.
 The driver doubles as the seed of a future testsuite orchestrator and
 as the rail demand-driven specialization runs on (§9), but pays for
 itself immediately: every Makefile-plus-`-u` user gets parallel builds.
+
+**Packaging, and why the driver sequences after cabalization.** Shake
+is an ordinary Hackage library (the engine under GHC's own Hadrian
+build; no Template Haskell; Cloud Shake's `--share` included) — it was
+always one `build-depends: shake` away for a standalone tool. What
+cabalization actually buys is the other half: **bsc as a linkable
+library**. The cabalized tree exposes the compiler wholesale —
+`Depend`, `Flags`, `FlagsDecode` are exposed-modules of the `bsc`
+library stanza, with the executables as thin clients — so the driver
+consumes the real scanner and the real flag decoding in-process: the
+zero-drift property is literal, not aspirational. Before cabalization
+the driver would vendor sources or scrape subprocess output, and
+adding shake to the make build means the deprecated
+`cabal v1-install`-into-the-global-db path (INSTALL.md:117) that every
+builder and packager feels. Ship the driver as its **own executable
+package** (say `bsc-make`) with `build-depends: bsc, shake`: shake
+stays out of bsc-the-library's dependency footprint (a small upstream
+ask; distro packaging untouched; the "touches nothing in bsc" property
+preserved in packaging form), and v1 scans in-process while spawning
+`bsc` per compile — process isolation, no reentrancy audit. Order:
+cabalization lands, the driver package lands beside it, the testsuite
+stays untouched.
 
 ## 4. Containment in a static-graph build (Bazel)
 
