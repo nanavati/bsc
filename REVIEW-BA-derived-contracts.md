@@ -592,7 +592,145 @@ inline/opaque (or its explicit rejection).
 
 ---
 
+## Addendum (2026-08-22/23) — The picked-strategy design: pick the boundary, don't compute it
+
+Recorded from the post-review design dialogue with Ravi. Status: **ratified design direction
+for v0.2**, not yet incorporated into the proposal document itself. The CtxRed retirement
+plan's §5 coordination map references this design; this addendum is its full statement.
+
+### The move
+
+Ravi's reframing: **you don't compute the new interface, you pick it.** The core relation is
+`Wrap c a` with associated type function `Boundary c a = b` and `toB`/`fromB` methods — the
+instance is told it is wrapping a specific `a` to a specific `b` via strategy `c`, "and then
+`c` is where all the fun is." This converts F-A1's root cause from "must re-run open-ended
+inference" into "check a ground relation."
+
+Why ground checking already exists as pure, reusable machinery: `matchTop` (`TCMisc.hs:789`)
+is a plain function outside the TI monad whose return value includes the per-instance fundep
+substitution — "read the output type off the matched instance head" is a single call, no
+fixpoint. The symtab's `Class` record carries `genInsts`, a trie indexed by the fundep *input*
+positions (`Pred.hs:135-152`), and each `Inst` carries its evidence `CExpr` and source package
+(`Pred.hs:215` — exactly what §5.5's defining-environment rule and evidence-identity recording
+need). Where "computing" seems to sneak back in — a custom `SplitPorts a p` instance
+legitimately determining part of the boundary type — it degrades to a one-shot ground read:
+`a` is ground at every leaf, so the chain grounds itself top-down (`SplitPorts a p` match →
+`p` ground → `WrapPorts p pb` match → …). What CtxRed provided was a *fixpoint over floated
+constraints*; picking eliminates the floating, so no fixpoint is ever needed.
+
+BSC's ATF machinery is the exact enabler (correcting an in-dialogue misstep that claimed BSC
+lacks type families): `TIatf` is a TyCon sort carrying `atf_class_id`/param-idxs/target-idx
+(`CType.hs:127`) — a type function is a pointer at its owning class plus the fundep
+projection. Resolution is not a separate mechanism: when `sat` solves the owning class's
+constraint, `recordATFs` projects and memoizes `(atfId, ground args) → result`
+(`TCMisc.hs:326-333`). "Solve but no search" is *enforced*: instance heads may not contain
+type functions (`MakeSymTab.hs:447-461`), so evaluation is well-founded — no matching on
+function results, no backtracking, a unique match at ground inputs. And the solves are
+memoized in a serialized artifact: `ipkg_atf_cache :: Map (Id,[IType]) IType` in the `.bo`
+(`ISyntax.hs:136-144`) — more or less the boundary-shape record's type-level half, format
+included. `Boundary c a = b` entries are the `(a, b, c)` table, keyed the way the compiler
+already keys them.
+
+### The F-A1 answer (which compile, from which environment)
+
+- The strategy pick runs at **provider-BA time**, needing only the symbol table, instance
+  tables, and pragmas — all reconstructible from `.bo` signatures post-BO-load. The per-leaf /
+  per-argument `(a, b, c)` assignment **is** the boundary-shape record; consumers replay from
+  the record with no lookup. "Resolve once, replay exactly" becomes almost trivially true:
+  **pick once, record, replay.**
+- The one residue: the cache won't pre-contain `Boundary c FooIfc` for a module no source ever
+  uttered, so the provider-BA action still evaluates at pick time — with a named shape: either
+  a scoped one-constraint TI run (tiny; the monad resets per top-level def anyway) or a pure
+  ground evaluator reusing `matchTop` + the fd projection. A line item, not an open question.
+- **Correctness constraint on the ground-discharge engine:** it must reproduce the
+  typechecker's instance-*ordering* and coherence semantics exactly — reuse `genInsts` +
+  `matchTop` + the `allowIncoherent` handling rather than reimplement; any divergence is a
+  silent evidence mismatch the differential plan must gate. Evidence assembly is
+  syntax-directed recursive descent building application spines over instance defs — ordinary
+  named `.bo` definitions (`mkInstId`) — not a `reducePred` reimplementation.
+- **Design rule:** the `Wrap`/`Boundary` classes must be declared always-coherent
+  (`allowIncoherent = Just False`) or the replay guarantee evaporates. The ATF cache's
+  coherent-only recording discipline is §5.5's consumer-must-not-re-resolve rule already
+  implemented at the type level.
+
+### What the strategy index buys beyond F-A1
+
+- **Evidence identity (softens F-A10/TC-3):** the frozen evidence becomes a nameable per-leaf
+  table of `(path, a, b, c)` plus ground instance references instead of an opaque dictionary
+  graph; only the user-defined leaf-strategy (`c`) instances still need embedding or
+  fingerprinting; the structural walk is replayable-by-construction.
+- **Module arguments (m1):** the bespoke compiler logic gets a uniform form — `ViaBits`,
+  `ViaClock`, `ViaParam`, `ViaInoutCast`, `ViaVecBlast` as compiler-picked argument
+  strategies. Same vocabulary as method ports, no pretense that SplitPorts covers them.
+- **The stopping rule (F-A11):** RDY-field synthesis, vector-of-Clock/ListN recursion, and
+  poly-field leaves become explicit *picker policy* — where they already de facto live in
+  `genIfcField`. §2.3's slogan gets a version the code can satisfy: the compiler picks
+  structure *and strategy*; classes witness the conversion at the picked strategy.
+- **Coherence (TC-6/§10.1):** strategy-indexed instances are disjoint by construction; user
+  override means picking a different `c`, not racing an overlapping instance against the
+  compiler-derived one. The `BoundaryIfc` facade and possibly `mkGeneric` shrink or disappear —
+  adapters assemble directly from strategy methods.
+- **TC-6/m3 name collisions dissolve by ATF direction:** the ATF runs `(c, a) → b`, so
+  boundary-type identity is the (strategy, source type) pair and `b` never needs to determine
+  anything — the collision concern dissolves rather than needing m3's structural
+  content-addressing patch.
+- **Closes the catch-all-plus-shadowing idiom for boundary classes.** BSC commits on head
+  match with no backtracking, so `instance (WrapMethod m w) => WrapField name m w`
+  (`Prelude.bs:4653`) captures everything, and the Clock/Reset/Inout specials (`:4672-4677`)
+  exist only to win the specificity race — "keep Clock away from WrapMethod":
+  dispatch-by-shadowing, under committed matching, in an open world. Under picks, the former
+  catch-all becomes the *total instance of one strategy* (`Wrap m w ViaWrapMethod`), genuinely
+  coherent-and-closed within its head; Clock needs no pre-empting instance because the picker
+  picks `ViaClock`. The extension axis rotates: customization means adding a new strategy type
+  with its instances, which can never invalidate an existing match — growth becomes monotone;
+  world-closedness without sealing the world (extension made orthogonal to selection). Error
+  quality flips from a context failure three classes deep to "strategy `ViaWrapMethod`
+  requires `Bits` for T at field F" — the pick is in the message. Ecosystem corroboration: the
+  June port-splitting decision (no splitting by default; `SplitVector` as an explicit wrapper
+  when wanted) is behavior-selected-by-type — the strategy pattern avant la lettre.
+
+### Migration and residues
+
+- **§5.4 compatibility bridge:** today's `WrapField`/`WrapMethod`/`SplitPorts`/`WrapPorts`
+  instances keep working because default strategies are *delegating instances* —
+  `(WrapMethod m w) => Wrap m w ViaWrapMethod` — and the picker selects those defaults unless
+  told otherwise.
+- **Within-strategy no-overlap rule:** the closure is only as good as the no-overlap
+  discipline *within* a strategy — overlapping `Wrap SpecialT w' ViaWrapMethod` against a
+  strategy's total instance brings the open-world hazard back locally. Design rule: customize
+  by new strategy, never by overlapping an existing strategy's instances — enforced by the
+  closed-class marker applied per strategy head (the same marker the CtxRed plan wants;
+  double duty), or at minimum a warning.
+- **Per-field customization (explicit v0.2 decision):** today's path-keyed
+  `WrapField name ...` instances either become a pick annotation at the field, or survive as
+  *inputs to the picker* (a one-shot ground lookup — no longer racing hazards either way). The
+  choice is between "instances as configuration the picker reads" and "annotations as
+  configuration" and must be made explicitly in v0.2.
+- **Untouched by this design:** the post-elaboration data (`true_ifc_ids`, `veriPortProps`),
+  digest normalization, and the F-A2/F-A7/F-A8 migration-sequencing findings all stand.
+
+### Prior art
+
+The shape is precisely GHC's **DerivingVia + deriving strategies**: `c` is the via-type, and
+GHC chose *explicit* strategies for exactly this reason — route inference among overlapping
+derivation methods is ambiguous. The delta: GHC's via leans on `Coercible`, which BSC lacks,
+so the witness here is a real conversion instance rather than a coercion — arguably more
+honest for a hardware boundary. (This addendum discharges part of F-A15's prior-art
+obligation for the affected sections; the full literature pass v0.2 owes is unchanged.)
+
+### Effect on this review's verdict
+
+With picked `c`, `Boundary` as an ATF, and ground-instance evidence discharge, **F-A1 drops
+from critical to resolved-by-design-change once v0.2 writes it down** — a specifiable §5
+rewrite naming existing machinery plus one small evaluator. **F-A2 (Phase 3 stranding
+cross-package opacity) becomes the sole standing blocker.** The A.3 fixup redesign concretely
+owns ATF-cache union duties (`FixupDefs.hs:47-50`; review m4/S6). Part III item 1 should be
+read as answered by this addendum; item 3 (module arguments) as reshaped into the argument
+strategies above.
+
+---
+
 *Review conducted 2026-08-22 against B-Lang-org/bsc @ 941eecf. Six adversarial lenses, each
 independently verified; two supportive passes; completeness critic; ~1.9M tokens of
 code-grounded analysis across 15 agents; verdict disputes resolved by direct source
-inspection.*
+inspection. Addendum recorded 2026-08-23 from the post-review design dialogue.*

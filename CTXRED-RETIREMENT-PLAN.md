@@ -498,8 +498,9 @@ dead code guarded by a flag.
   Land Phase 1 with the VTA branch or immediately before it.
 - **Contracts proposal**: Phase 4's J2/J9/J10 are the same work as the contracts design's
   pick-time boundary derivation (strategy-indexed `Wrap c a`, `Boundary` as an ATF,
-  solve-no-search evaluation); J10 dies with the continuation. Neither effort should build the
-  ground-solve helper twice.
+  solve-no-search evaluation; full design statement in the REVIEW-BA-derived-contracts.md
+  addendum); J10 dies with the continuation. Neither effort should build the ground-solve
+  helper twice.
 - **#925 dictionary lifting/sharing**: Phase 3's worker/wrapper option is the same machinery;
   one review arc, and the org's stated typechecker-perf priority pays for it.
 - **ATF cache line**: the coherent-only + per-package-ownership discipline just landed at HEAD
@@ -600,6 +601,26 @@ P0–P5 depends on it.
   encoders) — the catch-all/overlap world — in favor of one polymorphic definition with
   branch-local knowledge. Termination and never-grounding are today's stories (steps budget;
   synthesis monomorphization).
+- **Engine-swap parity caveat (real, and easy to miss):** `numUnify`/`varUnify`'s choices
+  about bind-versus-emit-equation shape which facts ever reach `satisfy` and where errors get
+  positioned — so the differential fence for an engine replacement must cover binding-order
+  behavior even though the swap never touches unification itself. (Companion note on the SMT
+  worry: the F* brittleness cautionary tale is mostly about quantifiers and trigger
+  heuristics; QF_LIA improvement queries — the fragment BSC would use — never enter that
+  zone.)
+- **Store details worth keeping on record** (2026-08-23 dialogue): (i) nested implication
+  scopes *extend* the outer store rather than rebuilding it, so deep given stacks do not
+  multiply cost — one of GHC's answers to large given pools; (ii) the leveled store also
+  cleans up the recursive-dictionary knot: in-progress solve nodes become visible assumptions
+  in the store (GHC's recursive-dictionary construction), subsuming `sat`'s stack-`lookfor`
+  mechanism; (iii) the only concrete BSC use case named for rank-n so far is rank-2
+  clock/reset domain encapsulation, ST-style —
+  `runDomain :: (forall d. DomainCtx d => Module (Ifc d)) -> ...` — where skolem-escape
+  prevention *is* the untouchables discipline; (iv) full-GADT feasibility horizon: elaboration
+  is unproblematic (equality evidence is compile-time-erased and `iExpand` evaluates
+  statically), BH's heritage makes GADTs/rank-n syntactically natural while BSV syntax needs
+  real thought, and full GADTs remain a separate, bigger decision with its own literature
+  pass — the numeric-views subset above explicitly does not wait for them.
 
 ## 7. What stays forever
 
