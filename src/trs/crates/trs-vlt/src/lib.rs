@@ -237,23 +237,62 @@ fn run_key(c: &BviContract, strings: &[String], gparams: &[String]) -> String {
     for g in gparams {
         src.push_str(&format!("gparam={g}\n"));
     }
+    // defines and params are NOT part of the contract JSON (that hash
+    // is the interface-shape identity the shim bakes in), so they must
+    // appear here explicitly or two same-interface valuations would
+    // collide in byid and a run could silently load the wrong model
+    for (k, v) in &c.defines {
+        src.push_str(&format!(
+            "define={}={}\n",
+            s(*k),
+            v.map(|v| s(v)).unwrap_or("")
+        ));
+    }
     for &d in &c.vpath {
         src.push_str(&format!("vpath={}\n", s(d)));
     }
     sha256::digest_hex(src.as_bytes())[..32].to_string()
 }
 
-/// Record run-key -> class-key (atomic: tmp + rename); best-effort --
-/// a failed pointer write degrades to a run-side miss, never a wrong
-/// artifact.
+/// The public form of the run key: the identity a LOAD-ONLY consumer
+/// can compute for this contract + valuation.  `trs run`'s precheck
+/// dedups on this (NOT on the Verilog top name -- two imports of one
+/// module with different literal parameters are distinct classes).
+pub fn run_identity(
+    c: &BviContract,
+    strings: &[String],
+    resolved: Option<&[ResolvedParam]>,
+) -> Result<String, VltError> {
+    let gparams = serialize_params(c, strings, resolved)?;
+    Ok(run_key(c, strings, &gparams))
+}
+
+/// Record run-key -> class-key (atomic: tmp + rename, so a concurrent
+/// run never reads a torn pointer); best-effort -- a failed pointer
+/// write degrades to a run-side cold-cache refusal, never a wrong
+/// artifact -- but LOUD, because the symptom (build exits 0, run says
+/// rebuild, rebuilding doesn't help) is otherwise undiagnosable.
 fn write_byid(cache_dir: &Path, runkey: &str, class: &str) {
     let dir = cache_dir.join("vlt").join("byid");
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
+    let warn = |e: &dyn fmt::Display| {
+        eprintln!(
+            "trs-vlt: warning: could not record the run index entry \
+             {}/{runkey} ({e}); runs will report a cold cache for this \
+             model even though it is built",
+            dir.display()
+        );
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return warn(&e);
     }
     let tmp = dir.join(format!("{runkey}.tmp{}", std::process::id()));
-    if std::fs::write(&tmp, class).is_ok() {
-        let _ = std::fs::rename(&tmp, dir.join(runkey));
+    match std::fs::write(&tmp, class) {
+        Err(e) => warn(&e),
+        Ok(()) => {
+            if let Err(e) = std::fs::rename(&tmp, dir.join(runkey)) {
+                warn(&e);
+            }
+        }
     }
 }
 
@@ -817,8 +856,13 @@ pub fn build_all(
                     }
                     continue;
                 }
-                let cjson = shim::contract_json(c, &design.strings);
-                let key = sha256::digest_hex(cjson.as_bytes());
+                // dedup on the RUN IDENTITY (contract + literal
+                // parameter values + defines + vpath), never on the
+                // bare contract JSON: that hash is interface-shape
+                // only, and two imports of one module with different
+                // literal parameters are DISTINCT classes that must
+                // each build (and each get a byid entry)
+                let key = run_identity(c, &design.strings, None)?;
                 let built = match done.iter().find(|(k, _)| *k == key) {
                     Some((_, b)) => b.clone(),
                     None => {

@@ -1609,6 +1609,11 @@ fn ensure_vlt_env(bir_path: &str, build_step: bool) {
     }
     if build_step {
         std::env::set_var("TRS_VLT_BUILD", "1");
+    } else {
+        // a run is NEVER a build step: actively clear an inherited
+        // marker (a wrapper script or CI exporting it around a link
+        // would otherwise silently re-enable runtime verilation)
+        std::env::remove_var("TRS_VLT_BUILD");
     }
 }
 
@@ -1654,10 +1659,15 @@ fn bvi_precheck(path: &str) -> Result<(), String> {
                 continue;
             }
             let top = design.strings[c.verilog_name as usize].clone();
-            if seen.contains(&top) {
+            // dedup on the RUN IDENTITY, not the top name: two imports
+            // of one module with different literal parameters are
+            // distinct classes and each needs its own artifact
+            let ident = trs_vlt::run_identity(c, &design.strings, None)
+                .map_err(|e| format!("bvi: {top}: {e}"))?;
+            if seen.contains(&ident) {
                 continue;
             }
-            seen.push(top.clone());
+            seen.push(ident);
             match trs_vlt::find_model_resolved(c, &design.strings, &opts, None) {
                 Ok(Some(_)) => {}
                 Ok(None) => missing.push(top),

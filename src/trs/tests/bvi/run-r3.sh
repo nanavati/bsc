@@ -135,6 +135,28 @@ if out=$(env -u TRS_VLT_CACHE "$TRS" vlt build defloc/sysPosCounter.bir --vpath 
     ok default-cache
 else bad default-cache "$out"; fi
 
+# ---- dual valuation (v1.5.1): two imports of ONE module with
+# different literal parameters are DISTINCT classes -- the build step
+# must build both (dedup by run identity, not module name or contract
+# hash) and the load-only run must find and print both
+cp "$SRC/PosDualVal.bsv" "$SRC/rtl/ParamShow.v" .
+$BSC -sim -u -g sysPosDualVal PosDualVal.bsv >dual-bsc.out 2>&1 \
+    && TRS_VLT_CACHE=$C $BSC -sim -trs -e sysPosDualVal >>dual-bsc.out 2>&1
+if [ ! -f sysPosDualVal.bir ]; then
+    bad dual-valuation "(no .bir)" "$(cat dual-bsc.out)"
+else
+    D2=$WK/cache-dual
+    # -5 renders as 4294967291 in BOTH flows (bsc passes the Integer as
+    # a sized 32-bit literal here; verified against the iverilog
+    # oracle) -- presence of both valuations is the gate, not order
+    # (schedule-order task interleaving is a defined divergence)
+    if out=$("$TRS" vlt build sysPosDualVal.bir --vpath "$SRC/rtl" --cache "$D2" 2>&1) \
+       && run=$(TRS_VLT_CACHE=$D2 timeout 60 "$TRS" run sysPosDualVal.bir 2>&1) \
+       && echo "$run" | grep -q "signed=4294967291" && echo "$run" | grep -q "signed=7"; then
+        ok dual-valuation
+    else bad dual-valuation "$out" "$run"; fi
+fi
+
 # ---- cross-release positives: the stable-interface metadata (V<top>.h
 # port macros + VM_TIMING in classes.mk) must work on a DIFFERENT 5.x
 # release than the pin -- plain and timing builds both
