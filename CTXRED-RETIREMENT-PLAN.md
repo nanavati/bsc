@@ -296,8 +296,39 @@ puzzles the generator could have not posed.
   instead ship in the context and move the blame to the first use site. Rule: depth-cap residue
   mentioning the instance's own head in a width class is a declaration-time derive error, never
   context residue. (`Bounded`/`DefaultValue` on recursive types typecheck but denote infinite
-  values — that is elaboration's problem, not J11's; their contexts reduce by the ordinary
-  knot.)
+  values — see the next bullet: J11 should catch and block the provable cases.)
+- **Value-CAF recursion: catch and block** (2026-08-23, Ravi). The knot is productive for
+  *function* methods (`==`/`fshow`/`pack` recurse on a finite input) and non-productive for
+  *CAF* methods (`minBound`/`maxBound`/`defaultValue :: a` — no input to shrink; a
+  self-reference is an infinite term). Today such a derive **succeeds**, and the landmine fires
+  at a distant use site as unbounded elaboration unrolling into the step limit, with no mention
+  of the `deriving` that planted it — so derive-time blocking is strictly better blame, and a
+  deliberate mild tightening of current behavior. The check must key on a **forces-cycle in the
+  generated value bodies**, never on context recursion, to dodge two false-positive traps:
+  (1) `doDBounded`'s all-fields context makes `data T a = A | Mid (T a) | Z` context-recursive
+  while both endpoints are finite and the derive is usable — so first narrow the `Bounded`
+  context to the first/last constructors' fields (granting the generator's own XXX comment its
+  wish, `Deriving.hs:672-673`), which aligns context recursion with value recursion; and
+  (2) indirection through a non-forcing instance (`data T = MkT (Maybe T)` under a user
+  `instance DefaultValue (Maybe a)` whose value is `Invalid`) is finite and legal — productivity
+  through library instances is strictness information the type system does not have, so only
+  *provable* cycles are blocked and the rest stay allowed (unchanged from today). Detection is
+  generic and method-level, inside the J11 group fixpoint: CAF methods are recognizable from
+  class signatures (result is the class variable, no arguments), the derived bodies' forces
+  edges are known shapes (a derived CAF body forces exactly its fields' same-method CAFs), and
+  a cycle among same-group derived CAF bodies — or a syntactic self-reference — is provably
+  infinite. No blessed-class table: the isomorphic-inheritance rule can derive user classes
+  with CAF methods, and the same detection covers them. Policy: `DefaultValue` (its sole method
+  is the CAF) → derive-time error; `Bounded` → derive-time error when a provably-infinite
+  endpoint exists, with per-method poisoning (emit the infinite endpoint as a targeted
+  elaboration `error` carrying the derive site, keep the finite one) as the fallback if real
+  code surfaces that legitimately uses only the finite endpoint of a recursive type. This
+  unifies with the width rule one bullet up — the same principle at two levels: `Bits` residue
+  that can never ground is a type-level impossibility, a CAF forces-cycle is the value-level
+  one; both become derive-time errors instead of landmines. (Side observation from this check,
+  flagged for the §1 open-marker migration list: `DefaultValue` is declared `coherent` yet has
+  a `Literal` catch-all with downstream overrides — `Prelude.bs:4516-4523` — the SplitPorts
+  shape with a coherence assertion on top.)
 
 ### Phase 2 — Internal canonicalizer + evidence cache
 
