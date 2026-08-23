@@ -418,6 +418,21 @@ P0–P5 depends on it.
   the numeric theory component compose in the same store — width-indexed encodings typecheck
   per branch. This changes P2's cost accounting from "cleanup enabler" to shared type-system
   infrastructure with three consumers.
+- **Two-population store architecture (large-type scaling, e.g. big instruction unions):**
+  facts that are ground ∧ coherent are scope-independent by the validity criterion and belong
+  in the **global fact cache** (ATF/evidence — trie-indexed, monotone, shared, lookup-only at
+  any size), never in a scoped store; only genuine *hypotheticals* (branch refinements,
+  skolem-contingent equalities) are resident givens, and a match injects only the arm's own
+  index instantiation (`w ~ 32`) into a pushed-and-popped level — a 200-constructor union costs
+  200 tiny scopes, linear in the code written. The type's width closure never materializes as
+  givens at all: it lives as ATF applications — *names for facts* — inert until a reference
+  site expands them, whereupon they solve ground into the global cache. The store holds a
+  **frontier, not a closure** (GHC's lazy-superclass lesson generalized; the SizeOf deferral
+  of §3.5 is simultaneously this laziness mechanism). Worst case (a computation touching every
+  constructor's width) forces the closure once, memoized globally — eager cost paid a single
+  time, shared. Soundness note: lazy materialization varies expansion order with reference
+  order, which is harmless exactly because every solve is coherent ∧ ground (solve, no
+  search) — the criterion is what makes the laziness safe, not just the caches admissible.
 - **The headline language payoff — numeric refinement case — needs less than full GADTs.**
   A case over a type-level number via compiler-provided *views* (`Zero`/`Succ m`, comparison
   views yielding `≤` givens) keeps the definition `forall n` while each arm typechecks under a
