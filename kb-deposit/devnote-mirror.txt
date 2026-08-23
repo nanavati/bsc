@@ -1,0 +1,1478 @@
+KB: bsc typeclass coherence dev note (full text)
+
+Full-text mirror. CANONICAL = doc/dev-notes/typechecker-coherent-
+instance-commitment.md on nanavati/bsc branch
+claude/typechecker-coherent-instances-dkmn8w @ commit 1b35eb7d
+(blob 82ca05e0). Body below is verbatim from that blob for diff
+verification — do NOT edit it here (Gmail may auto-linkify
+filename-like tokens on save; the diff check must tolerate only
+that). Responses and updates go in the lane draft
+"KB: bsc typeclass coherence", never in this mirror. If the repo
+file changes, re-mirror and update this header's commit/blob.
+
+---- BEGIN VERBATIM MIRROR ----
+
+# Committing to coherent instance matches immediately in the bsc typechecker
+
+*Design analysis, July 2026. All file:line references are to commit `f4927f1e` unless a
+branch is named. The analysis was cross-checked against the source by independent review
+passes (mechanism, soundness, feasibility); claims below marked "verified" survived that
+review, and the review's corrections are folded in.*
+
+---
+
+## 1. Executive summary
+
+**The question.** When `reducePred` walks a class's specificity-ordered instance list and
+finds a match, it already computes — as a by-product of the walk — whether any *earlier*
+(more specific) instance failed one-way matching but could still unify with the predicate
+(`chk = predUnify bound_tyvars pr' h; f (chk || incoherent) is`, `src/comp/TCMisc.hs:571-573`).
+A match with `incoherent = False` is called **coherent**. What would it take to treat that
+fact as final — to commit the instance choice, its dictionary binding, and its fundep
+substitution immediately and permanently, instead of discarding and re-deriving that work?
+
+**Where commitment is deferred today.** The all-or-nothing policy lives in one function:
+`sMany` (`TCMisc.hs:169-195`) puts the *original* pred aside and throws away sat's entire
+result bundle — residual preds, `SolvedBind`s, and the threaded substitution *including
+the fundep improvement from the successful match* — whenever a pred does not reduce all
+the way (`TCMisc.hs:188-189`). The code itself questions this policy
+(`TCMisc.hs:160-163`): *"XXX Why do we ignore the result when a pred doesn't sat all the
+way? … XXX Can we at least keep any of the substitution?"* Around it, a ring of callers
+deliberately re-solves: `propagateFunDeps` runs a full `satisfy` per application node and
+discards all bindings (`TCMisc.hs:1586-1612`); `defaultClasses` solves everything twice
+(`TCMisc.hs:1394, 1414-1419`); tiExpl runs a three-stage satisfy cascade
+(`TCheck.hs:2426, 2467, 2521`); CtxRed solves every signature's contexts and discards the
+bindings before TCheck solves them again (`CtxRed.hs:405, 428-430`). The same instance
+walk is repeated several times per pred per binding group. §5 inventories all sites.
+
+**Is immediate commitment sound?** Not from the existing flag alone. The `incoherent`
+flag certifies exactly one thing: *no earlier instance in the walk can ever capture any
+refinement of this pred* (a real monotonicity property, §4.1). Three further conditions
+have to hold before "coherent" means "final", and none of them is checked today:
+
+1. **The fundep-mgu half of the match must be stable.** `byInst` matches non-fundep
+   positions one-way but runs full `mgu` on fundep-determined positions
+   (`matchTop`, `TCMisc.hs:750-753`). That half is *not* stable under refinement: a
+   coherent match binding `m := 5` can stop matching when `m` is refined to `6` from
+   elsewhere, and the walk then falls through to a *later, less-specific* instance.
+   Instance admission never compares fundep outputs (`fd_heads`, `MakeSymTab.hs:338`),
+   so pairs with overlapping inputs and conflicting outputs are legal. A traced
+   counterexample exists where today's compiler accepts a program using the later
+   instance and naive immediate commitment rejects it (§4.2). The certificate must be
+   extended to cover the fd component before anything is committed early.
+2. **The walk order must actually be most-specific-first.** Three independent defects
+   currently make the certificate untrustworthy in corners: the PredTrie leaf sort
+   collapses a partial order with `sortBy`, which can leave a less-specific instance
+   ahead of a more specific one with no incoherence flag and no T0128 (§4.3, H6);
+   primitive type functions in instance heads escape both the trie probe and the overlap
+   check (H7); and a pred position holding a *stuck* fully-applied associated type
+   function probes only the ATF's own trie branch, hiding concrete instances it could
+   match after the ATF resolves (H2/B1 — `normT` returns the type with the ATF in place
+   when its class pred doesn't satisfy yet, `TCMisc.hs:883-884`). All three are latent
+   wrong-selection or false-coherence bugs *today*; immediate commitment makes them
+   permanent, and the lift-dictionaries branch's type-keyed dictionary sharing makes two
+   of them cross-package-unsound. They are prerequisite fixes with independent value.
+3. **Instance resolution is not the only resolution mechanism.** `sat` consults the
+   recursion knot and the givens (declared contexts, superclass-closed) before
+   instances, and givens discharge by *syntactic equality* on non-fundep positions
+   (`lookfor`, `TCMisc.hs:678-690`) — a check that can start succeeding only after
+   refinement. Separately, `joinCtxs` (`TCMisc.hs:254-274`) merges two same-class goal
+   preds and commits fundep improvements derivable in no other way. Committing an
+   instance match early can foreclose both (§4.4, §4.5). The design needs a
+   givens-unifiability guard symmetric to the instance flag, and committed preds must
+   remain visible as givens so join-derived improvements still happen.
+
+**What it takes** (full plan in §6): measure first; land the three ordering/probe fixes;
+then extend the coherence certificate (fd-stability + givens check, cheapest form: also
+scan the walk suffix for unifiable instances when the fd-mgu bound pred variables); then
+keep substitutions from certified matches in `sMany` (~10 lines answering the XXX
+directly); then keep bindings and residuals with a residual→original provenance map for
+error reporting; then a scope-stacked committed-binds accumulator so `propagateFunDeps`
+and `defaultClasses` stop re-solving. Each increment is separately testable and
+independently valuable; a hidden `-legacy-defer-instances` escape hatch supports
+bisection.
+
+**What it buys.** Elimination of the dominant rework loops in context reduction (the
+per-apply solve-and-discard, the tiExpl triple pass, defaultClasses' solve-twice); a
+coherence bit per dictionary that is *checked at the source* rather than assumed — which
+`origin/transitive-incoherent`'s T0158 diagnostics consume and
+`origin/lift-dictionaries`' type-keyed dictionary CSE requires for soundness; and a path
+to retiring the CtxRed/TCheck double resolution.
+
+---
+
+## 2. What "commit immediately" means, precisely
+
+Two levels, which this design unifies:
+
+- **Engine level.** Stop discarding the results of certified-coherent matches. Today a
+  coherent match commits immediately *only if* its instance context fully solves on the
+  spot; a partial reduction is thrown away wholesale and redone at every later
+  resolution point. The change is confined to `sMany`'s put-aside branch and the
+  certificate plumbed through `sat`'s return value.
+- **Pipeline level.** Make the commit a first-class event carrying provenance — which
+  instance, coherent or not (and if not, why), which package — so downstream consumers
+  (transitive-incoherence diagnostics, dictionary lifting, unused-import analysis,
+  error rendering) consume one permanent annotated fact instead of re-deriving it.
+
+Explicitly *not* proposed: committing incoherent matches earlier. Deferral-until-coherent
+is today's mechanism for incoherent-disallowed matches and is the correct policy
+(§3.3) — usually the pred resolves because refinement lets the *earlier, more specific*
+instance match outright (pinned by `IncoherentOrder`'s `2\n1` expected output,
+`testsuite/bsc.typechecker/instances/incoherent/`), or because a given becomes equal.
+
+---
+
+## 3. How resolution works today
+
+### 3.1 Predicate creation and accumulation
+
+A `VPred` pairs an unsolved predicate with the `Id` of its future dictionary variable;
+an `EPred` pairs an available predicate with a dictionary expression (`TIMonad.hs`).
+VPreds are minted at scheme instantiation — variables/methods via `freshInstT`/`mkVPred`
+(`TCheck.hs:1757-1762`), constructors (`TCheck.hs:229-232`), field selection
+(`TCheck.hs:2066-2073`), patterns (`TCPat.hs:126, 138`) — plus unification residue
+(`eqToVPred`), ATF expansion (`expTFun`, `TCMisc.hs:221-242`), and instance sub-goals
+inside `byInst` (`TCMisc.hs:641-656`). Critically, **dictionary use sites are emitted at
+creation time**: `iAPs f ts ps = cApply 7 (cTApply f ts) (map (\(VPred i _) -> CVar i) ps)`
+(`TCheck.hs:3163-3164`). Whatever eventually binds the `Id` must lexically enclose all
+uses — this constrains where committed bindings may be flushed (§6, Increment 3).
+
+VPreds are not stored in the monad; they flow up the `tiExpr` tree as return values and
+concatenate at every node. The monad holds the current substitution, bound-tyvar and
+explicit-pred stacks, and the in-flight sat stack. Note the TI monad is reset **per
+top-level definition** (`tiDefns` runs one `runTI` per def, in parallel,
+`TypeCheck.hs:46-51`), so dictionary Ids are fresh only within a `runTI`, not globally.
+
+### 3.2 Resolution points
+
+- **Per application/case node** (fail-fast): `updateContexts`
+  (`ContextErrors.hs:1000-1021`, called from `TCheck.hs:381, 1730`) runs
+  `propagateFunDeps` — a full `satisfy` whose SolvedBinds are discarded but whose
+  substitution is committed (`TCMisc.hs:1586-1612`) — then
+  `earlyContextReduction`/`isReduciblePred`, a second independent instance walk used
+  purely as a satisfiability oracle (`TCMisc.hs:1620-1648`).
+- **Per explicitly-typed binding** (`tiExpl'''`): stage 1 `satisfy eqs (apSub s0 ps)`
+  (`TCheck.hs:2426`); stage 2 `satisfyFV dvs eqs (apSub s rs1)` on survivors, enabling
+  the numeric "last resort" instances (`TCheck.hs:2467`; DVS clauses at
+  `StdPrel.hs:202-230`); stage 3 `defaultClasses` (`TCheck.hs:2521`). Preds mentioning
+  only outer variables are deferred upward (`splitF`, `TCheck.hs:2449, 2489`); leftovers
+  become weak-context / ambiguity / context-reduction errors (`TCheck.hs:2634-2649`),
+  rendered in terms of the **original** preds.
+- **Per implicit binding group** (`tiImpls`): `satisfyFV` (`TCheck.hs:2848`), then
+  `reducePredsAggressive` under `maskAllowIncoherent` (`TCheck.hs:2862-2871`), then
+  `defaultClasses` (`TCheck.hs:2899`); the residue becomes the inferred provisos.
+  Note: this path **already commits partial reductions** (via `satMany'`) — inferred
+  contexts are residualized today, which is the in-tree precedent for Increment 2.
+- **Top level**: `checkTopPreds` (`TypeCheck.hs:122-132`); residue is an error.
+- **Before typecheck**: CtxRed runs `reducePredsAggressive` on every signature
+  (`CtxRed.hs:405`), discards the SolvedBinds, rewrites the signature to the residual
+  context (~`CtxRed.hs:430`), with both `runTI` sites hard-coding `ai=False`
+  (`CtxRed.hs:33, 45`) and a standing "XXX why?" about preserving contexts for
+  typecheck. `.bi`/`.bo` signatures are generated from its output (`bsc.hs:625-627`).
+- **After elaboration**: IExpand re-typechecks reflection expressions from scratch
+  (`IExpand.hs:4945-4953`), as do `ISyntaxCheck.hs:118-119` and
+  `AAddSchedAssumps.hs:225`. These `internalError` **only on failure to resolve — they
+  do not compare the instance choice against the original**, so no runtime safety net
+  exists for selection-stability bugs (verified; relevant to H6/H7/B1 severity).
+
+### 3.3 The engine: sat → reducePred → byInst
+
+`sat` (`TCMisc.hs:286-369`) tries, in order: the recursive knot against the sat stack
+(289-322); the givens and their superclass closure via equality-based `lookfor`
+(327-331); then `reducePred` (344). (When the givens path would introduce numeric
+equalities, the order inverts: instance reduction is tried first and the
+superclass-with-equalities path becomes the `fail` fallback, 332-342 — so `fail` does
+not always mean deferral.)
+
+`reducePred` (526-611) normalizes the pred (`normT`, 534 — which itself runs a full
+`satisfy` for ATF preds, 871-889, and **commits that substitution to the monad** even if
+the enclosing attempt is later discarded), pulls candidates from `genInsts` — a PredTrie
+lookup returning a specificity-ordered superset for user classes
+(`MakeSymTab.hs:999-1001`; `PredTrie.hs:113-136`), synthesized instances for the numeric
+pre-classes (`StdPrel.hs:1098-1105`) — and walks them in order. Each candidate is
+freshened (`newInst`, 668-676: fresh tyvars per candidate per attempt — the unit of
+rework), tried with `byInst` (matchTop: one-way `match` on non-fundep positions, then
+`mgu` on fundep-determined positions, 725-757, taking the **first** fundep row that
+works, `pickJust`), and on failure tested with `predUnify` to accumulate the
+`incoherent` flag (571-573). The first `byInst` success wins; the walk stops there
+(574-585) — instances *after* the match are never examined. The result carries
+`minst = Just head` iff incoherent (584). Header contract: *"the subst we return is safe
+to commit to as long as the instance match isn't incoherent"* (526-528) — where "safe"
+means *consistent if this match is the resolution*, *not* behavior-preserving (§4.2).
+
+Back in `sat`: a coherent match runs `satMany` on the instance context `qs` (349); full
+success commits and records the package use (351-353; the `460aa8cb` precedent for
+moving side effects to the commit point); partial success returns the partial bundle
+(354). An incoherent match is gated by `fromMaybe ai (allowIncoherent c)` (355):
+class-annotated `incoherent` (`Just True`) commits silently; unannotated classes commit
+only under the hidden `-incoherent-instance-matches` flag (default `False`,
+`FlagsDecode.hs:515, 1219-1221`; the only non-`False` `runTI` in the tree is
+`TypeCheck.hs:50`), firing `WIncoherentMatch`/T0126 (364-365); otherwise the bundle is
+discarded (367) and the pred deferred — deferral-until-coherent.
+
+Two callers bypass this gate entirely by calling `reducePred` directly and treating any
+match as decisive: `writeableIfc` (`TCheck.hs:3193-3203`) and `addAutoDeriv`
+(`Deriving.hs:957-977`) — a third, undocumented commitment policy (both carry the
+"incoherent matches are resolved *after* reducePred" comment). Nine further direct
+`reducePred` calls exist in `ContextErrors.hs` (288, 358, 386, 580, 637, 673, 709, 736,
+755), error-path-only, all ignoring the incoherence field.
+
+### 3.4 The discard site
+
+`sMany` (`TCMisc.hs:169-195`): if `sat` returns a non-empty residual list, the original
+pred is put aside and sat's entire result — residuals, binds, substitution — is dropped
+(`((_:_), _, _) | not (vpIsPreClass p) || isJust dvs -> sMany dvs es (p:rs) sbs s ps`,
+188-189). Only pre-class preds under plain `satisfy` keep partial results (165-167,
+which itself asks "is that condition even necessary?"). By contrast the inner `satMany'`
+(441-487) **does** commit partials and grows the substitution monotonically ("anything
+we have learned we can commit to", 451-452), at the cost of a restart loop that re-walks
+*unchanged* residuals too ("horrible running time in the worst case", 477-480 — it
+computes `split_rs` but re-queues everything, verified). So the engine already contains
+both policies; the all-or-nothing one is the outermost, and the code doesn't remember
+why (160-163).
+
+State that survives a "discarded" attempt anyway (i.e., discard is already not clean):
+the tyvar/dict counter; warnings (hence the duplicate T0126 pinned at
+`testsuite/bsc.driver/unused_imports/unused_imports.exp:88-90` — one from the per-apply
+`propagateFunDeps` solve, one from the real `satisfy`; the exp comment's "typecheck +
+ctxReduce" attribution is structurally impossible since CtxRed runs `ai=False`, verified);
+package-use records from fully-solved sub-preds; and **the substitution committed by
+`normT`'s embedded satisfy** (§3.3).
+
+---
+
+## 4. The coherence certificate and its soundness
+
+### 4.0 The assumptions, stated precisely, and their test pins
+
+Ordered-clause commitment is sound only under the following
+assumptions.  Each is stated as the property the code relies on, with
+the mechanism that provides it, the testsuite pin that fails if it is
+violated, and -- where the adversarial verification pass found them --
+the named carve-outs and residual pin gaps.  (Pins live under
+`testsuite/bsc.typechecker` unless noted.)
+
+- **A1 -- Inputs are refined monotonically.**  A predicate's
+  fundep-input positions only become more concrete under the global
+  substitution discipline.  Mechanisms: input positions are matched
+  one-way (`match`/`matchList`, which bind only the freshly
+  instantiated instance head's variables; `byInst`'s `bad_inst_subst`
+  internalError asserts nothing leaks); rigid variables are
+  unsubstitutable (the `mgu` guards and `varUnify` protections); and
+  metavariable bindings, once made, are only trimmed at definition
+  boundaries, not reversed mid-solve.  Monotonicity is necessary but
+  not sufficient for finality: an input-selected clause is final only
+  together with the earlier-unifiable-instance check (A3) and outside
+  the incoherent/legacy carve-outs (A5).  *Carve-outs:* in CtxRed a
+  signature's own variables are deliberately substitutable while it is
+  being reduced (Unify.hs notes this; the bound-var pins are
+  TCheck-level); the tiExpl trim point has a known loose end where a
+  trimmed variable can survive in returned preds untraced
+  (pre-existing, unpinned, on the ledger).  *Pins:*
+  `bound-type-vars` (BoundToCon/BoundToBound fail if the guards are
+  removed; Control1 pins the protected var-var case; BVB/BVC/BVD pin
+  the three rigid-improvement outcomes).
+
+- **A2 -- Matching sees normalized types.**  Query-side, `reducePred`
+  normalizes with `normT` (synonyms expanded; ATFs resolved WHEN their
+  defining pred is satisfiable -- `normT` has a bail path that leaves a
+  stuck ATF in place, which is why stuck-ATF query keying must be
+  conservative).  Instance-side, keys see `expandSyn` only (no TI monad
+  at symtab build); ATFs are instead banned from non-determined head
+  positions (`checkNoTypeFunInHead`).  Prim-TFun and stuck-ATF heads
+  are keyed to the catch-all branch so every query and overlap probe
+  sees them (`PredTrie.hs`: `predTrieKey`, `stableHeadTyCon`,
+  `mkQueryElem`).  *Pins:* `instances/commit/SynonymInput` (a synonym
+  input selects the clause its expansion selects);
+  `instances/order/TFunHead` (declaration-time overlap sees prim-TFun
+  heads, both index implementations).  *Pin gaps, known:*
+  `instances/order/StuckATF` is an invariant guard, not a live-path
+  pin (surface syntax expands ATFs before resolution, so the TIatf
+  keying branches are unexercised by it, and it runs under the trie
+  index only); the use-site visibility of TFun-headed instances
+  through the catch-all branch is exercised organically by the
+  Prelude's tuple-machinery builds rather than by a named pin.
+
+- **A3 -- The walk enumerates every candidate, most specific first
+  within a leaf.**  The trie returns, for a query, the union of the
+  matching concrete branch and the catch-all (Nothing) branch at each
+  level; each leaf is ordered by a topological sort of the strict
+  specificity edges.  Between incomparable instances the order is NOT
+  specified (the sort is not stable; do not rely on declaration
+  order), and cross-branch order is a property of trie traversal
+  (concrete branch before catch-all; concrete branches among
+  themselves in TyCon order) -- documented here as observed behavior,
+  not design intent.  Commitment relies only on: all candidates
+  visible, and no strictly-more-specific candidate after a
+  less-specific one.  *Carve-out:* the legacy index
+  (`-legacy-inst-index`) exempts auto-derived Generic instances from
+  overlap checking and ordering, for performance.  *Pins:*
+  `instances/order/LeafOrder`, `LeafOrderChain` (partial-order leaf
+  sorting, both index implementations);
+  `instances/commit/CrossBranch` (the catch-all is reachable through
+  the Nothing branch, and specific clauses are walked before it --
+  kills the two trie mutations the verification pass showed the leaf
+  pins alone would survive).
+
+- **A4 -- A unifiable given blocks commitment of a partial
+  reduction.**  When an instance reduction leaves residual subgoals,
+  the committable gate asks whether any in-scope given (all frames,
+  via `getExplPreds`) could discharge the predicate whole, judged
+  MODALLY (unguarded unification: rigid variables are instantiable and
+  outer frames quantify over distinct ones); if so, the reduction is
+  abandoned and the predicate deferred whole.  A FULL discharge does
+  not consult givens: the dictionary exists, and by coherence any
+  given evidence must agree with it.  Numeric-class predicates are
+  exempt (they settle at the definition's settlement point instead of
+  deferring to givens).  The pool-reuse guard mirrors the same modal
+  judgment before letting a pooled dictionary discharge a predicate a
+  given could claim.  *Pins:* `instances/commit/GivenBlocksCommit`
+  (identical-variable half: the matched catch-all's unresolvable
+  subgoal must not be stranded); the modal (distinct-variable,
+  outer-frame) half is pinned organically by the Prelude build --
+  `PrimDeepSeqCond`'s method chain fails exactly here if the judgment
+  is made guarded.
+
+- **A5 -- Fall-through on output conflict is licensed by declared
+  intent, and such matches are marked.**  Two hatches license the
+  conflict-path fall-through: the per-class `incoherent` annotation,
+  and globally the `-legacy-defer-instances` flag (which restores the
+  old skip unmarked and disables the pool) or the hidden
+  `-incoherent-instance-matches` flag (which extends fall-through to
+  unannotated classes, with a `WIncoherentMatch` warning).  A
+  fall-through match is marked information-dependent and marked
+  matches are never pooled (`markIncoherent`; `extractClosures`
+  refuses marked closures).  Note the legacy flag does not gate the
+  earlier-unifiable coherence accumulator itself.  *Pins:*
+  `instances/commit/IncoherentFallThrough` (annotated class falls
+  through, no flag; also run under the legacy hatch) vs
+  `instances/commit/LegacyHatch` (unannotated class: T0159, then
+  fall-through under the hatch); `coverage/UncovInc` pins only the
+  T0160 silencing (its sole instance commits coherently -- it does not
+  exercise fall-through).  The never-pooled sub-claim is pinned
+  organically by `bsc.bugs` b1326/ERulesMux2a, which regressed when it
+  was first violated; no purpose-built pin observes pool reuse
+  directly.
+
+- **A6 -- A committed clause's failing proviso is a final error.**
+  Once inputs select a clause of a coherent class, an unsatisfiable
+  context is an error; there is no later-clause retry.  The error
+  names the user-written predicate (primary position: the enclosing
+  definition) and the instance's concrete leaf obligation, with the
+  use site in the implied-at list.  (The message is reconstructed at
+  report time by `findReducedPreds`; finality itself is pinned by
+  LegacyHatch's T0159, not by this message.)  *Pins:*
+  `instances/commit/CommitAncestry` (message shape);
+  `instances/commit/LegacyHatch` (no fall-through).
+
+- **A7 -- Clause selection is input-driven; outputs decide
+  satisfiability, not selection.**  For coherent classes a demanded
+  output never chooses a different clause (an output conflict at the
+  selected clause is final -- T0159), while fundep outputs are
+  COMPUTED freely: a clause with no earlier-unifiable competitor and
+  no unifiable given commits with its output positions still
+  metavariables, binding them by improvement.  (Within a multi-fundep
+  clause, row arbitration does consult outputs: a row whose outputs
+  unify defeats a row whose outputs conflict.)  A later-in-order
+  unifiable instance does not block commitment -- ordered-clause
+  semantics is first-match.  *Pins:* `instances/commit/LegacyHatch`
+  (negative half); `instances/commit/OutputDetermined` (full-solve
+  path) and `instances/commit/PartialOutputCommit` (coherent-partial
+  path: output committed while the clause's own context is still
+  undischarged).
+
+- **A8 -- Unorderable overlap is rejected at declaration.**  The
+  overlap check compares, per fundep row, the INPUT projections of
+  instance heads: pairs whose input projections are orderable are
+  clauses (full-head overlap through determined positions is
+  deliberately admitted -- that is what ordered clauses mean); equal
+  input projections are duplicate instances (T0099); unorderable
+  overlapping projections are T0128.  The check does not consult the
+  incoherent annotation (annotated classes get the same declaration
+  discipline; their exemption is at resolution, A5).  *Carve-outs:*
+  the legacy index skips the check for auto-derived Generic; all pins
+  declare both instances in one package, so cross-package overlap
+  detection is unpinned.  *Pins:* `instances/OverlapOrtho2`,
+  `OverlapOrtho3`, `OverlapSharedDim`; `instances/order/TFunHead`;
+  duplicates by T0099 in `instances`.
+
+- **A9 -- Reporting stays anchored to user-written predicates.**
+  Reductions carry ancestry (attached in `byInst` on every match);
+  `reportedPwp` reports the root-most non-numeric-class entry with
+  position merging (numeric chains deliberately report the residual
+  arithmetic, not the class-level root), and `findReducedPreds`
+  recomputes the concrete leaf obligation at report time.  *Pins:*
+  `instances/commit/ChainAncestry` (two-layer chain, ground leaf) and
+  `instances/commit/WeakChainRoot` (open residual: rooted as the
+  user-written L1, its reduced L2 shown as the dependency).  *Known
+  gaps, on the ledger:* ATF-minted companion predicates carry empty
+  ancestry; the ambiguity-error path prints residuals unrooted; the
+  weak-context (T0030) rooting path has no dedicated pin.
+
+Severity: violations of A1-A3 make commitment select wrong instances
+silently; A4-A5 violations foreclose legitimate resolutions or freeze
+information-dependent choices; A6-A9 degrade only reporting.  The
+first two groups are correctness assumptions and their pins are
+acceptance tests; the last is quality and its pins are message
+comparisons.
+
+### 4.1 What is actually monotone
+
+Two halves of the existing computation are genuinely stable under refinement (verified
+against `Unify.hs`):
+
+- **Match stability, non-fundep half.** One-way `match` binds only instance-head
+  variables (`Unify.hs:130-142`), and `newInst` freshening guarantees the head's
+  variables are disjoint from the pred's. If `matchList h ts = Just σ₀`, then for any
+  pred-side substitution `s`, `s∘σ₀` witnesses `matchList h (s ts)` — pred-side
+  constructors only get more concrete, `merge` consistency is preserved (including
+  non-linear heads), kind side-conditions are substitution-invariant.
+- **Earlier-unifier monotonicity.** `predUnify` failure (`TCMisc.hs:613-616`) is stable
+  under one-sided refinement: a pair with no unifier has no common substitution
+  instance, so no refinement of the pred can make that earlier instance match. Bound
+  tyvars and numeric kinds make `predUnify` *permissive* (`Unify.hs:40-41, 56-76`), which
+  can only over-flag incoherence — blocking early commitment, never falsely certifying.
+
+So: *no earlier instance can steal a coherent match*. That is all the current flag says.
+
+### 4.2 Hole F1 — the fundep-mgu half is not stable (blocks naive commitment)
+
+A `byInst` success is match-on-inputs **plus `mgu` on fundep-determined outputs**
+(`matchTop`, `TCMisc.hs:750-753`). The mgu half can bind *pred-side* variables — that is
+the fundep improvement `fd_subst` — and it is not stable: `mgu m 5` succeeds while
+`mgu 6 5` fails (`Unify.hs:59-60, 74-75`). A coherent match can therefore *stop
+matching* when the pred's output position is refined from elsewhere, and today's
+retry-from-scratch then falls through to a **later, less-specific** instance. Nothing
+prevents this: instance admission and ordering compare input positions only (`fd_heads`,
+`MakeSymTab.hs:338`; `orderInstHead`, `MakeSymTab.hs:291-358`), so instance pairs with
+overlapping inputs and conflicting outputs coexist legally.
+
+Counterexample (now a regression test, `testsuite/bsc.typechecker/instances/order/
+FdStability.bs`, which pins the acceptance below under both index implementations):
+
+```
+class C x n | x -> n where cm :: x -> Bit n
+instance (D a) => C (Maybe a) 5 where ...   -- A, more specific
+instance C x 6 where ...                    -- B, catch-all
+class C2 x n | x -> n where c2 :: x -> Bit n
+instance C2 Bool 6 where ...
+
+h :: Bit a -> Bit a -> Bit 6
+foo :: Maybe t -> Bool -> Bit 6
+foo x b = h (cm x) (c2 b)     -- preds: [C (Maybe t) m, C2 Bool m]
+```
+
+Today: `C (Maybe t) m` matches A with `incoherent = False` and `fd_subst {m := 5}`, but
+the subgoal `D t` doesn't reduce, so `sMany` discards everything including `m := 5`;
+`C2 Bool m` commits `m := 6`; the re-queued `C (Maybe t) 6` now fails A on the fd-mgu
+(5 ≁ 6) *and* fails `predUnify` against A (distinct literals), so **B matches and the
+program compiles with B's dictionary**. Under naive immediate commitment, `m := 5` is
+burned in at the first attempt and the program is rejected. Gating on "no deferred
+numeric equalities" does not help — here the fd-mgu binds directly, with no `num_eqs`.
+
+Two important qualifications, established empirically after the first draft of this
+note:
+
+**This is not a semantically coherent match, and the flag's word "coherent" is
+one-sided.** The flag certifies only that no *earlier* (more specific) instance
+unifies; B — walked later — unifies with the pred all along (`x := Maybe t`,
+`m := 6`), so the choice of A was contested at match time. The walk-order argument
+("anything after the match is not-more-specific, first-match-wins") is sound only for
+the input positions, where matching is one-way and refinement-stable; fundep *output*
+positions participate in `byInst` matching via `mgu` and are exactly where a later
+instance can take over.
+
+**Today's compiler already commits this contested improvement whenever the instance's
+context fully solves, with order-dependent acceptance.** Verified: with the same
+instances but A given an empty context, `foo x b = h (cm x) (c2 b)` is **rejected**
+(T0031: no instance `C2 Bool 5` — A full-solves first and commits `m := 5`), while
+`foo x b = h (c2 b) (cm x)` **compiles** (C2 commits `m := 6` first; A then fails the
+fd-mgu and the walk falls through to B). Same program modulo argument order. So the
+instability is not a hypothetical about future commitment; `sat`'s full-solve path
+exercises it today, and the discard-and-retry policy merely hides it for partial
+reductions.
+
+**Comparison with GHC** (verified against GHC 9.4.7):
+
+- GHC **rejects the instance pair at declaration** — "Functional dependencies conflict
+  between instance declarations" — by the fundep *consistency condition*: any two
+  instances whose input types unify must have outputs equal under that unifier.
+  `OVERLAPPING`/`INCOHERENT` pragmas do not lift the check. The bsc pair A/B is
+  unrepresentable in GHC.
+- The sanctioned GHC encoding of a "default output" moves the output into an equality
+  context (`instance {-# OVERLAPPABLE #-} (n ~ Int) => TC x n`), which passes the
+  consistency check. Under that encoding GHC does **not** fall through on output
+  conflict: instance selection considers the declared head (and overlap pragmas), a
+  selected instance's fundep improvement is committed immediately, and a later conflict
+  is a type error at the sibling constraint — not a trigger for re-selection. GHC's
+  solver is, however, also order-sensitive in acceptance on this shape (the analog of
+  the swapped `foo` compiles because the sibling's improvement lands first and the
+  specific instance's head no longer matches), with opposite polarity to bsc.
+- The structural difference: bsc's `byInst` treats a fundep-output mismatch as "no
+  match, try the next instance" (`matchTop`, `TCMisc.hs:750-757`), which is what buys
+  the default-instance idiom (A = specific output, B = fallback output) that GHC
+  forbids — at the price that instance *selection* can flip on output refinement.
+
+**Consequence.** The certificate needed for immediate commitment is stronger than the
+existing flag:
+
+> A match is *committable* iff (a) no earlier instance unifies with the pred
+> (existing flag), **and** (b) the fd component is stable — either the fd-mgu bound no
+> pred-side variables and produced no numeric equalities, **or** the walk, continued
+> past the match, finds no later instance that unifies with the pred either.
+
+Condition (b) is precisely "commit an output-improving match only when it is the
+unique unifiable candidate" — the resolution-side coherence rule GHC applies to *all*
+instance selection, restricted here to the improving case. Weaker rules do not work:
+"never commit an improving match" (defer while any output position is still
+refinable) is sound but breaks the load-bearing sole-instance case — `Bits (UInt 8) n`
+**must** commit `n := 8` from `instance Bits (UInt k) k` while `n` is still free, and
+there the certificate is trivially satisfied (no other `Bits` instance unifies with
+input `UInt 8`, so the suffix scan is empty). And the trigger cannot be "no *pred*
+mentions the position" — improvement also arrives by plain unification later in the
+same definition. In the example, B unifies with `C (Maybe t) m`, so the match is
+correctly deemed non-committable and deferred, preserving today's acceptance.
+
+Two further consequences of the certificate worth deciding deliberately:
+
+- Applying it **uniformly, including to full solves**, would fix the order-dependence
+  demonstrated above (both argument orders would defer A's contested improvement,
+  resolve `m := 6` via C2, fall through to B, and compile) — an acceptance *increase*
+  on programs that currently error in one order, and a semantic cleanup independent of
+  the commitment work. It changes the behavior of currently-rejected programs only.
+- Note `reducePredsAggressive`/`satMany'` **already commit partial fd_substs today** on
+  the tiImpls and CtxRed paths — the hazard exists in-tree; the certificate is the fix
+  for those paths too, not just a prerequisite for new behavior.
+
+### 4.2b The stronger principle: output positions never allow or bar a match
+
+The certificate above works around the instability; the principle that *removes* it is:
+instance selection should be driven by input positions only, with fundep outputs as
+consequences of selection — an output conflict after input-selection is a fundep-conflict
+type error, never a trigger to try the next instance. Under this rule matches are stable
+under refinement by construction, so **flag-coherent ⇒ committable with no suffix scan**,
+and the demonstrated order-dependence resolves to consistent (order-independent)
+rejection. This is GHC's model at the resolution level.
+
+**Empirical census of the current veto** (instrumented `matchTop` to trace every
+inputs-matched-but-fd-mgu-failed event; ran the full standard-library build and the
+entire `bsc.typechecker` suite):
+
+- Standard library: **2 events**, both the identity instance `ToGet (a) a`
+  (`GetPut.bs:503`) probed during signature-context reduction with rigid distinct
+  parameters. The deferral outcome is independently ensured by the incoherence flag
+  (the more specific `ToGet (Get a) a` etc. unify with the pred and flag the identity
+  match incoherent); the veto is a redundant second guard.
+- Testsuite, passing tests: all events are the same **catch-all-input idiom** —
+  `WrapMethod a (Bit n)` (`Prelude.bs:4714`, class `WrapMethod m w | m -> w`) probed
+  *backward* by GenWrap (wrapper type known, method type free), plus `ToGet (a) a`.
+  In every case prefix instances unify with the free/rigid input and the incoherence
+  flag defers the catch-all match; the veto never decides alone.
+- Testsuite, failing tests: numeric/size conflicts (`Mul 8 1 8` vs pred `Mul 8 1 7`,
+  `Bits (Int 6) 5`, `PrimIndex (Bit 5) 32`, `SizedLiteral`, `Select`) — programs that
+  are invalid regardless; the veto merely relabels the failure, and today's message
+  ("no instances of the form `Mul 8 1 7`") is factually misleading where a
+  fundep-conflict message would be exact.
+- **One organic fall-through success** (initially mis-attributed in this census as a
+  WrapMethod-style guarded case): the pipeline typeclass example
+  (`testsuite/.../typeclasses/examples/pipeline/Pipeline1.bsv`) uses the
+  **coerce-wrapper idiom**: `SeriesPipeline`'s function-headed instance determines a
+  canonical `BuriedPipeline` output, and a catch-all instance coerces to *any demanded
+  output* via a `CoercePipeline` proviso.  A use demanding a non-canonical output
+  relied on the function-headed instance's output conflict to fall through to the
+  coercing catch-all — instance selection directed by the demanded output, by design.
+  This is exactly what the ordered-clause semantics forbids (and the instance set
+  violates GHC's consistency and coverage conditions outright).  Notably, the test
+  driver already carried the comment "the typeclass instances break the stated
+  dependency requirement; why doesn't BSC catch this?".  No stdlib code uses the
+  idiom.  Everything else in the corpus is as described above.
+
+**GHC comparison, extended**: GHC's consistency condition rejects not only the
+FdStability pair but **bsc's own Prelude idiom** — verified:
+`instance ToGet a a` + `instance ToGet (Get a) a` is a "functional dependencies
+conflict" in GHC 9.4.7. The catch-all-with-different-output-shape instance set is
+bsc-specific expressiveness, and what actually makes it work is the incoherence-flag
+deferral, not the veto. Consequently GHC's admission-time rule is **not adoptable** for
+bsc as an error (it would reject the standard library); at most a warning.
+
+**Adopting the principle would require**:
+1. `matchTop`/`byInst`: on input-match, an fd-mgu failure becomes a reported
+   fundep-conflict (new error, replacing the misleading "no instances of the form"
+   text in those cases), not a skip. Numeric pre-class conflicts get the same message
+   upgrade; expected-output churn in the error suites.
+2. The incoherence flag becomes the *sole* guard keeping catch-all-input instances
+   (`ToGet (a) a`, `WrapMethod a (Bit n)`) from capturing preds with unresolved
+   inputs. The census shows it already does this everywhere the veto fires in valid
+   code, but it must be pinned with tests — and note it currently rests on `mgu`'s
+   permissive binding of bound star-kind type variables (`Unify.hs`, the unguarded
+   `TVar` clause): a future "fix" tightening that would silently break the idiom.
+3. A joint-row definition for multi-fundep classes: a candidate is an instance where
+   *some* fundep row's inputs match; a veto on one row shadowed by an input mismatch
+   on the mirror row is an ordinary non-match (`pickJust` already behaves this way);
+   the conflict-error applies only to the selected candidate.
+4. FD-inconsistent pairs (FdStability's shape) change from order-dependently-accepted
+   to always-rejected — the census found none in the wild; an admission-time *warning*
+   would surface any in user code before the switch.
+
+Under the principle, the committability certificate of §4.2 reduces to the existing
+(input-restricted) flag, and the remaining §4 requirements (givens, joinCtxs) are
+unchanged.
+
+### 4.2c Implementation status (landed)
+
+The ordered-clause semantics is implemented and **on by default**: `matchTop`
+distinguishes input mismatch from determined-position conflict, and `reducePred`
+stops on a conflict instead of falling through (given-discharge via `lookfor` is
+unchanged).  `-legacy-defer-instances` (hidden) restores the previous policy.
+Results: the full `bsc.typechecker` suite is green (1211 passes, 0 unexpected
+failures) with three deliberate test changes — `FdStability` and the new `FdOrder`
+pin consistent rejection (the order-dependence of §4.2 is gone), and the pipeline
+example's `Tb1.bsv` flips to compile-fail, answering its own XXX comment.  The
+standard library builds unchanged (the `ToGet (a) a` / `WrapMethod a (Bit n)`
+idioms are guarded by the incoherence flag, as the census predicted) and build
+time is unaffected.
+
+**Commitment of coherent partial reductions is implemented and on by default**
+(disabled along with the ordered-clause semantics by `-legacy-defer-instances`):
+`sat` reports whether a partial reduction came
+from a committable coherent match (checking the whole explicit-pred stack for
+unifiable givens — the §4.4 guard), and `satisfy`'s `sMany` then keeps the bindings
+and substitution and continues with the residual goals, answering the XXX at the old
+TCMisc.hs:160-163.  Two findings gate the default:
+
+1. **Diagnostics**: with commitment on, unresolved-context errors report residual
+   goals instead of the original predicate — e.g. a missing `Bits` instance
+   (`deriving/NoDerive.bs`) reports the Generic-representation residuals
+   (`Add 1 a__ b__`, ...) instead of "requires `Bits Test`", and the curated BVI
+   port diagnostics (T0134) degrade to generic T0031 — because the specialized
+   error handlers key on unreduced predicate shapes.  Note the tracking itself is
+   NOT missing: residuals already inherit the root predicate's source positions
+   (`byInst` adds the parent's positions, so the degraded messages still point at
+   the right source lines), and the root predicate itself is recoverable from the
+   committed SolvedBinds (the residual's dictionary variable appears in the
+   `freeVars` of the committed bind, whose Type field is the root predicate; chase
+   transitively for nested commits — the same closure `computeTransitiveIncoherent`
+   performs on the `transitive-incoherent` branch).  What is missing is only
+   reporting-side: a SolvedBinds-walk helper in ContextErrors that maps each
+   unresolved residual to its root predicate, so the shape-keyed handlers
+   (T0032/T0060/T0134) dispatch on the root and the generic messages can say
+   "arising from <root>".  That is the (modest) prerequisite for flipping the
+   default.
+2. **Acceptance rarely changes, and commitment alone is work-neutral**: the
+   existing retry machinery converges to the same answers once refinement lands,
+   so no new programs are accepted (attempts to construct an acceptance-win case —
+   circular improvement dependencies — were absorbed by the retry loop).  Measured
+   work (newInst freshenings per compile, commit-off vs commit-on):
+   FloatingPoint.bsv 20132 → 19191 (−4.7%), BRAM.bsv 11079 → 11193 (+1%),
+   Vector.bs 1899 → 1942 (+2%).  The savings from avoiding sat-internal retries
+   are offset by duplicate preds re-expanding their residual trees (no dictionary
+   sharing yet, see below), and the dominant rework — per-apply
+   `propagateFunDeps`, the tiExpl satisfy/satisfyFV/defaulting cascade, CtxRed's
+   re-solve (§5 inventory rows 3-9) — happens in the callers and is untouched by
+   commitment.  The expected "less work" payoff arrives with the single-solve
+   architecture (Increment 3) and committed-dictionary sharing, for which
+   commitment is the enabling substrate: a committed pred is final, so those
+   stages can stop re-deriving it.
+
+Also discovered: making a later equal pred discharge against a committed
+dictionary (the §4.5 given-visibility idea) violates SolvedBinds' merge-order
+invariant ("new must not depend on old"); sharing committed dictionaries needs
+dependency-ordered emission (`getNonRecursiveDefls` topological sort) first.
+
+**Both are now implemented.**  The merge-order invariant was an artifact of
+maintaining Cletseq order by construction (byInst mints fresh subgoal ids, so
+references always point from chronologically older bindings to newer ones and
+reverse-chronological accumulation is automatically topological); the actual
+requirement is only topological order at emission, and the dependency graph
+stays acyclic even with sharing (a rhs only references ids that exist when it
+is built and is never mutated afterward).  `<++` is now plain accumulation and
+emission normalizes: non-recursive bindings that transitively reference
+recursive ones are promoted into the Cletrec group, and the rest get a stable
+topological repair (input already in dependency order — the no-sharing case —
+is emitted unchanged).  Dictionary sharing then threads a `solved :: [EPred]`
+list through `sat`/`satMany`/`satMany'` and satisfy's `sMany`: every solved or
+committed non-numeric pred is recorded as `EPred (CVar dictId) pred`, `sat`
+consults the list for discharge (after the givens), and each call returns the
+updated list so dictionaries solved inside one goal's reduction subtree can
+discharge equal preds in a sibling's.  Adoption follows the bindings: a branch
+that discards a reduction's SolvedBinds also discards its solved entries, so
+the list never references a dictionary that is not emitted.  Crucially the
+solved list is *excluded* from the committable guard: a given blocks
+commitment because it is evidence not derivable from instances, whereas a
+solved dictionary is itself instance evidence and cannot contradict the
+instance choice (consulting it there would turn unifiable-but-unequal
+committed facts into spurious residuals).
+
+Measured (newInst calls): AlignedFIFOs 2323→2322, FloatingPoint 19191→19103
+(−0.5%); compile time unchanged.  Most equal preds in one satisfy batch were
+already deduplicated up front by `joinNeededCtxs`, so intra-pass sharing has
+little left to collect; the substantial duplication is *across* satisfy passes
+and definitions (§5 rows 3-9), which is Increment 3's single-solve territory —
+this change is its enabling substrate and removes the ICE that blocked any
+cross-reference to earlier dictionaries.
+
+**Increment 3, first bite: the solved-dictionary pool.**  `propagateFunDeps`
+no longer discards its work.  Fully solved *ground* predicates are deposited
+into a TI-state pool (`tsSolvedPool`/`tsPoolSbs`): the entry's transitive
+binding closure (extracted from the pass's SolvedBinds; roots whose closure
+touches an unsolved residual are refused) is held for emission with the
+enclosing binding group's letseq, the predicate is dropped from the flow (its
+dictionary is now permanently bound — returning it would double-bind the id),
+and `sat` consults the pool right before walking instances, so the same ground
+pred solved at a later apply node — or in the final generalization-time
+satisfy — is a list lookup instead of a re-derivation.  Pool frames are
+pushed/popped around `tiExpl'''`, `tiImpls`, and `topExpr`, whose emitted
+letseqs scope over the whole group body including nested groups; entries die
+with their frame, and thrown errors restore the state wholesale.  Grounding is
+the key soundness restriction: a ground pred can never match incoherently
+(from ground inputs, unification with an instance head *is* matching, so an
+earlier unifiable instance would have been selected), is substitution-proof,
+and cannot interact with generalization — so pooling never freezes an
+information-dependent choice.  Consults are guarded like the committable
+check: a pool hit is refused while any in-scope given unifies with the
+predicate.  Two subtleties surfaced during validation:
+
+- *Qualifier scoping* (caught by the stdlib build — unbound `_tcdict` in
+  Clocks.bsv — and 17 suite failures): qualifier code (interface ready
+  conditions, `when` filters) is emitted *outside* the group's dictionary
+  letseq — IConv evaluates it in the scope where the definition is bound — so
+  its predicates must defer upward as before; `tiQual` runs under
+  `withoutPoolDeposits`, which suppresses deposits (but not consults) during
+  qualifier checking.
+
+- *Given independence* (caught by NonDeferredInnerContext_NoInstance
+  starting to compile): `propagateFunDeps` solves against givens from ALL
+  enclosing levels, but an explicitly-typed definition's final solve may use
+  only its OWN context plus instances.  A pooled entry derived from an outer
+  given would carry that evidence into nested definitions not entitled to it,
+  and acceptance would depend on whether an earlier apply node happened to
+  route the pred through propagateFunDeps — position-dependent acceptance,
+  exactly the class of behavior this branch exists to remove.  So pool
+  entries must be pure instance derivations: a closure that references any
+  in-scope given's dictionary is refused (the same forbidden-set mechanism
+  that refuses incomplete closures).  Nothing measurable is lost —
+  given-derived solves are lookups, not instance walks.
+
+Measured with the pool (newInst calls): AlignedFIFOs 2323→2125 (−8.5%),
+FloatingPoint 19191→16964 (−11.6%); stdlib build time flat.  (An earlier
+draft blamed a "CtxRed/tiExpl double-typecheck" for remaining re-derivation;
+that was wrong — CtxRed re-solves signature contexts only, not definition
+bodies.)
+
+**Non-ground pool entries.**  The grounding restriction is then lifted, with
+each of its three implicit guarantees replaced by an explicit mechanism:
+
+- *Coherence*: non-ground preds CAN match incoherently, so the dormant
+  `markIncoherent` hook now fires on the incoherent path in `sat`, and
+  `extractClosures` refuses any closure passing through a marked binding —
+  purity is inductive (external references are givens, already excluded;
+  pool entries, pure by this same rule; or top-level instance ids).
+- *Substitution currency*: entries carry live unification variables, so the
+  pool is snapshotted per satisfy pass (`apSub s0` at `satisfyEx`) and
+  threaded through the pass with the same incremental-substitution
+  discipline as the intra-pass solved list; a stale entry could otherwise
+  silently mis-improve a fundep output through the composed substitution.
+- *Generalization*: non-ground entries are frame-local
+  (`tsSolvedPoolNG`, hidden by `pushSolvedPool` from nested frames), because
+  a nested definition could generalize over an entry's free tyvar while its
+  dictionary stays monomorphic in the enclosing frame; ground entries remain
+  visible everywhere.
+
+A fourth mechanism was forced by a validation failure (free `KNum` tyvar
+surviving into ZBus.bsv's emitted code, T0035): `tiRecoveringFromError` —
+which wraps every `action..endaction` block and rule — trims all tyvar
+mappings created inside the block on success and force-substitutes only the
+*returned value*.  A pool binding deposited inside the block, whose tyvar
+was resolved inside the block, kept the raw var while its mapping was
+destroyed.  The recovery's success path now forces the pre-trim substitution
+into the pool state as well (`apSubSolvedPool`), exactly symmetric with the
+returned value; vars still free at the boundary have no mapping to lose and
+resolve later as usual.
+
+The incoherence marking earns its keep here: `TwoLevel Bool v` (a partial
+application, second argument not yet seen) matches the catch-all of an
+`incoherent` class, is marked, refused by the pool, kept flowing, and
+re-resolves to the Bool-specific instance once `v` is known — pooling it
+would have frozen the catch-all.
+
+Measured with non-ground entries (newInst calls): AlignedFIFOs 2323→2105
+(−9.4%), FloatingPoint 19191→13128 (−31.6%).
+
+**Full-suite hardening: deposit and discharge are now separate decisions.**
+The definitive full-suite run surfaced two real holes in the original
+deposit-and-drop policy (both found as the only genuine regressions among
+18k+ tests, and both instances of the same principle: a predicate may leave
+the flow only when nothing about it can still change):
+
+- *Stuck type functions* (b1326, an acceptance flip): `propagateFunDeps`
+  solves predicates in raw form, so `Literal (Bit (SizeOf t))` "solved"
+  with the stuck application treated as an opaque constant -- a strictly
+  weaker goal than the definition-level solve faces after `expTConPred`
+  splits it into the rewritten predicate plus the defining obligation
+  `Bits t sz`.  Deposit-and-drop meant the obligation was never created:
+  a definition missing its Bits proviso compiled, then ICE'd in codegen
+  at an unsatisfiable instantiation.  Candidates whose types mention any
+  type-function application are now refused outright (also keeping stuck
+  applications out of emitted code).  Relatedly, `byInst` records the
+  defining predicates `expTConPred` mints for *subgoal* types as
+  `addBindDeps` semantic dependencies -- the numeric-equality
+  (b675/`addBindDeps`) hole one level down.
+- *Metavariables* (ERulesMux2a, an ICE replacing a deliberate G0070):
+  dropping a predicate with free unification variables removes it from
+  every future join and defaulting set; a variable whose only carrier
+  predicates were dropped -- the module-monad variable of an
+  array-of-modules -- is never improved at all, and the pooled evidence
+  carries the raw `* -> *` variable into emitted code (`rmFreeD`).
+
+The certificate for leaving the flow is now CLOSED: no free unification
+variables -- rigid signature-bound variables are pinned by their binder
+and do not count -- no type-function applications, and not already
+pooled.  Closed new predicates deposit and drop as before.  Everything
+else -- open (metavariable-bearing) predicates and duplicates of
+existing entries -- keeps flowing and is NOT pooled.  Symmetrically, a
+consult may only discharge a CLOSED predicate: discharging an open one
+removes it from the flow just as dropping would (validation caught a
+kept predicate being discharged against its own pooled copy one pass
+later).
+
+Two more aggressive variants were designed, implemented, and DISABLED
+behind XXXs after the full-suite run found emission-scope violations
+(cross-letseq dictionary references, `ISyntaxCheck.findT`) that
+resisted localization: (a) pooling an open predicate's derivation as an
+*alias* -- the closure under wholly fresh ids
+(`SolvedBinds.renameBinds`), emitted only if a consult uses it
+(`tsPoolUsedNG`), while the original keeps flowing; (b) dropping a
+closed duplicate with an alias binding to the existing entry.  The
+mechanisms remain in SolvedBinds/TIMonad for the follow-up; re-enabling
+either requires solving the letseq-scoping story for evidence that
+crosses binding groups.  The pool is an unforgiving design: every
+invariant (frame scoping, given-independence, coherence marking,
+substitution currency, closure completeness, freeVars fidelity,
+emission ordering) must hold simultaneously, and each miss is an ICE or
+an acceptance change, not a lost optimization.  Qualifier checking now
+hides the pool completely (consults included -- qualifier code is
+emitted outside the group's letseq, so a pool discharge there would
+reference an out-of-scope dictionary).
+
+Bound-variables-count-as-closed is what preserves the measured win:
+polymorphic library bodies spend most of their solving on predicates
+over the signature's rigid variables plus concrete types.  Re-measured
+(newInst calls, control → hardened pool): FloatingPoint 19191 → 13237
+(−31.0%, vs −31.6% before the soundness fixes); AlignedFIFOs
+2323 → 2173 (−6.5%, vs −9.4%) -- the give-back is confined to genuine
+metavariable discharges, which were the unsound part.  Error-reporting reductions run
+with the pool hidden entirely (`withoutSolvedPool` in `findReducedPreds`)
+and the weak-context "could also be deduced from" hint reduces
+self-contained (no internally-deferred givens), so diagnostics show the
+complete story independent of solve history; rooted reports also carry
+the residual's accumulated source positions.  Finally, fail-fast context
+reduction (`earlyContextReduction`) now defers to the definition-level
+report when neither the site nor the predicate has a source position:
+commitment moves some failures from the definition-level check (which
+knows the definition's name and position) to a fail-fast probe inside
+generated wrapper code (which knows neither), and failing fast with
+"Unknown position" is strictly worse than the terminal backstop's
+report.  The deferred predicate cannot escape: it is irreducible, so
+nothing downstream can discharge it.  (Net effect on the noinline
+tests: the pre-existing positionless T0031 became a T0043 rooted at the
+exact method position, alongside the restored definition-level T0043.)
+
+`incoherent`-annotated classes **retain the legacy fall-through**: the annotation
+is the user's declaration that the class's resolution is not a function of its
+inputs (the `Has_tpl_n` tuple machinery is provably not one — a nested tuple can
+satisfy the same input shape with different outputs depending on what is known),
+so the ordered-clause discipline applies only where coherence is promised.  The
+conflict path uses the same gate as incoherent-match commitment
+(`fromMaybe ai (allowIncoherent c)`), so `-incoherent-instance-matches` also
+restores fall-through globally.
+
+Open follow-ups: (i) DONE -- predicate ancestry (each residual carries the
+predicates it was reduced from, with their positions, inert to solving-time
+substitution) is threaded from byInst through error reporting, which reports
+the root-most non-pre-class entry of each unresolved chain: the curated
+class-keyed diagnostics (T0032/T0060/T0134 etc.) fire on the root as before,
+purely numeric chains keep the normalized residual, and a fallback reports
+residuals when the roots are all implied; commitment is now the default;
+(ii) DONE -- dependency-ordered SolvedBinds emission (stable topological sort
+at `getRecursiveDefls`/`getNonRecursiveDefls`, merge-order invariant removed)
+and committed/solved-dictionary sharing within a satisfy pass (the `solved`
+EPred list threaded through `sat`/`satMany`); (iii) add BSV syntax for the class coherence
+annotation (only Classic had it) so examples like Pipeline1 can opt into the
+relational behavior explicitly -- DONE: `typeclass incoherent C#(...)` and
+`typeclass coherent C#(...)`, soft keywords like `dependencies` (matched by
+string in a position where no identifier can appear, since typeclass names
+are uppercase), threaded through `ISTypeclass` into the `Cclass` coherence
+field; the annotation beats the global flag in both directions, pinned by
+tests (a BSV incoherent class keeps relational fall-through and commits the
+catch-all under (Bits a na, Bits b nb); a coherent class stays strict even
+under -incoherent-instance-matches); (iv) DONE -- a dedicated fundep-conflict
+error message (`EFunDepConflict`, T0159): a conflict-stop cannot be reported
+eagerly in the solver (a predicate with variable inputs may select an earlier
+clause after refinement), so `handleContextReduction`'s generic fallback
+probes each unresolved residual at reporting time (`findFunDepConflict`
+re-walks the instances on the maximally refined pred) and, on `BIConflict`,
+names the selected instance and explains the input-selection/output-conflict
+instead of claiming "there are no instances of the form" -- which was
+actively misleading, since an instance matching the inputs exists; curated
+class-specific messages keep precedence, and T0158 is left reserved for the
+transitive-incoherent branch;
+(v) DONE -- `matchTopIsReducible`'s conflict case upgraded from
+`NoConclusion` to `Fails` (its comment always wanted this and the
+fall-through it protected is gone): `isReduciblePred` treats a conflict as
+conclusive only for coherent classes when no earlier instance unifies with
+the predicate (the same finality guard as `reducePred`'s walk -- an earlier
+unifiable instance could still be selected once the inputs refine), so
+fail-fast context reduction now rejects fundep conflicts at the use site
+with T0159 instead of letting them decay into ambiguity (Tb1: T0033 -> T0159
+naming the SeriesPipeline instance) or weak-context errors (FdOrder's second
+error: T0030 at the definition -> T0159 at the exact use position).
+
+**Batched proviso SAT.**  The ordered-clause semantics exposed the SAT
+fallback as a cost: a conflict-stop is a `reducePred` failure, and every
+failure used to fire the per-predicate fallback -- initialize a fresh
+solver (a whole-library `yices_init`/`yices_reset` plus context), assert,
+query, throw it away -- once per reduction *attempt*, so the same
+irreducible pred paid it at every satisfy pass it flowed through (+31%
+solver invocations under the new semantics).  The fallback is now deleted
+from `reducePred`; numeric residuals flow to the two decision points that
+actually consume a residual-vs-empty verdict -- `sMany`'s base case (whose
+emptiness test `tryDefault` keys on) and `satMany'`'s base case (`sat`'s
+full-vs-partial verdict) -- where `batchSolveNumericPreds` proves the whole
+numeric residual set against the definition's givens in one solver session.
+Each batch creates and discards its own session inside one atomic IO
+block (the design intent was always fewer, better-informed solve points,
+not session amortization); queries within the batch share the session
+and its converted terms, and each push/pops so the context stays clean
+between queries.  Ground preds are queried with no
+assumptions at all -- their outcome is their truth -- and cached in both
+directions (`tsNumProven`/`tsNumRefuted`), so later passes discharge them
+without the solver.  Deferring further (proving each pred from givens PLUS
+the sibling residuals that survive) is sound with a shrinking assumption
+set and would discharge jointly-constrained groups, but empirically the
+extra assertions corrupt subsequent queries in the same session
+(Bug782_Div regressions even with a fresh-session retry), so it is parked
+behind an XXX pending solver-layer state hygiene.  Measured on the
+standard library build: 1201 one-shot solver sessions become 515
+per-batch sessions serving 1433 queries (more queries than before, since
+terminals re-see survivors across passes, but each batch loads the
+givens once and its queries share converted terms; wall-clock flat, the
+win grows with proviso complexity).  The ground cache
+is idle on the stdlib (its numeric residuals are non-ground) and pays off
+in ground-heavy leaf code.
+
+A soundness bug and three review findings were fixed before landing:
+
+- *Deferred-equality visibility* (`addBindDeps`; caught by b675's
+  `Bug675_ModuleCollect` ICE): `byInst`'s dictionary binding
+  `CApply e' (map CVar vs')` references only the instance's declared
+  proviso dictionaries; the numeric equalities a fundep match defers
+  (`num_eqs`) become goals but not arguments, so the binding's free
+  variables did not reveal the obligation and the pool's completeness walk
+  deposited closures whose equalities were still unsolved (a
+  `Bits (ListN n Bool) m` dictionary reused where `NumEq n m` never held,
+  materializing as an IConv assert).  The equality dictionary ids are now
+  recorded as semantic dependencies of the bind (`SolvedBinds.addBindDeps`),
+  so an unresolved equality forbids reuse and a solved one is walked
+  through.
+- *Session invalidation* (adversarial review, high): the vendored Yices
+  binding resets the whole library on every context creation after the
+  first, assuming one live context ever, so a session kept alive across
+  evaluation windows can be invalidated by a nested `runTI` creating its
+  own (`writeableIfc` during register-write checking, demand-forced
+  `expandSynN` thunks) -- use-after-reset with silently wrong, then
+  cached, verdicts.  Initially guarded with a global generation counter;
+  RESOLVED BY REMOVAL once the maintainer clarified the intent was never
+  cross-batch session reuse: each batch's session now lives entirely
+  within its own atomic IO block, restoring the old per-query code's
+  atomicity, and the one-live-context assumption holds by construction
+  (the guard and `tsSATState` are gone).
+- *Residual order* (review): the batch terminals returned
+  numeric-behind-non-numeric with the unproven set reversed, permuting
+  retry order, inferred contexts, dictionary-argument order, and error
+  messages (four Bug782 expected-output diffs were exactly this).
+  Discharged preds are now filtered out in place; survivors keep their
+  arrival order.
+- *Normalization* (review): the batch queried and cached the raw residual,
+  but `sat` returns the *original* pred on failure, so synonyms bound by
+  unification and associated type functions introduced by fundep
+  substitution reached the converters unexpanded and became opaque
+  uninterpreted terms -- `Add#(SizeOf#(Foo), a, b)` unprovable where the
+  old per-pred path (which solved the `normT`'d form) proved it.  The
+  batch now normalizes each pred before querying, and caches the
+  normalized form, restoring parity and canonical cache keys.
+
+### 4.3 Holes in the walk itself (prerequisite bug fixes, independent value)
+
+- **H6 — trie leaf ordering.** `cmpForSort` collapses `cmpQInsts`' partial order to a
+  comparator mapping non-overlapping pairs to `EQ` (`MakeSymTab.hs:985-990`), and leaves
+  are ordered with stable `sortBy` (`PredTrie.hs:87-91`). `EQ` is not transitive with
+  the true order: with `B = C (Maybe a) (List a)` (non-linear catch-all),
+  `A = C (Maybe Int) (List Int)` (A ≺ B), `C' = C (Maybe Int) (List Bool)` (no overlap
+  with either — B's repeated variable blocks the mgu), declaration order `[B, C', A]`
+  survives the sort: all three share one leaf, `sortBy`'s merge never compares B with A,
+  no T0128 fires, and a concrete pred **matches B first with no incoherence flag**
+  (verified at sorting-theory level). Within one compile the leaf order is fixed, so
+  selection is attempt-invariant — this is a wrong-selection bug *today*, not a
+  timing bug. But leaf order derives from declaration/import order, which can differ
+  **between packages**: the coherence certificate — and lift-dictionaries' cross-package
+  type-keyed dictionary dedup in FixupDefs — is unsound across compilation units until
+  fixed. Fix: per-leaf topological sort of the `cmpQInsts` partial order (the legacy
+  `tsort` algorithm, `MakeSymTab.hs:873-890`, scoped to a leaf; leaves are small).
+  Cross-branch order is already specificity-consistent (`Just` before `Nothing`,
+  `PredTrie.hs:125, 132-134`).
+- **H7 — prim type functions in instance heads.** `checkNoTypeFunInHead` bans only ATFs
+  (`MakeSymTab.hs:449-474`); a primitive numeric type function (`TAdd` etc.) at an input
+  position is trie-keyed under `Just TAdd`, invisible to a `Con (TyNum 5)` probe —
+  neither walked (no incoherence flagging, though `numUnify` would say "unifiable") nor
+  overlap-checked (`overlapProbeQuery` deliberately skips the prim-TFun exemption,
+  `PredTrie.hs:169-174`), where the legacy all-pairs check yields T0128. The legacy
+  path's `canMatch` pre-filter has the same blind spot on numeric kinds
+  (`leftNonSynTyCon` excludes synonyms/ATFs but not prim TFuns, `TCMisc.hs:554-561` —
+  pred-side `TAdd a b` vs instance-side `TMul c d` is "skipped as a clash" yet
+  mgu-unifiable). Fix: extend the head ban to prim TFuns, or `Free`-key them on the
+  instance side (they already are on the query side, `PredTrie.hs:196-211`). It is
+  unconfirmed whether such heads are constructible from surface syntax; close the hole
+  anyway.
+- **B1 — stuck fully-applied ATFs on the pred side.** `normT` eliminates a fully-applied
+  ATF only when its class pred satisfies immediately; otherwise it returns the type
+  **with the ATF still in place** (`TCMisc.hs:883-884`, "XXX could expand some"). Such a
+  pred is not permanently stuck — it resolves as the substitution refines — but
+  `mkQueryElem` keys the ATF head as `Con tc` (only *prim* TFuns get the `Free`
+  exemption, `PredTrie.hs:196-211`), so the probe visits only the ATF's own branch plus
+  the catch-all branch (`PredTrie.hs:125`). A concrete-branch instance the pred could
+  match after ATF resolution is neither tried nor `predUnify`-scanned → a catch-all
+  match gets a **false coherence certificate**. Empirically this appears unreachable
+  from surface syntax today: every inlet tried (annotations, signature base types,
+  data-constructor fields, fundep-determined instance-head positions, type synonyms)
+  expands ATF applications into class contexts at conversion
+  (`convCQType`/`mkVPred`/`expTConPred`), so preds reach the probe with a fresh
+  variable rather than an ATF head. But the invariant is maintained only by those
+  expansion gates, not by construction — `mkVPredFromPred` already skips expansion,
+  and `normT`'s bail path exists because mid-flight ATFs are expected — so the fix
+  (treat `TIatf` heads as `Free` in `mkQueryElem`, symmetric to the prim-TFun
+  exemption) is defense-in-depth, and the testsuite pins the deferred-and-reported
+  behavior rather than exposing a live divergence. (Truly *partially-applied* ATF
+  heads are benign, but for a head-constructor-stability reason: nothing ever rewrites
+  them, so the probe result is identical at every retry and an ATF `TyCon` never
+  matches a concrete `TyCon` — commitment timing cannot matter for them.)
+
+The invariant these three fixes restore, which any future candidate pruning must also
+preserve and which should be documented and tested as such: **the walked set must be a
+superset of everything matchable *or unifiable* with the pred under any future
+substitution** ("a non-matching concrete instance must be visible to trigger the
+incoherent path", `MakeSymTab.hs:994-998`).
+
+### 4.4 Hole F2 — givens can outrank a committed instance
+
+`lookfor` discharges a pred from a given only under syntactic equality on non-fundep
+positions (`meq`, `TCMisc.hs:680-690`). A given `C Int` fails against pred `C a` now but
+succeeds after `a := Int`. Today the put-aside pred gets that second chance; a committed
+instance match forecloses it — changing the elaborated dictionary (instance construction
+vs. passed-in dictionary) and, worse, changing acceptance when the instance's residual
+context is unsatisfiable from the givens while the given discharges the pred whole
+(e.g. given `(C a)` alongside a sole catch-all `instance (D x) => C x`: today `C t5`
+defers, refines to `C a`, given wins; committed early, residual `D a` is unsatisfiable).
+
+Today this race is *accidentally* mostly closed: givens reach TCheck CtxRed-normalized
+(signature contexts are pre-reduced, `CtxRed.hs:405, ~430`), so a given that survives
+unreduced is one whose own reduction was refused — and unifiability being upward-closed
+means the pred's instance match gets flagged/deferred by the same instance that blocked
+the given. But that lemma is nowhere stated, depends on every EPred source being
+CtxRed-normalized or superclass-closed, and is **destroyed by the CtxRed-retirement
+endgame** (§7). The certificate therefore needs a fourth condition:
+
+> (c) no in-scope given (explicit-pred stack, superclass-closed) unifies with the pred
+> on its non-fundep positions — trivially satisfied when those positions are ground.
+
+The explicit-pred stack is small and already superclass-closed at push time
+(`bySuperE`); the check is one `predUnify`-shaped scan per candidate commitment.
+
+### 4.5 Hole F3 — joinCtxs is a commitment mechanism too
+
+`joinCtxs` (`TCMisc.hs:254-274`) merges two same-class goal preds with syntactically
+equal input positions: it commits the mgu of their fundep-determined positions and
+**aliases one dictionary to the other** (`b = (i, …, CVar i')`, 270-271). Some fundep
+improvements are derivable *only* through the join (when the instance's context classes
+can't re-derive them through residuals). Under residual-committing increments, originals
+disappear from the working set, so joins connect different (or no) pairs; under the
+single-solve architecture (Increment 3), a pred committed at apply node 1 is gone before
+its equal-input partner is minted at apply node 2 — a variable that today gets
+determined stays free → new ambiguity errors. Fix direction: **a committed pred must
+remain visible to later resolution as a given** (push an `EPred` for it; `lookfor`'s
+fd-mgu path then reproduces the join improvement, `TCMisc.hs:684-686`). Note the join's
+dict-aliasing also becomes two separate constructions under early commitment — an
+elaboration-shape change relevant to order-sensitive expected outputs and to
+lift-dictionaries' input (mitigated there by type-keyed CSE, which re-unifies them).
+
+### 4.6 Benign holes (verified)
+
+- **Bound tyvars (H3):** `predUnify`'s permissiveness over-flags only. Benign.
+- **Numeric pre-classes / SAT fallback (H4):** generated instances are deterministic
+  functions of the pred's shape; the `useProvisoSAT` path fabricates a subst-free
+  coherent bind only when the walk fails (`TCMisc.hs:591-611`); all pre-classes are
+  `allowIncoherent = Just False`. The `sMany` pre-class exception (188) and the
+  recursive-pre-class refusal (317-319) must be preserved verbatim. Benign.
+- **Instance visibility / orphans (H5):** within one compile the instance set is fixed
+  before typechecking; engine-level commitment moves no resolution across a package
+  boundary. A pred that escapes as a proviso is re-solved downstream against a possibly
+  larger set, but that is today's semantics (tiImpls already residualizes inferred
+  provisos), mitigated by `WOrphanInst`/T0127. Benign for engine-level changes; a design
+  decision for anything that alters which preds escape signatures.
+
+---
+
+## 5. Inventory of deferral-and-rework sites
+
+| # | Site | Location | Why deferred/discarded today | What is redone | What immediate commitment requires |
+|---|------|----------|------------------------------|----------------|-------------------------------------|
+| 1 | `sMany` put-aside | TCMisc.hs:184-195 | Report original pred in errors; defer in user-visible form (guess at 160-163) | Full `reducePred` walk + `satMany` over `qs` on every retry | Committability certificate (§4.2-4.4); keep subst; then keep binds+residuals with residual→original provenance |
+| 2 | Incoherent-disallowed | TCMisc.hs:355-367 | Deliberate: fd_subst from incoherent match unsafe | Rediscovered-and-rediscarded per retry | **No change** — deferral-until-coherent is the correct policy |
+| 3 | `propagateFunDeps` | TCMisc.hs:1586-1612; callers TCheck.hs:381, 1730; ContextErrors.hs:363 | "Doesn't bind dictionaries"; no binding-emission hook at expression granularity | Full instance matching per pred per apply node; binds discarded; duplicate T0126 | Scope-stacked SolvedBinds accumulator (§6 Inc 3) or commit-memo |
+| 4 | `earlyContextReduction` / `isReduciblePred` | ContextErrors.hs:1006-1021; TCMisc.hs:1620-1648 | Satisfiability oracle only | Independent per-pred walk per apply node | Subsumed by #3 (a committed match answers "reducible" free) |
+| 5 | `defaultClasses` | TCMisc.hs:1386-1419, 1441-1466 | `tryDefault` keeps only the subst; `makeResult` re-satisfies for binds | Full solve per candidate default, then full re-solve (twice on force path) | Winning solve returns its binds; losing candidates need sandboxing (§6 Inc 3) |
+| 6 | `satMany'` restart | TCMisc.hs:470-487 | New subst may unblock residuals | Re-walks *unchanged* residuals ("horrible running time") | Apply `split_rs` filtering — orthogonal cheap win, semantics-preserving |
+| 7 | tiExpl triple pass | TCheck.hs:2426, 2467, 2521 | Staged: plain → last-resort DVS → defaulting | Same failed preds re-walked per stage | With #1, later stages see reduced residuals; stages remain (DVS instances differ) |
+| 8 | tiImpls aggressive re-reduce | TCheck.hs:2848, 2862-2871 | Shape inferred provisos | Second full pass over satisfyFV leftovers | Largely subsumed by #1 |
+| 9 | CtxRed | CtxRed.hs:33, 45, 405, ~430 | Whole-package signature reduction before TCheck; binds discarded; "XXX why?" | Everything it solves is re-solved in TCheck | Unchanged for Inc 0-3; long-term retirement candidate (§7) — but see §4.4 |
+| 10 | `normT` ATF solving | TCMisc.hs:871-889 | Inline satisfiability during normalization | ATF preds re-solved inside every reducePred | Memo keyed on normalized type — independent, easy |
+| 11 | `checkCtxs` (foreign funcs) | TCheck.hs:946-958 | Error oracle only | Full `satisfy`, binds and residuals discarded | Same memo/accumulator as #3 |
+| 12 | Error-time re-reduction | ContextErrors.hs:214, 288, 358, 386, 580, 637, 673, 709, 736, 755, 922, 952; TypeAnalysis.hs:372-374 | Message construction | Re-solve per reported pred | Keep — error-path cost is fine; provenance map may simplify `findReducedPreds` |
+| 13 | Post-elab re-typechecks | IExpand.hs:4945-4953; ISyntaxCheck.hs:118-119; AAddSchedAssumps.hs:225 | Reflection / checking on elaborated code | Full resolution from scratch; no choice-stability check | Out of scope; note the missing safety net (§3.2) |
+
+---
+
+## 6. Change list and implementation plan
+
+**Increment −1 — measure (should precede everything).** The "3-5+ walks per pred"
+motivation is asserted, never measured. Add counters (behind a progArg) for `reducePred`
+invocations, `newInst` freshenings, and `byInst` calls per solved pred; report on a
+library build and a fundep-heavy design. This is the baseline every later increment is
+judged against. *Days.*
+
+**Increment 0 — walk-integrity fixes (correctness bugs today, prerequisites tomorrow).**
+1. H6: per-leaf topological sort in the trie build (`PredTrie.hs:47-91`) using the
+   `cmpQInsts` partial order directly (mirror `getQInstsLegacy`'s graph+`tsort` scoped
+   to a leaf). Regression test for the `[B, C', A]` shape; full testsuite under both
+   indexes (`-legacy-inst-index` equivalence is already pinned).
+2. H7: reject or `Free`-key prim-TFun instance heads (`MakeSymTab.hs:449-474`;
+   `PredTrie.hs:161-174`); fold in the legacy `canMatch` numeric-kind note.
+3. B1: `Free`-key `TIatf` heads in `mkQueryElem` (`PredTrie.hs:196-211`); a testsuite
+   pin of the deferred-and-reported behavior (no surface repro found — see §4.3).
+*~3-5 days including tests. Do **not** bundle the `dvsSub` no-op fix
+(`TCMisc.hs:618-627`) here — making it substitute changes which numeric programs
+typecheck (last-resort gating is shape-sensitive, `StdPrel.hs:198-230`) and would
+pollute the bisection baseline; it is its own increment, deferred until a staleness
+failure is actually demonstrated.*
+
+**Increment 1 — committability certificate + keep the substitution.**
+Extend `reducePred`'s walk to compute the full certificate of §4.2-4.4: on a match,
+if the fd-mgu bound pred-side variables or produced `num_eqs`, continue the
+`predUnify` scan over the walk suffix; and check the explicit-pred stack for unifiable
+givens. Return a three-valued result (committable / coherent-but-uncommittable /
+incoherent) in place of the current `Maybe Pred`. Then, in `sMany`'s put-aside branch,
+keep `s'` for committable bundles (apply to `es`, `rs`, `ps` via the existing `split_rs`
+machinery) while still putting the original pred aside and dropping binds. This answers
+"XXX Can we at least keep any of the substitution?" (163) directly. Be precise about the
+novelty: `extSubst "satisfyX"` (TCMisc.hs:120) commits substitutions of *fully solved*
+preds today; committing coherent-*partial* substs is a new commitment class, guarded by
+the certificate. Expected effects: fewer retry iterations; possible test churn where
+pred order changes downstream (GenCMsg hazard, §8 R1). *~3-5 days + testsuite/bsc-contrib
+soak.*
+
+**Increment 2 — keep bindings and residuals (true immediate commitment).**
+For committable bundles, behave like `satMany'`: keep `sbs'`, replace `p` with `new_ps`,
+record `new_ps → p` in a provenance map threaded alongside. Push an `EPred` for the
+committed pred so join-derivable improvements survive (§4.5). Requirements:
+- **Error reporting:** `handleWeakContext`/`handleContextReduction` render residuals in
+  terms of originals via the provenance map (today `findReducedPreds` re-derives chains
+  at error time, `ContextErrors.hs:941-962`; `EContextReductionReduces` already has the
+  "reduces to" vocabulary). Positions survive automatically — `byInst` already threads
+  the original's positions onto residuals (`TCMisc.hs:651`); only the pred *text* needs
+  the map.
+- **Upward deferral:** `splitF` defers residuals instead of originals (tiImpls already
+  generalizes over reduced residue — in-tree precedent), carrying provenance so
+  enclosing-scope errors still name the source. Changes inferred-proviso shapes in edge
+  cases: deliberate, testable.
+- **Termination:** residuals re-enter the loop; the sat-stack depth bound and the join
+  fixpoint still apply, but add an explicit progress measure (each committed step
+  consumes a `byInst` success). The `checkJoinCtxs` internal errors
+  (`TCMisc.hs:176, 393-397, 496, 509`) currently run against populations of original
+  preds and `satMany'` admits returning residuals with the substitution inconsistently
+  applied (520-523) — every path must apply the newly-committed subst to `rs` before a
+  join check, and this needs targeted tests, not an assumption.
+- **Scoping:** residual dict vars are fresh (`byInst`, 641); `<++` merge invariants and
+  recursive promotion handle ordering; the knot path still sees `p` on the sat stack
+  while `qs` solve (commitment happens after `satMany` returns).
+*~1-2 weeks; risk concentrated in error-message expected-output churn.*
+
+**Increment 3 — single-solve architecture.**
+Let `propagateFunDeps` (#3), `checkCtxs` (#11), and `defaultClasses` (#5) stop
+re-solving: committed binds accumulate in the monad and each pred is solved once. The
+accumulator must be **scope-stacked**, not flat: emission points are innermost-first,
+and a bind solved at an outer apply node before descent must be emitted at the *outer*
+scope its dict uses were emitted into (`iAPs` at creation time, §3.1) — push/pop an
+accumulator frame where explicit-pred scopes are pushed, flush each frame at its own
+emission point (tiExpl'''/tiImpls/topExpr: `TCheck.hs:2663-2664, 3008-3009`,
+`TypeCheck.hs:141-142`). Sandboxing is required wherever trial solves run today with
+discard-by-construction: `defaultClasses.tryDefault`'s losing candidates,
+`propagateFunDeps`' flag-mutated re-entry, and `normT`'s embedded satisfy — each needs a
+watermark/rollback on the accumulator (put it in `TStateRecover`, rolled back with
+`tiRecoveringFromError`; prove the accumulator is empty at `tiExpl''`'s success-path
+`trimSubst`, or flush before trimming). Dict Ids are fresh only per `runTI` (§3.1) — the
+accumulator must be per-definition state, never cross-definition. `defaultClasses`
+returns binds from the winning solve, deleting `makeResult`'s re-solve. Move remaining
+match-time side effects to commit time (template: `460aa8cb`). The duplicate T0126 drops
+to one, deliberately (`unused_imports.exp:88-90` updated). *~3-5 weeks.*
+
+**Independent cheap wins (any time, semantics-preserving):**
+- #6: `split_rs` filtering in `satMany'`'s restart loop (pure perf, addresses the
+  "horrible running time" note).
+- #10: memoize `normT`'s ATF satisfiability on the normalized type.
+- Duplicate-T0126 without Increment 3: `propagateFunDeps` already mutates flags for its
+  solve (`useProvisoSAT = False`, `TCMisc.hs:1601-1604`); mask warning emission the same
+  way (the real satisfy re-warns), fixing the mis-attributed exp comment now.
+
+**Cross-cutting.**
+- **Escape hatch:** hidden `-legacy-defer-instances` progArg (pattern:
+  `-legacy-inst-index`) selecting the old `sMany` policy, for bisecting user regressions.
+- **.bo compatibility:** Increments 0-2 don't change signature contents in the common
+  case (CtxRed already commits coherent matches via `satMany'`); Increment 2's
+  residual-deferral can alter inferred provisos of unsigned defs — audit with a
+  two-package diff test. Per-bind marking that reaches serialized Ids reuses the
+  existing `IdPIncoherent` codepoint (`BinData.hs:733, 765`); if semantics change, bump
+  the `.bo` header as `origin/transitive-incoherent` does.
+- **Testsuite pins to renegotiate:** T0126 counts; `IncoherentOrder`/`IncoherentTwoLevel`
+  outputs (must NOT change — they pin definition-site incoherent commitment, untouched);
+  bluetcl type dumps (order-sensitive); `-print-flags-raw`.
+
+---
+
+## 7. Interactions with the WIP branches
+
+Branch topology (verified): `origin/transitive-incoherent` is a **direct descendant** of
+`f4927f1e` (merge-base = HEAD), and `origin/lift-dictionaries` is a direct descendant of
+its tip. "Land transitive-incoherent first, build on top" has zero conflict surface.
+
+**`origin/transitive-incoherent`.** Wires the dormant hooks this design needs:
+`reducePred` calls `markIncoherent`/sets `solvedClass` at match time (`markIncoherent`
+has zero callers on HEAD, verified); `sat` records `DirectIncoherence` root causes at
+its commit point; `computeTransitiveIncoherent` closes over a definition's merged
+SolvedBinds at generalization time (`warnTransitiveIncoherent` at branch
+TCheck.hs:2552/2907, TypeCheck.hs:140), diagnosing T0158 by class annotation + flag. The
+per-bind incoherence bit is exactly Increment 1's "committable chain" input, and the
+branch's pattern — mark eagerly, render diagnostics late so `apSub s_final` shows
+refined types — is the pattern immediate commitment should copy. Increment 3's
+whole-definition accumulator suits `computeTransitiveIncoherent`'s documented
+"call once on a fully-merged SolvedBinds" contract.
+
+**`origin/lift-dictionaries`.** LiftDicts CSEs coherent dictionaries **by type**
+("Coherent dictionaries of the same type are semantically equivalent",
+`LiftDicts.hs`) and incoherent ones by expression, gated on `isIncoherentDict`;
+FixupDefs dedups coherent dicts **across packages** by type. Type-keyed identity is
+precisely the §4 invariant — and therefore inherits its holes: H6 (leaf order varies
+with declaration/import order *across packages*) and B1 make type-keyed dedup unsound
+until Increment 0 lands. This design also shrinks LiftDicts' input (fewer duplicate
+`_tcdict` binds) and must preserve `isRecursive` fidelity through the accumulator
+(LiftDicts skips `Cletrec` bindings entirely).
+
+**CtxRed (pipeline endgame, not in the increment list).** With engine-level commitment
+plus provenance, the CtxRed/TCheck split becomes visibly redundant (CtxRed already runs
+`satMany'`, commits coherent matches into signatures, and discards the binds). But
+retiring it is a driver restructure with cross-package ABI exposure (signatures are
+generated from `mctx`, `bsc.hs:625-627`) **and it currently underwrites the givens
+lemma of §4.4** — retirement requires the explicit givens-unifiability guard first.
+
+---
+
+## 8. Risks and open questions
+
+**R1 — Order-dependence bugs are real and pinned.** `reducePredsAggressive` deliberately
+avoids the concreteness sort because reduction order affects acceptance
+(bsc-contrib GenCMsg, `TCMisc.hs:502-507`). Increments 1-2 change effective reduction
+order. *Mitigation:* build bsc-contrib at every increment; escape hatch; root-cause any
+divergence rather than papering over.
+
+**R2 — Error-message regressions.** The all-or-nothing policy's one identified value is
+reporting original preds. *Mitigation:* provenance map is a hard requirement of
+Increment 2 before flipping the default; hand-review every changed `.bsc-out`.
+
+**R3 — Performance pathologies from earlier substitution.** More/earlier substs make
+`split_rs` re-queues fire more often; `apSub` over pred lists is a known cost center
+(`TCMisc.hs:115-118`). *Mitigation:* Increment −1 counters plus wall-clock/allocation
+benchmarks per increment; the `newInst`-per-candidate count is the number that must go
+down.
+
+**R4 — Conditional commitment on numeric equalities.** With the §4.2 certificate this
+collapses to: matches with `num_eqs` and a unifiable suffix simply defer (unchanged);
+matches with `num_eqs` and no unifiable alternative commit with the equalities as
+first-class residuals — failure is then reported against a pred the user never wrote.
+*Experiment:* construct the unsatisfiable-equality case and compare error quality; if
+worse, gate on `null num_eqs` for the first release.
+
+**R5 — Recovery and trimming.** `tiExpl''` trims the substitution on success
+(`TCheck.hs:2328-2349`) and `tiRecoveringFromError` on error; note the existing loose
+end at `TCheck.hs:2361-2363` (comment promising an `apSub` the code doesn't perform).
+Increment 3's accumulator must be in recoverable state with watermark rollback, and
+provably empty (or pre-flushed) at trim points.
+
+**R6 — Backward compatibility of committed choices.** Coherent-commitment timing has no
+test pinning selection — by design, coherence means timing can't matter — which is the
+argument that acceptance changes surfaced by the certificate are bugs being found, not
+semantics being changed. Any program that typechecks under exactly one policy is a
+report-worthy finding (H6-class ordering bug, F1-class fd instability, or GenCMsg-class
+order dependence). *Mitigation:* full testsuite + bsc-contrib under both policies per
+increment.
+
+**R7 — Open questions for the maintainer.**
+(i) Why was the `sMany` pre-class exception DVS-gated (`TCMisc.hs:165-167` asks
+"is that condition even necessary?")? Increment 1 generalizes the exception;
+understanding the gate would de-risk it.
+(ii) Does anything depend on `propagateFunDeps`' duplicate solving beyond the
+substitution? (The duplicate T0126 suggests no one intended the side effects.)
+(iii) Should `writeableIfc` and `addAutoDeriv` — the two semantic direct-`reducePred`
+callers that today treat any match, incoherent included, as decisive — move onto the
+committed-match API, making the coherence gate uniform? (Nine more error-path callers
+in ContextErrors also ignore the incoherence field, harmlessly.)
+(iv) Which rule for the fd-output instability (§4.2)? Four options, with the evidence
+now in hand:
+    - **Output positions never bar a match** (§4.2b — recommended): input-only
+      selection; output conflict after selection is a fundep-conflict error. Removes
+      the instability at the source, so flag-coherent ⇒ committable with no suffix
+      scan; fixes the order-dependence (as consistent rejection); improves the
+      currently-misleading conflict messages. Census: no valid code relies on the
+      veto — its deferral work is already done by the incoherence flag everywhere it
+      fires in passing code. Costs: the flag becomes the sole guard for the
+      catch-all-input idiom (pin with tests; document the permissive-`mgu` reliance),
+      and FD-inconsistent pairs become always-rejected (none found in the wild;
+      surface with an admission warning first).
+    - **Resolution-side certificate** (fallback if organic veto-reliance turns up in
+      bsc-contrib or user code): commit an improving match only when no other
+      instance (prefix or suffix) and no given unifies with the pred. Preserves every
+      currently-accepted program, including FD-inconsistent fall-through.
+    - **Admission-side rule** (GHC's fundep consistency condition): NOT adoptable as
+      an error — verified that it rejects the Prelude's own `ToGet (a) a` +
+      `ToGet (Get a) a` instance set. Worth having as a warning to surface
+      FdStability-shaped pairs regardless of which resolution rule is chosen.
+    - **"Never commit while an output position is improvable"**: sound but too strong —
+      it breaks sole-instance output determination (`Bits (UInt 8) n` must commit
+      `n := 8` while `n` is free), which is the workhorse of bsc fundep resolution.
+      Subsumed by either of the first two options.
+
+---
+
+## 9. Bound-variable discipline (stage 1 of the type-equality design)
+
+The bound-variable audit established that `mgu` would happily substitute a
+definition's rigid (signature- or instance-bound) type variables, and that this
+hole let fundep improvement rewrite signatures out from under their binders
+(the `BVB` golden: a bogus T0029 whose true failure is "cannot prove `r` is
+`Bool`'s representation"). The agreed design: **bound variables are never
+substituted during typechecking — an improvement that meets one becomes an
+equality constraint** (substitutable only in CtxRed, where a signature's own
+variables are being simplified before they are pushed as bound). Stage 1
+implements the refusal and a sound approximation of the equality; the
+full `TypeEq` constraint is stage 2.
+
+**The guards** (`Unify.hs`): `mgu`'s `TVar`-vs-structure cases fail outright
+when the variable is bound. At `KNum` and ATF positions the pre-existing
+`numUnify`/`atfUnify` already produce deferred equalities instead (this is why
+`BVD` reports "could also be deduced from: type `1' and type `n' are equal" —
+the designed endpoint, already live at numeric kinds).
+
+**Rigid-induced improvement failure is not a conflict** (`matchTop`,
+`matchTopIsReducible`): with the guards active, an instance whose inputs match
+but whose determined positions would have to bind a rigid variable now fails
+the fd-mgu. That failure must not be reported as a fundep conflict (T0159):
+the predicate is satisfiable — by a given, or at a call site that instantiates
+the rigid variable. The discrimination is to re-run the fd-mgu unguarded:
+unguarded-succeeds means the failure was guard-induced, and the match is
+*deferred* (`HMNoMatch` / `NoConclusion`) as the stage-1 stand-in for emitting
+`TypeEq rigid determined`; both-fail is a genuine structural clash and stays
+`HMConflict`/`Fails`. This kept the recursive `AppendTuple''`/`Curry'`
+instances in `Prelude.bs` compiling (their method bodies re-encounter the
+class with the instance's own rigid variables; the discharge is the
+instance's given, once sibling unifications pin the metavariables) while
+`Tb1`'s genuine output clash still fails fast with T0159.
+
+**Modal checks must run unguarded.** The commitment machinery contains
+checks that ask not "does this unify now?" but "*could* this ever match /
+discharge?" — and refinement includes call-site instantiation of rigid
+variables and outer frames whose rigid variables are distinct `TyVar`s from
+the local ones. Three such sites were running guarded and broke the stdlib
+build before this was understood (`PrimDeepSeqCond (ActionValue a)`):
+
+- the walk's incoherence accumulator (`reducePred`, the `BINoMatch` `chk`):
+  guarded, it pruned every specific `PrimDeepSeqCond` instance as
+  never-matchable against the rigid `a`, which made the Generic-default
+  catch-all look uniquely-matching — a *coherent* match inside the
+  definition that call sites would contradict;
+- the given-escape check in `sat`'s committable gate: the wanted
+  `PrimDeepSeqCond a` and the enclosing instance's given quantify over
+  distinct rigid variables, so the guarded check said no given could ever
+  discharge it and committed the catch-all reduction, leaving
+  `Generic a r` subgoals no instance can solve (derived `Generic`
+  instances exist only for concrete heads);
+- `matchTopIsReducible`'s could-eventually-unify branch (`uv`/`check_fds`),
+  which feeds the fail-fast reporting probes.
+
+Two more viability sites were aligned in a follow-up pass:
+`isReduciblePred`'s earlier-instance-may-capture accumulator, which
+decides whether an output conflict is conclusive for the fail-fast
+probe (guarded, it reported a conflict as final -- naming the
+less-specific clause as selected -- when a more specific clause would
+capture the predicate at call sites; pinned by
+`instances/commit/ModalCapture`), and the solved-pool reuse guard's
+defer-to-given check, which mirrors the committable gate.  The walk and
+the probe now share one statement of the judgment
+(`earlierInstanceMayCapture`).
+
+The rule that falls out: **guards apply to substitution-producing
+unification (expression unification, fd improvement); modal viability
+checks unify unguarded.** Guarded modal checks turn "not yet" into
+"never", and in a commitment regime "never" is what licenses a commit —
+so the guards were converting missing information into wrong commitments.
+
+**The invariant is enforced at the commitment boundary.** Substitutions are
+built locally everywhere (scheme instantiation, instance freshening, the
+modal probes above build-and-discard them as evidence), and that is fine:
+a rigid binding may exist transiently inside a probe. What it may never do
+is become globally visible. The global substitution has exactly one
+add-path — `extSubst` (`updSubst`'s only live caller is `trimSubst`, which
+removes) — and under the development flag `-check-subst-bound` it rejects
+any extension whose domain contains a bound variable. "Bound variables
+have exactly one binder", checked mechanically at the single point where
+unification results enter the monad state, instead of by site audit.
+
+**Reporting alignment** (`ContextErrors.findReducedPreds`): preds deferred
+to an enclosing binding are re-reduced at report time outside the bound set
+they failed under, so the re-reduction can now reduce further than the solve
+did; the reporter tolerates full reduction (reporting the pred itself)
+instead of `internalError`. The remaining wording debt (T0031 "no instances
+of the form `Generic Bool r`" where an instance exists but requires
+`r ~ Rep Bool`) is exactly what stage 2's `TypeEq` reporting will pay off.
+
+Golden outcomes (`BV*` audit files): `BVB` T0029→T0031, `BVC` T0159 (genuine
+conflict), `BVD` T0030 with the numeric-equality hint, `BoundToCon`/
+`BoundToBound`/`SignatureTooGeneral` T0020 at the expression unifier,
+`Control1` compiles. No golden accepts unsoundly.
+
+---
+
+## Bottom line
+
+"Committing to coherent instance matches immediately" is the right destination, and most
+of the machinery already exists: the inner loop (`satMany'`) already commits partials,
+the incoherence flag already computes the hard half of the certificate, and the WIP
+branches already build the provenance and the consumers. But the existing flag is not
+yet a commitment certificate. It becomes one after (1) three walk-integrity fixes that
+are live bugs today (trie leaf order, prim-TFun heads, stuck-ATF probes), and
+(2) three extensions the current code never needed because it could always throw work
+away and retry: fd-improvement stability (scan the walk suffix when the match improved
+the pred), givens-unifiability (a committed instance must not foreclose a declared
+context), and given-visibility of committed preds (so joinCtxs-derived improvements
+survive). With the certificate in place, the changes are mechanical, incremental, and
+each converts provably-repeated rework into a single permanent, annotated commitment
+that the transitive-incoherence diagnostics and the dictionary-lifting pipeline are
+already designed to consume.
+---- END VERBATIM MIRROR ----

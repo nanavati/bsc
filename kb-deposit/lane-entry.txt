@@ -1,0 +1,185 @@
+KB: bsc typeclass coherence
+
+v1 (2026-08-23). New entry — this design line previously had no KB
+coverage (it existed only as PR rows in the Drive PR-tracking docs).
+Read me before touching instance resolution, fundep improvement,
+proviso settlement, or dictionary evidence in the typechecker.
+
+== CANONICAL SOURCES ==
+
+Deep design lives in git, this entry is the digest + map:
+- doc/dev-notes/typechecker-coherent-instance-commitment[.]md (1,463
+  lines) on nanavati/bsc branch claude/typechecker-coherent-instances-
+  dkmn8w @ 1b35eb7d.  Engine internals (sat -> reducePred -> byInst),
+  coherence-certificate soundness holes F1-F3, deferral/rework site
+  inventory, bound-variable discipline as type-equality stage 1.
+  A diff-verified full-text mirror lives in the KB as
+  "KB: bsc typeclass coherence dev note (full text)".
+  CAVEAT: written pre-carve; it does not use the carve's type
+  vocabulary (Match/Defer, SatResult/SolveResult/Commitment records,
+  satisfyStream) — this entry is the bridge.
+- doc/dev-notes/pr-stack-handoff[.]md on branch claude/pr-stack-handoff
+  @ f763d695: stack topology, conventions, sealing methodology.
+  STALE (2026-07-10): predates the PR6/PR4 carves, the 07-14 follow-up
+  commits, and the upstream PR numbers.
+- The PR bodies and commit messages on the carve branches (below) carry
+  the per-change rationale; they are review-grade and current.
+
+== THE UPSTREAM STACK (B-Lang-org/bsc, status 2026-08-23) ==
+
+  #1032 instance-trie fixes                      MERGED 2026-07-11
+  #1033 coherent/incoherent keywords + T0160     OPEN, needs rebase
+  #1035 ordered-clause commitment                OPEN/blocked (rebased 07-15)
+  #1036 settle numeric provisos once (SAT)       OPEN/blocked (rebased 07-15)
+  #1037 bound-variable discipline                OPEN/blocked (rebased 07-15)
+  #1038 solved-dictionary pool                   OPEN (may still need rebase)
+
+Order: #1032 + #1033 independent -> #1035 -> #1036 -> #1037 -> #1038,
+each PR contains the ones below it.  Heads live on nanavati/bsc as
+claude/{instance-trie-fixes, coherence-keywords-coverage,
+ordered-clause-commitment, sat-batching-settlement,
+bound-variable-discipline, solved-dictionary-pool}.  The dev branch
+claude/typechecker-coherent-instances-dkmn8w @ 1b35eb7d is the full
+integration (all of the above + dev note), sealed by sweep; its full
+suite was last sealed pre-port (a post-port full-suite run is an open
+item).  Idle since 2026-07-15 — the open PRs await upstream review.
+
+== DESIGN DIGEST ==
+
+Why coherence is load-bearing here (not in GHC): bsc's associated type
+functions reduce THROUGH instance selection with no coercion layer, so
+an incoherent selection changes bit widths — coherence is type
+soundness, not just predictability.  GHC-style fundeps are
+improvement-only; bsc's are semantic.
+
+1. Ordered-clause fundep semantics (#1035).  The instances of a
+   coherent class form ordered clauses of a type-level function keyed
+   on the fundep INPUT positions.  Selection is input-driven: first
+   instance whose inputs match is the selected clause; a determined-
+   position conflict makes the constraint unsatisfiable as stated
+   (T0159, names constraint and selected instance side by side).
+   Outputs never bar a match.  `incoherent` classes (and the
+   -legacy-defer-instances hatch) keep relational fall-through; their
+   matches are MARKED so they are never treated as coherent evidence.
+
+2. Commitment (#1035).  Once no earlier instance could still capture
+   the predicate and no in-scope given could discharge it whole, a
+   coherent partial reduction COMMITS (bindings, substitution,
+   residual subgoals kept) instead of being discarded and re-derived.
+   Types: data Commitment = Committable | Provisional; records
+   SatResult/SolveResult/Reduction/InstMatch replace the old tuples.
+   Residual subgoals carry reduction ancestry; errors report the
+   root-most user-meaningful ancestor with accumulated positions.
+
+3. Modal vs actual judgment (#1035/#1037; the load-bearing principle).
+   "Could this instance/given ever match after refinement?" must be
+   judged with the UNGUARDED unifier (bound set []), because
+   refinement includes call-site instantiation of rigid variables.
+   Sites: earlierInstanceMayCapture (walk + reducibility probe), the
+   committable gate's given-escape check, the pool-reuse guard.
+   Judging these guarded turns "not yet" into "never" and yields
+   false coherence (pinned by instances/commit/ModalCapture).
+
+4. Bound-variable discipline (#1037).  mgu refuses to substitute a
+   bound (rigid) type variable with structure at value kinds; an
+   improvement meeting a rigid variable must become an equality
+   constraint, never a substitution (stage-1 approximation: DEFER).
+   The unified result type gains an arm:
+     data Match a = NoMatch | Defer | Conflict | Match a
+   Defer = determined positions fail to unify only because of the
+   guard (guarded mgu fails, unguarded succeeds) — neither match nor
+   conflict yet; retry when refined.  firstMatch ranks
+   Match > Conflict > Defer > NoMatch.  Key equivalence: a Defer row
+   implies the whole head unifies unguarded, so the walk treats Defer
+   as "may capture" (accumulator true) — provably the same behavior
+   as the pre-refactor code.  T0161 rejects skolem escapes at
+   generalization.  extSubst is the single global-substitution add
+   path; -check-subst-bound arms an invariant check there.
+
+5. Numeric settlement (#1036).  The satisfy loop's terminals never
+   consult the SAT solver; a solver verdict may reject the program
+   but never rewinds a binding or backs a match out (monotonicity is
+   structural, not positional).  Residuals stream to their OWNER:
+   tiExpl''' settles a definition's retained+deferred residuals in
+   ONE solver session (batchSolveNumericPreds); exported
+   satisfy/satisfyFV stay verdict-complete, satisfyStream/
+   satisfyFVStream serve callers owning a later settlement point;
+   two verdict sites settle locally (incoherent-match full-vs-partial,
+   tryDefault candidate validation).  Ground verdicts cache
+   bidirectionally (tsNumProven/tsNumRefuted) — sound because closed
+   arithmetic is context-free; non-ground queries are never cached.
+   Measured: FloatingPoint[.]bsv 501 -> 24 sessions, −26% wall clock.
+   Carries the b675 ICE fix: deferred numeric-equality dictionary ids
+   recorded as semantic bind deps (SolvedBinds[.]addBindDeps).
+
+6. Solved-dictionary pool (#1038).  Two layers: an intra-pass
+   "solved" list threaded through sat/satMany (adoption follows the
+   bindings — a branch that discards a reduction's SolvedBinds also
+   discards its solved entries), and a cross-pass pool in TI state
+   deposited by propagateFunDeps under a CLOSED certificate (no free
+   unification vars; no stuck type-function applications — a raw-form
+   derivation must not discharge the expTConPred-expanded stronger
+   goal).  Pool entries must be pure instance derivations: closures
+   through givens or through markIncoherent'd bindings are refused.
+   Non-ground entries are frame-local (generalization hazard); open
+   predicates KEEP FLOWING even when their derivation is pooled
+   (dropping them starves metavariable improvement).  A solved
+   dictionary never blocks commitment (it is instance evidence and
+   cannot contradict the instance choice) — unlike a given.
+   DISAMBIGUATION: this is the TYPECHECKER-side pool.  The LiftDicts
+   dictPool covered in "KB: bsc artifact graph" (ground IType-keyed,
+   elaboration-side) is a different mechanism; do not conflate.
+
+7. Diagnostics principles (in #1035's diagnostics commit).  Rooted
+   reports carry the residual's accumulated positions; synthesis-
+   failure reports fall back to the predicate's carried positions
+   instead of "Unknown position"; the "could also be deduced from"
+   hint reduces self-contained (no givens) so its members never
+   reference variables the message doesn't define; fail-fast probes
+   in generated code defer to the definition-level report (which
+   knows the definition's name) when positionless.
+
+8. Test methodology.  Numeric-settle pins are certified solver-only
+   by DUAL VARIANTS: the obligation is cross-class entailment
+   (Mul#(a,2,b) |- Add#(a,a,b)) that no direct instance or commuted
+   given discharges, so each test fails under -no-use-proviso-sat and
+   passes with it.  Full-suite baseline: exactly 3 permanent failures
+   when run as root (b1595 ccomp, driver/imports UnreadableTop,
+   preprocessor DupInclude).  Hygiene: scrub untracked testsuite
+   artifacts before every run (stale [.]bo files make bsc -u skip
+   recompiles and poison compare_file/warning-count tests), and run
+   with the install that matches the tree (a mismatched run-suite
+   wrapper invalidates the whole run — this happened; the failure
+   signature was "every pin needing the new semantics fails").
+
+== CROSS-LINKS TO OTHER KB ENTRIES ==
+
+- KB: bsc solver strategy — its sec 2a/6 documents the PRE-#1036
+  as-built (per-predicate solvePred fallback in reducePred).  When
+  #1036 merges, that section needs updating to the settlement model;
+  the batch-vs-conversational taxonomy is unaffected (settlement
+  keeps the typechecker conversational, just batched per owner).
+- KB: bsc toolchain — CtxRed retirement's "coherent-only recording
+  per the T0158 policy" and risk R2 (the unexplained incoherence
+  split, CtxRed runs runTI False) intersect this line: commitment
+  and the pool change what CtxRed re-derives; the P2 evidence cache
+  should reuse #1038's closed-certificate rules.
+- KB: bsc artifact graph — the union-find substitution forest must
+  preserve #1037's invariant (rigid vars never acquire bindings);
+  extSubst as the single add path is where that check lives today.
+
+== OPEN ITEMS ==
+
+- Upstream: #1033 needs a rebase; #1035-#1038 await review (idle
+  since 07-15); #1038 may need rebasing onto main 941eecfe.
+- Post-port full-suite seal of the dev branch (sweep is green; the
+  last full-suite seal predates the July port).
+- pr-stack-handoff branch is stale; superseded by this entry for
+  orientation (still canonical for conventions/sealing method).
+- Ledgered, unstarted: poly-kinded TypeEq stage 2; stage-1 wall-clock
+  profiling.
+
+== RESPONSES ==
+
+(Per the cross-agent protocol: respond by editing this draft in
+place below this line; latest body is canonical; never send.)
