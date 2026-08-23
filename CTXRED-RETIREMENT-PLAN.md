@@ -194,14 +194,19 @@ puzzles the generator could have not posed.
   generation, and the P3 discharge win falls out with no machinery. Polymorphic instances keep
   exactly the per-field `Bits`/`Eq` preds (the genuine API), deduplicated, and lose the
   arithmetic scaffolding (the fresh-var `Add`/`Max`/padding chains) to SizeOf expressions.
-- **The one enabling change:** derived heads now carry type functions in the *output* position
-  (`instance Bits MyUnion (TAdd … (SizeOf A) …)`), which `MakeSymTab.hs:447`'s TIatf-in-head
-  ban currently rejects. Relax the ban to **input positions only**: matching and the PredTrie
-  key on input positions (`pureInputPositions`), so an output-position type function never
-  participates in matching — it is normalized at resolution through the standard path. This
-  also retires `ctxRedInstHead`/`expTFun`'s conditional head rewrite (whose in-source comments
-  name "SizeOf issues" as its reason for existing) — i.e., it is most of J4, designed once for
-  both purposes.
+- **No enabling change needed:** type functions in fundep-*output* positions of instance heads
+  are already legal — `checkNoTypeFunInHead` (`MakeSymTab.hs:448-475`) bans them only in
+  non-determined positions, with the soundness argument stated in its own comment ("determined
+  in EVERY functional dependency… never used as a source for instance matching"). So the
+  derived heads this lane emits are accepted today, and the lane is a **Deriving-only change**.
+- **One dependency to protect:** the operational mechanism that makes output-position type
+  functions work is the instance-head expansion (`ctxRedInstHead`/`expTFun` turning each
+  `SizeOf A` into a fresh var plus a `Bits A _` instance proviso — once, at declaration, in the
+  defining scope, at ground heads: a valid-regime solve). P4/P5 must **relocate this expansion
+  point, not delete it** — J4's destination is thereby refined: keep the expansion function,
+  made unconditional where output-position TFs are present, moved to instance
+  registration/typecheck; what dies is the use-only-if-nonempty conditionality and any
+  rewriting of matching (input) positions — the parts the audit called architecturally unsound.
 - **Why it is a P1 prerequisite, not a P4 nicety:** the audit's blowup benchmark (52× `.bo`,
   unfinished typecheck) measured reducible provisos preserved in signatures and re-solved at
   every importing use. Under P1, signatures stop being reduced — so constraint-laden derived
@@ -263,9 +268,11 @@ one-page record of which option was taken and the measurements that decided it.
 
 Kill list, each with its own parity test (see inventory for destinations):
 J2/J9 → pick-time ground solves (with the contracts work; GenWrap stops floating constraints);
-J4 → written instance heads + solver-side index view, delete the conditional `expTFun` rewrite
-(gated on the Phase 0 head census — any head whose meaning shifts is a loud error with
-migration guidance, not a silent change); J5/J6 → require-empty annotation checker;
+J4 → written instance heads for matching (input) positions; the output-position type-function
+expansion is **kept and relocated** to instance registration/typecheck, made unconditional
+(see §3.5) — what dies is the use-only-if-nonempty conditionality and any input-position
+rewriting (gated on the Phase 0 head census — any head whose meaning shifts is a loud error
+with migration guidance, not a silent change); J5/J6 → require-empty annotation checker;
 J3 → ordinary typecheck of defaults; J7 → ATF-cache content parity without CtxRed's
 contribution; J8 → `recordPackageUse` in typecheck + unused-import warning parity.
 
