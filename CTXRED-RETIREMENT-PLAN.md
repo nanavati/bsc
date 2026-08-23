@@ -230,6 +230,18 @@ puzzles the generator could have not posed.
   same work.
 - Persist a solved-evidence annex beside `ipkg_atf_cache` so importers reuse rather than
   re-solve.
+- **Scaling notes for large given/proviso pools** (imported GHC lessons): the store must be
+  trie-indexed, never scanned — dictionaries keyed by class then argument types, equalities
+  keyed by LHS tyvar, so lookups cost the size of the *type*, not the pool (BSC's `PredTrie`
+  on fundep input positions is the same idea, today applied only to the instance table; the
+  contrast receipt is `sat` recomputing `concatMap bySuperE ps` — the full superclass closure
+  of the whole given pool — per wanted, `TCMisc.hs:370-381`). Superclass expansion is
+  demand-driven, one layer at a time (eager closure is quadratic in deep hierarchies).
+  Kick-out needs engineered criteria and, in the leveled store, is bounded per implication
+  level. Honest caveat: GHC is untested at hundreds of givens per scope, a regime BSC's
+  generated code reaches — but the numeric bulk of such pools lives in the simplex tableau
+  (built for exactly that), born-reduced Deriving empties most generated pools before the
+  store sees them, and the audit's N×M benchmark is already this phase's stress gate.
 - **Cache admission = coherent ∧ ground.** The ATF cache already enforces the coherence half
   (the incoherent path in `sat` refuses to record, `TCMisc.hs:400-411`) but has no visible
   groundness guard on `recordATFs` (`:326-333, :396`) — and the guard is reachable: a
