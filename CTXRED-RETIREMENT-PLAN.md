@@ -174,14 +174,34 @@ quadratically), and `doDBits` manufactures fresh tyvars and `Bits`/`Add`/`Max` p
 even for fully monomorphic types (`Deriving.hs:440-510`), leaving CtxRed/typecheck to solve
 puzzles the generator could have not posed.
 
-- **Rule:** generate ground where resolvable in scope (monomorphic instances get computed
-  widths and **empty contexts** — the P3 discharge win with no machinery); generate minimal,
-  deduplicated contexts where genuinely polymorphic; fall back to the constrained form on
-  same-package forward references, so this stays a pure optimization with no ordering cliff.
-- **Discipline:** resolve with the same machinery the typechecker uses (`genInsts` +
-  `matchTop`, specificity and coherence flags honored — precedent: Deriving's auto-derive gate
-  already runs a mini-TI, `Deriving.hs:957-993`), and seed the ATF/evidence caches with the
-  generator's solves rather than bypassing them.
+- **Mechanism — defer, don't solve (Ravi, 2026-08-22).** The generator cannot use the
+  typechecker: at derive time the symtab and the generator's own sibling instances do not exist
+  yet. It does not need to. `SizeOf` — already the ATF of `Bits` in the Prelude
+  (`class coherent Bits a n | a -> n where type SizeOf a = n`, `Prelude.bs:403-404`) — plus the
+  numeric type functions (`TAdd`/`TLog`/`TMax`/..., `PreIds.hs:84-91`) form a vocabulary for
+  **answers the generator cannot compute yet**: emit the width as a closed-form deferred
+  expression (`TAdd (TLog …) (TMax (SizeOf A) (SizeOf B))`) instead of fresh tyvars constrained
+  by `Bits`/`Add`/`Max` proviso chains. At the instance's typecheck — world ready — `expTFun`
+  (fully ATF-generic, `TCMisc.hs:256-270`) expands each application into a ground wanted,
+  solved once and memoized in the ATF cache; the numeric tower normalizes to a numeral. No
+  generation-time solver, no ordering cliff, no staleness (nothing is snapshotted at
+  generation), and `Bits` being declared `coherent` makes every such solve cache-admissible.
+  This supersedes the earlier idea of a generation-time mini-TI for Deriving (that machinery
+  remains relevant only to GenWrap's picks, where genuine *choices* are made; widths involve no
+  choice, only deferred arithmetic).
+- **Contexts:** monomorphic instances get **empty contexts** — the body's ground wanteds
+  (`pack`/`==` on concrete fields) solve during the instance's own typecheck; no solver at
+  generation, and the P3 discharge win falls out with no machinery. Polymorphic instances keep
+  exactly the per-field `Bits`/`Eq` preds (the genuine API), deduplicated, and lose the
+  arithmetic scaffolding (the fresh-var `Add`/`Max`/padding chains) to SizeOf expressions.
+- **The one enabling change:** derived heads now carry type functions in the *output* position
+  (`instance Bits MyUnion (TAdd … (SizeOf A) …)`), which `MakeSymTab.hs:447`'s TIatf-in-head
+  ban currently rejects. Relax the ban to **input positions only**: matching and the PredTrie
+  key on input positions (`pureInputPositions`), so an output-position type function never
+  participates in matching — it is normalized at resolution through the standard path. This
+  also retires `ctxRedInstHead`/`expTFun`'s conditional head rewrite (whose in-source comments
+  name "SizeOf issues" as its reason for existing) — i.e., it is most of J4, designed once for
+  both purposes.
 - **Why it is a P1 prerequisite, not a P4 nicety:** the audit's blowup benchmark (52× `.bo`,
   unfinished typecheck) measured reducible provisos preserved in signatures and re-solved at
   every importing use. Under P1, signatures stop being reduced — so constraint-laden derived
