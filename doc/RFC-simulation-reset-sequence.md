@@ -299,10 +299,12 @@ assertion edge onward.
   versions now pass — sysTestMkClock/sysTestMkUngatedClock,
   sysNullSyncTest2, sysGatedClockCycle, and SpecialSyncReg's
   fast_to_slow (a divided-clock startup-phase shift, reclassified into
-  the residual-startup class).  Projected full-suite Verilator total:
-  **31 fail** (= 40 - 9); decomposition becomes 12 upstream + 6
-  MacTestBench link + 10 residual startup + 3 environmental, the
-  same-instant-ordering and flips classes now empty.
+  the residual-startup class).  Full-suite confirmation on the final
+  tree: Icarus unchanged at 18,828 / 4 / 129; Verilator **18,635 pass /
+  31 fail / 237 xfail** (= 40 - 9), decomposing as 12 upstream
+  (6 $signed-slice + 3 trace+timing + 3 parallel_case) + 6 MacTestBench
+  link + 10 residual startup + 3 environmental — the
+  same-instant-ordering and flips classes are now empty.
 
 ## Migration
 
