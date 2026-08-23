@@ -2,7 +2,7 @@
 
 Schedules as types, values, and contracts.
 
-**Status:** Draft v0.3 — 2026-08-23. Unifies two arcs that reached the
+**Status:** Draft v0.4 — 2026-08-23. Unifies two arcs that reached the
 same summit independently: the *value side* — §§14/14.b/14.c of
 `RFC-bsc-artifact-graph.md` (a design discussion, Ravi Nanavati with
 Claude) — and the *type side* — the scheduling-as-types arc of the
@@ -16,7 +16,18 @@ arbitration is written down explicitly. v0.3 adds §4.b — positions are
 the missing *names* of scheduling (Ravi's observation): the reference
 problem that sank every prior specification mechanism, solved by
 entities that consolidate under real constraints, are shared as
-landmarks, and have solver-known relationships.
+landmarks, and have solver-known relationships. v0.4 folds in the
+first external review (Codex, 2026-08-23, in the KB lane): new §3.b —
+the pointwise lattice is the order on *ground* schedules, not the
+contract language; correlation across pairs rides shared position
+variables; subsumption between contracts is **entailment**; no
+principal weakest ground schedule exists in general — principality is
+scoped to the conjunctive fragment, disjunctive contracts are
+antichains of coherent alternatives, and non-principality is exposed,
+never approximated. Alternative selection separates from order
+completion, the solver's model becomes a **pinned artifact** wherever
+it drives realization (§4.b), and landmarks **seal by default**
+(§4.b).
 
 ---
 
@@ -25,10 +36,14 @@ landmarks, and have solver-known relationships.
 Scheduling becomes a first-class dimension of the language, with the
 same structure types have:
 
-- **A permissiveness lattice** orders schedules; the compiler infers
-  the **precise** (principal) schedule; designers write **declared**
-  schedules checked by **subsumption**; schedule variables quantify
-  with lattice bounds. (§3)
+- **A permissiveness lattice** orders ground schedules; the compiler
+  infers the **precise** (principal) schedule; designers write
+  **declared** schedules checked by **subsumption** — between
+  contracts, *entailment* of constraint sets, with correlation across
+  method pairs riding shared position variables and no pointwise
+  collapse across alternatives; principality is scoped to the
+  conjunctive fragment. Schedule variables quantify with lattice
+  bounds. (§3, §3.b)
 - **Intra-cycle position becomes a kind.** Reads, writes, and methods
   carry position *variables* constrained by relational provisos
   (`Before#` and kin) — deliberately with no literals and no
@@ -36,7 +51,8 @@ same structure types have:
   The machinery is the proviso/SMT engine bsc was born with. And
   positions are **the missing names of scheduling**: they consolidate
   under real constraints via unification, they are shared as
-  design-level landmarks across resources and modules, and their
+  design-level landmarks across resources and modules (sealed by
+  default — inhabitation is an explicit grant), and their
   relationships are solver-known at all times. (§4, §4.b)
 - **Schedules are values**: a Schedule value is a *binding of position
   variables*. The pragma surface demotes to constructors of that
@@ -116,20 +132,99 @@ to matrices. Then:
   as specified binders are visibly applicable (`mkFIFO @Pipeline`).
 - Two inference directions complete the picture: the **principal
   offer** (an implementation's precise schedule — exists today) and
-  the **principal requirement** — the *weakest* child schedule under
-  which a parent's rules still schedule, inferable from the parent's
-  own uses. A schedule-polymorphic parent compiles to a constraint;
-  binding is the constraint check.
+  the **principal requirement** — the parent's demand on a child,
+  inferable from the parent's own uses. A schedule-polymorphic parent
+  compiles to a constraint; binding is the constraint check. What
+  "principal" may honestly claim is scoped by §3.b: the requirement is
+  principal *as a constraint set*, not as a weakest ground schedule —
+  which in general does not exist.
 - The canonical family: BypassFIFO and PipelineFIFO sit at the two
   incomparable SB points; the blocking FIFO (enq or deq, never both)
   is their **meet**; a dual-ported CF FIFO is the **join**. A parent
   declaring blocking works with all of them; one needing same-cycle
   enq+deq must say which ordering — which *is* the pipeline/bypass
-  distinction, made precise.
+  distinction, made precise. (That the meet and join happen to be
+  *inhabited* by real implementations here is an existence fact about
+  FIFOs, not a lattice theorem — §3.b separates order from
+  inhabitation.)
 
 Precedent: effect systems. Schedules are effects; this is row/effect
 polymorphism with principal effect inference. Order-as-interface is
 the session/behavioral-types line.
+
+### 3.b Correlation, entailment, and what principality survives
+
+The first external review of this RFC (Codex, 2026-08-23, in the KB
+lane) landed a real objection here; this section is its adoption. The
+pointwise matrix order of §3 is the subsumption order between
+*ground* schedules. It is not the contract language, and treating it
+as one admits illegal schedules.
+
+**The counterexample.** Let a parent be correct under exactly two
+coherent modes: (A before B and C before D), or (B before A and D
+before C). Its pointwise-weakest "requirement" — per pair, keep
+whatever both modes allow — is *either order on (A,B), either order
+on (C,D)*, which admits the mixed choice (A before B, D before C)
+that no coherent mode licenses. The legal set is not convex in the
+pointwise order, so **no principal weakest ground schedule exists in
+general**; dually, the pointwise meet or join of two coherent offers
+need not be a legal offer, and inhabitation of a lattice point is
+always a separate existence fact from its place in the order.
+
+**Correlation rides shared variables.** The repair is §4's own
+machinery, stated as discipline: contracts are **constraint sets over
+position variables**, and correlation across method pairs is
+expressed by *sharing variables* — exactly how type systems express
+correlation (the two ends of `(a, a)`). A family offer like the
+polymorphic FIFO never decomposes into independent per-pair choices:
+its pipeline and bypass points differ in the binding of one shared
+parameter, not in unrelated matrix cells, so instantiating the family
+always yields a coherent point. Taking pointwise meets or joins
+*across* alternatives is the operation this section bans.
+
+**Subsumption is entailment.** Between constraint-set contracts, the
+conformance check is implication — the offered constraints entail the
+required ones — discharged by the same solver that completes orders.
+The §3 matrix comparison survives as the ground special case.
+
+**Principality, scoped to the fragment that has it.** In the
+**conjunctive fragment** — conjunctions of relational provisos over
+(possibly shared) position variables, which is what traversing a
+fixed rule set produces — the parent's requirement *is* principal
+**as a constraint set**: the traversal yields exactly its demand;
+every satisfying binding works; every violating one fails some rule.
+This is §3's effect-system analogy stated honestly: principal
+*schemes*, not principal ground points.
+
+**Where disjunction genuinely enters, principality is not claimed:**
+
+- **Guarded schedule values** (the `-sched-dynamic` SchedAlt line,
+  §5): the value is a case expression whose arms are coherent
+  bindings.
+- **Alias- and data-dependent footprint edges** (§6): whether two
+  operations share a region can be a runtime fact, so the derived
+  constraint is conditional.
+- **Moded parents**: a parent deliberately written to be correct
+  under two coherent child modes — the counterexample above.
+
+For these, a contract is an **antichain of coherent alternatives**
+(equivalently, a disjunction of conjunctive constraint sets), each
+alternative checked by entailment separately. The checker reports
+*which* alternatives a binding satisfies and **exposes
+non-principality instead of approximating it** — no pointwise
+collapse, ever. The engineering bet, flagged in §12: alternative sets
+stay small because each arm is a designer-visible mode (a guard, a
+parameter point), never a combinatorial product the compiler
+invented.
+
+**Selection is a value; completion is a solve.** Choosing *which*
+coherent alternative binds is a binding-time event — a schedule
+parameter at a specialization key (§9), a SchedAlt guard at runtime —
+never a solver search. Once selection is fixed, §4's near-linear
+story applies unchanged: cycle-check plus toposort completes the
+order. This is the review's requested separation — selecting among
+alternatives apart from completing an order — and §4.b's guard
+extends it to the completed model itself.
 
 ## 4. Positions: the type-side mechanism
 
@@ -147,7 +242,10 @@ are solver *output*, never source. (This no-literals rule is one of
 the two design points most worth external challenge — see §12.)
 
 **Solving is cheap by construction.** Order constraints solve by
-cycle-check plus topological sort — near-linear. The problem is
+cycle-check plus topological sort — near-linear *within a fixed
+alternative*: where a contract carries coherent alternatives (§3.b),
+selecting among them is a binding-time value, never a solver search,
+and the near-linear completion runs after selection. The problem is
 NP-hard only if you *optimize* when over-constrained; so don't:
 over-constrained is an **error**, the type-error discipline applied to
 schedules. The designer relaxes a constraint; the compiler never
@@ -218,6 +316,20 @@ mirrors A20 exactly — deliberately exported landmarks are API (like
 method names); internal positions are existential and hidden (like
 internal rules).
 
+**Landmarks are sealed by default** (adopted on external review,
+Codex 2026-08-23). Exporting a landmark grants *constraint-against*
+rights only; unifying new operations onto it — inhabiting it — stays
+the exporting package's business unless it explicitly grants open
+inhabitation. The reason is the consolidation mechanism itself:
+inhabitation at a distance changes the consolidated structure everyone
+else constrained against — a third package unifying onto
+`WritebackPoint` can tighten the order between two parties that never
+imported it — which is exactly the spooky action A20 exists to kill.
+Sealing is the method-name discipline applied to positions; open
+landmarks remain expressible as an explicit grant for the rendezvous
+cases that genuinely want them; and unification onto a sealed landmark
+from outside is a type error naming the seal.
+
 **Their relationships are known.** The solver holds the partial order
 over the consolidated positions at all times: queryable
 (`-show-schedule` prints a Hasse diagram over meaningful names
@@ -242,6 +354,22 @@ the former is a fact; the latter is a §8 arbitrary tie-break wearing a
 coordinate, and it must never leak into contracts, landmark names, or
 the lockfile. Tooling shows the partial order, never the model,
 unless explicitly asked for a model.
+
+The guard has a second half, because one consumer legitimately does
+take a model: **realization**. Mux priority *is* the schedule order
+(§7), so whatever totalization the solver picked — §8's arbitrary
+tie-breaks included — drives hardware, which makes the model a
+**reproducibility and QoR input** (the external review's point). The
+rule that keeps this sound: **the model is always a pinned artifact,
+never ambient.** Facts flow up — the partial order into contracts,
+landmarks, and the lockfile; models flow down — the chosen
+linearization is recorded in the realization artifact it produced and
+content-addressed with it. bsc already does exactly this:
+`asch_rev_exec_order` in the .ba is a recorded model. So the model is
+always somebody's explicit choice — the designer's (total fill, §5),
+the lockfile's (ratified pins, §9), or the build's (recorded at
+realization) — and re-deriving it ambient at consumption time is the
+bug class this rule deletes.
 
 ## 5. Schedules as values — and the unification
 
@@ -509,7 +637,10 @@ BRAM1.v's hand-encoded write-first behavior is the in-tree miniature).
 Realization is per-instance — one source register realizes differently
 under different bindings — which makes the specialization machinery
 load-bearing for internal state, and extends "port names stop being
-API" (A20) to internal nets: witnessed renderings apply there too.
+API" (A20) to internal nets: witnessed renderings apply there too. In
+every case realization consumes the **pinned model**, never an ambient
+re-solve (§4.b's rule): the order that shaped a mux chain is recorded
+with the artifact it shaped.
 
 ## 11. Costs, honestly
 
@@ -536,8 +667,11 @@ API" (A20) to internal nets: witnessed renderings apply there too.
 
 ## 12. External challenge points
 
-Flagged by the type-side arc as the two decisions most worth
-adversarial review:
+Flagged by the type-side arc as the decisions most worth adversarial
+review (the first external review — Codex, 2026-08-23 — has already
+landed §3.b, the pinned-model rule, and the sealed-landmark default;
+the first two points below remain open, the third is what that review
+left flagged):
 
 - **The no-literals rule.** Solver-owned models keep positions
   canonical and portable; designer-pinned indices (the EHR habit) are
@@ -549,6 +683,12 @@ adversarial review:
   position variables — the scope structure (one solver model per
   domain per cycle, generalization at boundaries) needs a worked
   design, especially where domains interact through synchronizers.
+- **The antichain bet** (§3.b). Disjunctive contracts are represented
+  as antichains of coherent alternatives on the claim that alternative
+  sets stay small — each arm a designer-visible mode, never a
+  compiler-invented product. If guarded schedules or alias-dependent
+  footprints produce combinatorial alternative growth in practice, the
+  representation and the no-approximation rule need a rethink.
 
 ## 13. Migration order
 
@@ -621,11 +761,16 @@ commitment; 5–6 are the payoff demonstration; 7–8 are the endgame.
 - Whether `Pred`/`Scheme`/`Qual` carry position provisos through the
   CType phase index unchanged, or positions want their own constraint
   syntax class.
-- Landmark surface syntax and sealing (§4.b): how a package declares
-  and exports a named position, and whether landmarks are *open*
-  (anyone may unify operations onto them) or *sealed*
-  (constraint-against only — inhabitation controlled by the exporting
-  package).
+- Landmark surface syntax (§4.b): how a package declares and exports
+  a named position, and how it spells the explicit open-inhabitation
+  grant (the default is now sealed — §4.b).
+- The conjunctive-fragment principality claim (§3.b) as a theorem:
+  the right formal statement (principal constraint sets under
+  traversal plus unification) and its proof obligations.
+- The antichain surface (§3.b): how a disjunctive contract prints,
+  diffs, and lands in the CType phase index — the same proviso class
+  with a disjunction node, or a distinct constraint syntax class?
+  (Connects to the Pred/Scheme/Qual question above.)
 - The typechecker substitution remedy (union-find binding forest)
   interaction: position variables join the same forest or get a
   dedicated near-linear order-solver state?
