@@ -343,9 +343,10 @@ assertion edge onward.
   upstream --trace+--timing regression (the bug still exists upstream,
   but with the init writing the pre-initial value there is nothing
   left for it to lose) -- with every survivor byte-identical.
-  Projected full-suite Verilator total: **25 fail** (= 31 - 6);
-  upstream class 12 -> 9 ($signed-slice 6, parallel_case 3), residual
-  startup 10 -> 7 (sysClockDiv2 x2, sysTestMkClock x2,
+  Full-suite confirmation on the final tree: Icarus unchanged at
+  18,828 / 4 / 129; Verilator **18,641 pass / 25 fail / 237 xfail**
+  (= 31 - 6); upstream class 12 -> 9 ($signed-slice 6, parallel_case
+  3), residual startup 10 -> 7 (sysClockDiv2 x2, sysTestMkClock x2,
   sysNullSyncTest2, sysGatedClockCycle, fast_to_slow).
 
 ## Migration
