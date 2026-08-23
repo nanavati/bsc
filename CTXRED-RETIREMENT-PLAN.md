@@ -62,7 +62,12 @@ most profitable. **Recursive instances pin the commitment tiering** (2026-08-22)
 body's own wanted at a non-ground head (`Eq (List a)` inside `instance (Eq a) => Eq (List a)`)
 is discharged today by committing at a variable head — the knot itself is `sat`'s machinery
 (`TCMisc.hs:343` "tie the recursive knot", `isSelfRec` `:709`), untouched by retirement, but a
-blanket never-commit-at-non-ground rule would force the self-constraint into the context. So
+blanket never-commit-at-non-ground rule would force the self-constraint into the context —
+which is exactly where Deriving already puts it: `doDEq` emits the naive field-derived context
+verbatim (`Eq (List a)` inside its own instance, cross-reference chains for mutually recursive
+families; `Deriving.hs:275`), and it is CtxRed that erases it today. The body-side knot and the
+declared-context cleanup are therefore two separate jobs: the tiering here covers the first;
+J11/§3.5 owns the second. So
 the rule is per-class: (a) declared-open classes always defer; (b) ordinary classes commit at
 non-ground heads when the unify-guard is clean — exactly current behavior, zero migration,
 residual exposure identical to today's; (c) the sound long-term footing is Haskell's own
@@ -111,6 +116,7 @@ relocated.
 | J8 | Used-package tracking → unused-import warnings | `CtxRed.hs:47`; `bsc.hs:641` | `recordPackageUse` in the remaining TI runs (typecheck); warning-parity test (Phase 4). Audit: this is accounting policy, never a reason to rewrite signatures |
 | J9 | Per-def reduction for boundary analysis: `cCtxReduceDef` in GenWrap (`getDef`, wrapper type) and GenFuncWrap (noinline) | `GenWrap.hs:538`, `GenFuncWrap.hs:97` | The pick-time ground-solve helper (single `matchTop` + fd projection at ground inputs; Phase 4, with the contracts work) |
 | J10 | The post-elaboration wrapper re-typecheck's own CtxRed run | `bsc.hs:2201` (inside `compileCDefToIDef`) | Dies with the contracts proposal's continuation removal — no work needed here beyond sequencing |
+| J11 | Shrink derived-instance contexts: Deriving emits naive field-derived contexts — recursive self-preds (`Eq (List a)` in its own instance), mutual-recursion cross-references, duplicates — and free-rides on the pass to reduce them to tyvar-headed form | `Deriving.hs:275` (`doDEq`; the other `doD*` alike) feeding the J1 core | Generator-owned context inference (§3.5, jurisdiction bullet): re-scope the reducer core to derived instances only — no written telescope exists there, so the no-rewriting rule is not engaged; H98 §10 / GHC `simplifyDeriv` precedent makes the fixpoint the *definition* of the derived context, not an optimization |
 
 **Downstream consumers of the reduced form** (these are what each phase must re-point):
 `Scheme`/`quantifySpecified` (the `@`-telescope — the VTA conflict); `genUserSign`/
@@ -239,7 +245,35 @@ puzzles the generator could have not posed.
   already expands them). First experiment: prototype `doDBits`/`doDEq`, benchmark on the
   largest in-house instruction package + a synthetic wide-union sweep + the audit's N×M.
   Parity rows must include **recursive types** (List/Rose-shaped), the common case exercising
-  the recursive-dictionary knot.
+  the recursive-dictionary knot — these rows land in the structural lane, not the width lane;
+  see the jurisdiction bullet below.
+- **Recursive types: the reducer's last legitimate jurisdiction** (2026-08-23, Ravi). The width
+  lane never meets recursion — a recursive type has no finite width, hence no `Bits` instance to
+  derive — but the structural classes (`Eq`/`Ord`/`FShow`/…) do, and there Deriving *free-rides
+  on the pass being retired*: `doDEq` emits `Eq t` for every constructor-argument type verbatim
+  (`Deriving.hs:275`), so `data List a` ships context `(Eq a, Eq (List a))` and mutually
+  recursive families ship cross-reference chains; CtxRed is what reduces these to `(Eq a)`.
+  Under P1 with nothing else done, every derived instance of a recursive type would carry its
+  self-constraint into the `.bo` — an extra dictionary argument knot-tied at every importer's
+  use site, and exactly the proviso-shipping shape the audit's blowup measured. Deferral (the
+  SizeOf trick) does not apply: there is no closed form for `Eq (List a)`'s context — it must be
+  *computed*, and the computation **is** context reduction. The resolution is jurisdictional,
+  not architectural: derived instances have **no written context** — the generator defines it —
+  so the no-rewriting rule is not engaged, and H98 §10 / GHC's `simplifyDeriv` establish
+  fixpoint inference as the *specification* of derived contexts. Mechanism: keep the J1 core as
+  a post-derive `inferDerivedContexts` pass over generated `Cinstance`s only. The environment it
+  needs already exists at the right pipeline point: `symt11` is rebuilt immediately after
+  Deriving "because Deriving added new instances" (`bsc.hs:401-403`), so imported instances
+  *and* the group's own heads are both in scope. Rules: reduce constructor-headed preds only;
+  a pred that is a group instance's head at its own instantiation is discharged as an assumption
+  (the knot in generative form — mutual families converge the way `sat`'s `lookfor` stack does);
+  group heads at other instantiations unfold under a depth cap (polymorphic recursion), and on
+  cap the pred stays in the context — sound, merely noisy; open-class preds and tyvar-headed
+  residue always stay. Multi-step recursion through library types falls out because imports are
+  ready even at derive time: `Rose a = Rose a (List (Rose a))` → wanted `Eq (List (Rose a))` →
+  via the imported `List` instance → `Eq (Rose a)` → group-self → discharge, residue `(Eq a)`.
+  Parity criterion: inferred contexts must equal today's reduced ones across List/Rose/mutual-
+  family shapes.
 
 ### Phase 2 — Internal canonicalizer + evidence cache
 
