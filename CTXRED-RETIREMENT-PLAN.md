@@ -58,7 +58,18 @@ world, and a downstream more-specific overlapping instance silently re-opens a f
 The only world-closed classes in the tree are the StdPrel computed ones — instances constructed
 by `genInsts` functions, `allowIncoherent = Just False` (`StdPrel.hs:78-93`) — instance-as-
 total-function is closedness by construction, and it is exactly where discharge is safest and
-most profitable. Three regimes follow: (i) coherent ∧ closed → early reduction is a pure
+most profitable. **Recursive instances pin the commitment tiering** (2026-08-22): an instance
+body's own wanted at a non-ground head (`Eq (List a)` inside `instance (Eq a) => Eq (List a)`)
+is discharged today by committing at a variable head — the knot itself is `sat`'s machinery
+(`TCMisc.hs:343` "tie the recursive knot", `isSelfRec` `:709`), untouched by retirement, but a
+blanket never-commit-at-non-ground rule would force the self-constraint into the context. So
+the rule is per-class: (a) declared-open classes always defer; (b) ordinary classes commit at
+non-ground heads when the unify-guard is clean — exactly current behavior, zero migration,
+residual exposure identical to today's; (c) the sound long-term footing is Haskell's own
+argument — with no-overlap as the default (overlap only by explicit declaration), every
+ordinary head is world-closed by construction, upgrading (b) from status-quo-sound to sound.
+The open/overridable marker thus serves discharge admission, sacrificial-instance retirement,
+catch-all deferral, and recursive-instance commitment. Three regimes follow: (i) coherent ∧ closed → early reduction is a pure
 optimization, valid anywhere (the only regime P3 discharge and unrestricted evidence reuse may
 operate in); (ii) coherent ∧ open-world → valid only relative to a pinned environment — cached
 with the environment stamped on it, or deliberately frozen at a boundary (the contracts
@@ -218,6 +229,17 @@ puzzles the generator could have not posed.
   boundary derivation (J2/J9) is this move for the wrapper machinery.
 - Bonus: generation-time failures blame the right thing ("field f of MyUnion has no Bits
   instance") instead of surfacing as solver residue.
+- **Landable now, and expected to speed up large-union typechecking on its own** (2026-08-22):
+  today an N-constructor union's derived `Bits` emits ~3N fresh tyvars in three *interlinked*
+  chains, so `reducePredsAggressive` runs a symbolic fixpoint (`joinNeededCtxs` re-sorts;
+  `satMany'` restarts after each FD improvement). The SizeOf form replaces that with N
+  *independent* ground solves (one `matchTop` each, ATF-cache-memoized across instances and
+  packages) plus a linear `normTAp` fold — a complexity-class change in the constraint layer,
+  with no dependence on P0–P5 (output-position TFs in heads are legal; `ctxRedInstHead`
+  already expands them). First experiment: prototype `doDBits`/`doDEq`, benchmark on the
+  largest in-house instruction package + a synthetic wide-union sweep + the audit's N×M.
+  Parity rows must include **recursive types** (List/Rose-shaped), the common case exercising
+  the recursive-dictionary knot.
 
 ### Phase 2 — Internal canonicalizer + evidence cache
 
