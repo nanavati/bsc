@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.7 — strawman distilled from a design discussion
+**Status:** Draft v0.8 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 adds: §14.b schedules as values (the Kôika precedent).
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent.
 
 ---
 
@@ -789,35 +789,64 @@ IPackage record itself: the ATF cache is already a per-package annex.
   import order; an evidence-keyed elaboration-time cache dedups
   globally and order-independently.
 
-**Costs, decomposed (the honest unknown):**
+**The dominance argument (correction — this is not a trade-off).** The
+replacement is not "skip the passes and pay at elaboration"; it is a
+**smarter definition cache**: per-definition simplified forms, computed
+on first demand, memoized durably. Then the comparison is strict:
 
-1. *Amortization loss*: simplification once per definition per
-   consuming design, instead of once per definition — for Prelude-class
-   definitions used by everything, real. Bounded by the fact that
-   elaboration re-simplifies whatever it inlines anyway.
-2. *Evaluator pathologies on raw forms* — the scary tail: unsimplified
-   dictionary spines at every use site are exactly the class of
-   superlinear evaluator blowups the primitive-fixes work documented.
-   Any experiment must include the perf-stress designs, not
-   microbenchmarks.
-3. *`.bo` size and load time* (raw bodies are bigger). Modest;
-   measurable.
-4. *Elaboration-time dictionary duplication*: fixupDefs' redirects also
-   mean evidence-equal dictionaries elaborate once because they are one
-   definition; the lazy replacement must catch this in the evidence
-   cache or pay per-name re-elaboration.
+- work(lazy+cache) = simp(*used* definitions), once each;
+  work(eager) = simp(*all* definitions), once each. The lazy side never
+  does more work and usually does far less — **we only simp what we
+  use**, and the unused fraction of a library surface (the Prelude
+  above all) is the majority for any given design.
+- The "amortization loss" objection dissolves: the durable cache
+  preserves once-per-definition amortization on the used set — across
+  modules, designs, and (via the share) users and CI.
+- The "raw-spine evaluator pathology" objection also dissolves: the
+  evaluator consults the cache *before inlining*, so it only ever
+  inlines simplified forms; raw spines are walked exactly once, inside
+  the def's own one-time simp — the same walk eager did.
+- What actually moves is *placement*: first-use simp cost shifts from
+  package-compile time (on the iface critical path, for everything) to
+  first-elaboration time (off the critical path, parallel, only for
+  what is demanded). That is a better place for it.
 
-**The experiment** (instrumentation half-exists: `-trace-drop-dicts`
-and `-trace-simp-dicts` are already in the tree): a flag skipping
-iSimpDicts + iSimplify (and optionally fixupDefs redirects) at
-`.bo`-write; compile the library, the testsuite corpus, and the
-perf-stress designs both ways; measure package-compile time, `.bo`
-sizes, full-design elaboration time and memory, and `.bo` byte-stability
-across simplifier tweaks; use the traces to size redirect and
-simplification hit rates. The middle target is the likely winner and is
-this RFC's shape anyway: keep the eager work but store it as the
-derived `simp(pkg)` node/annex beside a raw impl — identity properties
-and amortization at once, at the cost of carrying both forms.
+**The in-tree precedent is the ATF cache** — demand-populated,
+artifact-attached, coherence-filtered, per-package-owned, consulted by
+elaboration. The definition cache is that pattern generalized from
+type-function resolutions to simplified definition bodies; the
+dictionary side generalizes fixupDefs into the demand-driven evidence
+cache (the CtxRed retirement's P2) the same way. Three instances of one
+mechanism.
+
+**Engineering points (design work, not costs):**
+
+1. *Key*: (raw-def hash, simplifier version, keys of the definitions
+   the simp inlined) — demand-recursive, cycles handled by the same
+   demand stack as specialization; cloud-shareable, so the first user
+   anywhere to simp a Prelude definition warms it for everyone.
+2. *Determinism, not byte-fidelity*: per-def simp is a deterministic
+   function of the def and its dependencies' simped forms; it need not
+   reproduce today's whole-package fixpoint byte-for-byte — the `.bo`
+   identity is raw, so simp differences cause no artifact churn, and
+   semantic equivalence is gated by the existing output checks.
+3. *Shipped libraries*: a release may pre-warm the stdlib's cache —
+   eagerness returns as a **cache-warming policy**, not as identity
+   semantics. A policy knob where there used to be an architecture.
+4. *Storage*: raw impl (identity) + simped-of-used (cache annex);
+   slightly more bytes than today's simped-only `.bo`, in exchange for
+   a stable identity artifact and a disposable cache.
+
+**The experiment reframes accordingly — measure the size of the win,
+not its existence** (instrumentation half-exists: `-trace-drop-dicts`,
+`-trace-simp-dicts`): instrument elaboration to count distinct
+definitions inlined vs definitions present in loaded packages (the
+used-set ratio, per design and fleet-wide); measure package-compile
+speedup with the passes skipped; first-elaboration overhead with a
+prototype cache (predict ≤ today for any design whose used-set ratio is
+below 1); `.bo` byte-stability across simplifier tweaks; and cache hit
+rates across a fleet. The perf-stress designs stay in the corpus as the
+guard that the cache is actually consulted on every inline path.
 
 ### 15.b The adjacent question: auto-boundary for cross-package modules
 
