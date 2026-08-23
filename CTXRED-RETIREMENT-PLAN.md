@@ -55,6 +55,31 @@ scope, which is why CtxRed already runs with incoherent matching disabled (`runT
 `TCMisc.hs:1715-1740`); and *world-closed* — no future instance can redirect it, which BSC
 **assumes but never checks**: the reduced signature bakes in the defining package's instance
 world, and a downstream more-specific overlapping instance silently re-opens a frozen choice.
+
+**World-closure is checkable — ban orphans** (2026-08-23, Ravi): BSC already computes the
+precondition at signature generation. `GenSign.hs:433-434` flags an exported instance as an
+orphan — and the check is *fundep-aware*, better than GHC's: `inst_heads` projects the
+non-determined (matching) positions per fundep, so a locally-defined type in an output-only
+position does not rescue an instance from orphanhood. But it only emits `WOrphanInst`, whose
+own text already names the hazard ("may lead to inconsistent instance resolution if the orphan
+instance is not imported everywhere it could be used", `Error.hs:2807-2812`). Promoting the
+warning to an error (flag-gated migration) makes ground heads world-closed **by rule** for
+every class: all instances for `C T` must live in C's package or T's, both compiled before any
+scope can pose the wanted, so the full instance set — catch-all and overrides alike — is
+visible wherever the wanted can be formed, and most-specific selection is scope-independent.
+The division of labor across the three rules is then exact: **orphan ban** ⇒ ground-head
+world-closure and always-visible overlap conflicts, for all classes including declared-open
+catch-all classes; **no-overlap default** (tier c) ⇒ sound non-ground commits for ordinary
+classes — the orphan rule alone cannot deliver this, because a future `instance C (List Foo)`
+in Foo's package is a *legal non-orphan* that would redirect a committed `C (List a)`; only
+the overlap ban excludes it; **open marker** ⇒ deferral at non-ground heads where overlap is
+declared. Under this triple, `DefaultValue`'s `coherent` declaration (`Literal` catch-all plus
+downstream overrides, `Prelude.bs:4516-4523`) becomes a theorem at ground heads instead of an
+assertion. Receipt that the library is already migrated: `Base3-Misc/DefaultValue.bsv` is an
+empty relic ("moved to the Prelude"), and the tree's `DefaultValue` instances live with their
+types. (Companion fence for the P0 census: `GenSign.hs:407-408` silently *drops from the
+signature* any instance mentioning an unexported local type — package-private instances;
+benign under the ban since no importer can name the type, but they should be counted.)
 The only world-closed classes in the tree are the StdPrel computed ones — instances constructed
 by `genInsts` functions, `allowIncoherent = Just False` (`StdPrel.hs:78-93`) — instance-as-
 total-function is closedness by construction, and it is exactly where discharge is safest and
@@ -328,7 +353,8 @@ puzzles the generator could have not posed.
   one; both become derive-time errors instead of landmines. (Side observation from this check,
   flagged for the §1 open-marker migration list: `DefaultValue` is declared `coherent` yet has
   a `Literal` catch-all with downstream overrides — `Prelude.bs:4516-4523` — the SplitPorts
-  shape with a coherence assertion on top.)
+  shape with a coherence assertion on top. Resolved 2026-08-23: under the orphan ban the
+  assertion is justified at ground heads — see the world-closure passage in §1.)
 
 ### Phase 2 — Internal canonicalizer + evidence cache
 
