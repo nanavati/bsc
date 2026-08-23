@@ -391,6 +391,21 @@ P0–P5 depends on it.
   version-sensitivity and blame pains), GHC `type-nat-solver` (Diatchki 2015 — improvement via
   forced-value extraction works; never mainstreamed), `ghc-typelits-natnormalise` (evidence
   against reified interfaces, not against engines).
+- **The store is also the prerequisite for higher-rank types and GADTs**, should those reach
+  the language's horizon: OutsideIn(X) exists *because* GADT matches introduce branch-local
+  Given equalities, which eager-unification inference cannot host (GHC's wobbly- and boxy-types
+  attempts both failed before the constraint-store rewrite); arbitrary-rank checking needs the
+  same implication scaffolding (skolemize, solve under the scope, untouchables). BSC is closer
+  than it looks — `EPred`/`VPred` is the Given/Wanted split, `bySuperE` is given-superclass
+  expansion, `tsBoundTyVarStack` is already a leveled skolem stack (`TIMonad.hs:322-327`),
+  deferred equalities are canonical work items — what is missing is first-class implications,
+  flavour-aware rewriting, and the store with kick-out. Design consequence for P2: give the
+  store push/pop implication *levels* (per-level givens and untouchables) even though v1 uses
+  one level; retrofitting levels is where GHC spent years. Payoff specific to hardware: GADT
+  branch refinement here is *numeric* (`case instr of Add … ⊢ w ~ 32`), so the GADT givens and
+  the numeric theory component compose in the same store — width-indexed encodings typecheck
+  per branch. This changes P2's cost accounting from "cleanup enabler" to shared type-system
+  infrastructure with three consumers.
 
 ## 7. What stays forever
 
