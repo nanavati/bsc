@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.9 — strawman distilled from a design discussion
+**Status:** Draft v0.10 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10).
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor.
 
 ---
 
@@ -490,10 +490,14 @@ counts (the magic 5 dies); the scheduler treats the whole family
 uniformly instead of special-casing RWire; compiler-chosen realizations
 *within* a semantic point under the §13 licenses (unused-port elision
 licensed by the schedule; mux collapsing licensed by proven ME); one
-state-element schema for BIR/trs; and the §14.b Kôika mode becomes
-realizable **by construction** — total user schedules lower onto the
-EHR family uniformly, which is exactly how Kôika grounds its own
-semantics.
+state-element schema for BIR/trs; and a uniform lowering target for
+§14.b total schedules. (v0.9 claimed the Kôika mode thereby becomes
+realizable "by construction" — too glib. §14.c develops the stronger
+reading — under a total schedule the EHR itself dissolves into *a
+register observed at many points* — and the real costs that remain.
+The one-family reading here stays the right *migration vehicle*: the
+declared-form library that existing code keeps using while the
+schedule surface arrives.)
 
 ### Clocks and resets under the split
 
@@ -592,6 +596,11 @@ a physical-encoding-leaked-into-semantics repair.
 - Import-strata surface spelling; the exact stratum-merge policy for
   plain `import`; whether `import concrete` is needed or an attractive
   nuisance; whether export lists also want stratum annotations.
+- The default position on the enable dial — static vs data-dependent
+  will-fire (§14.c) — and the surface for choosing it per region.
+- Derived forwarding for indexed state (register files →
+  address-compare bypass networks): whether to admit it beyond v1's
+  scalar-register scope, and under what non-aliasing obligations.
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
@@ -754,7 +763,8 @@ The bsc mapping:
   rests on EHRs (Rosenband's Ephemeral History Registers) — and bsc
   *has* them: `mkCReg` is the EHR. What bsc lacks is only the schedule
   surface, not the register semantics that realizes aggressive orders.
-  The gap is smaller than it looks.
+  The gap is smaller than it looks. (§14.c inverts this: once the
+  schedule surface exists, the EHR itself stops being a primitive.)
 - **Dynamic scheduling already shipped schedule values.** The
   `-sched-dynamic` work's SchedAlt machinery — guard-selected schedule
   alternatives in the composition artifact, chosen per clock edge — is
@@ -779,6 +789,122 @@ tooling fold over schedule values as they fold over contracts; and the
 differential-testing frame sharpens — two implementations of one
 declared contract differ, within the bound, exactly by their schedule
 values.
+
+### 14.c The EHR dissolves: a register observed at many points
+
+§10 frames the EHR family as one semantic contract with many
+realizations — "EHR-native Bluespec". That framing is true but it is
+the *weaker* of two readings. The stronger one: **in the presence of a
+total schedule, an EHR is just a register observed at many points.**
+There is no N-port element. There is one state element with one commit
+at the clock edge; reads and writes carry *schedule coordinates*;
+"port i" is not a property of the register but an edge between the
+register and the schedule value. Port arity is emergent — the number
+of coordinates the schedule distinguishes on that register — not a
+declared parameter of a library cell. And the bypass chain is not part
+of any primitive: *a read at coordinate c returns the youngest write
+at a coordinate before c, else the flop* is a derivation, with mux
+priority literally the schedule order. Rosenband's construction
+derives the EHR exactly this way, and Kôika's rd0/rd1/wr0/wr1 are two
+fixed coordinates with log dynamics enforcing the order.
+
+**The two views are the §7 lattice applied to state, not rivals.**
+Precise: the register under the total schedule — the denotation.
+Declared: the EHR — an *ascription* that coordinates i < j exist with
+observation semantics between them, made without totalizing the
+ambient schedule. The EHR is to the schedule what a type ascription is
+to inference. This settles the migration story too: `mkCReg n` stops
+being a primitive and becomes a derived form — a register plus n fresh
+ascribed coordinates in the canonical CReg order — with an unchanged
+surface API the compiler now sees through.
+
+**Where the EHR-as-entity survives: boundaries.** A module's methods
+are exported coordinates relative to an enclosing schedule the module
+cannot see. A register whose observation points are exported is
+exactly what an EHR *is*: the boundary packaging of (register +
+coordinate bundle). Inside a fully scheduled region the entity
+dissolves; at a boundary under a genuinely partial schedule it is the
+honest interface. Composition is the already-familiar obligation — the
+parent's schedule must linearly extend the child's exported coordinate
+order — which is today's "execution order of the separately
+synthesized submodule" error family (Error.hs:3831) made
+compositional. And `RevertingVirtualReg` now dissolves *entirely*: §10
+called it the split's existence proof (all schedule facts, no
+realization); here it is revealed as a schedule ascription wearing a
+module costume — as are the RWires that AAddSchedAssumps inserts.
+
+**The total order already exists in the tree.** This is what makes the
+stronger reading concrete rather than aspirational. The schedule bsc
+stores in the composition artifact is `asch_rev_exec_order ::
+[ARuleId]` (ASyntax.hs:383) — a total linear execution order per
+module. bsc even *totalizes pairs the semantics leaves free*: CF and
+ME rules get arbitrary execution edges (`CArbitraryChoice`,
+ASchedule.hs:1558) because downstream machinery assumes one flattened
+order. Bluesim executes that order one rule at a time, and
+`-show-schedule` prints it as "Logical execution order"
+(ADumpSchedule.hs:305). So bsc already lives in Kôika's total-schedule
+world internally — the order is a scheduler *output*, opaque at
+boundaries and invisible to the surface, rather than a value. §14.b
+makes it a value; this section is what state elements become once it
+is one. Verilog makes the same point from outside: blocking-assignment
+order inside an always block is a total schedule spelled textually,
+and Verilog accordingly never needed an EHR cell — the synthesizer
+derives the forwarding. The EHR is the price Bluespec paid for leaving
+intra-cycle order implicit; making schedules values refunds it.
+
+**What survives as genuine element axes.** Persistence, with its
+companions reset and initialization: a wire is the degenerate register
+whose commit is snipped, and reset is only meaningful given
+persistence. Unset-read behavior (raw / Maybe / default / error) is an
+element fact. Everything about *sequencing* was never the element's
+property — it was the schedule's, stored in the wrong place. Per-port
+policy splits accordingly: write-collision resolution and guardedness
+are schedule/contract facts; the rest follows the element. The §10
+sharing residual also takes a cleaner shape here: fusing two
+coordinates onto one physical port is a realization choice licensed by
+a schedule fact (the coordinates are provably never co-active), so the
+semantic side of the disjointness check is a schedule query and the
+physical side is a binding-manifest fact.
+
+**Why it is not that easy** — the four real costs:
+
+1. **Coordinate assignment is the scheduling problem.** Where
+   ascriptions are absent, placing reads and writes on coordinates to
+   satisfy declared contracts (or maximize concurrency) is exactly
+   Rosenband's performance-driven scheduling. §14's principal-schedule
+   inference was already the research core; the dissolution makes the
+   EHR story *downstream* of it, not separable from it.
+2. **A second dial: static vs data-dependent enables.** Kôika's
+   one-rule-at-a-time-for-every-schedule theorem is bought with
+   dynamic aborts compiled into data-dependent enable logic — strictly
+   more permissive than bsc's static CF/SB relations, at logic cost
+   and QoR unpredictability. This dial is orthogonal to §14.b's fill
+   dial: (none / partial / total) × (static / data-dependent). Kôika
+   mode is (total, data-dependent); classic bsc is (inferred-total,
+   static). AAddSchedAssumps — already inserting RWire-based dynamic
+   assumption checks — is the embryo of a per-region middle setting.
+3. **Realization becomes per-instance.** Forwarding derived from the
+   instance's schedule means one source register realizes differently
+   under different schedule instantiations. That is the payoff — §14's
+   Pipeline/Bypass/blocking FIFO from one source, the network derived
+   per instantiation — but it makes the §3/§13 specialization
+   machinery load-bearing for *internal state*, not just boundaries;
+   and A20 (names stop being API) now reaches internal nets, so
+   witnessed renderings apply there too.
+4. **Indexed state.** A register *file* observed at many points
+   derives address-compare bypass networks — processor forwarding
+   written by the compiler. That is precisely what EHR-built cores
+   hand-write today (the power) and logic the source no longer shows
+   (the cost), elidable only where the schedule proves non-aliasing.
+   v1 should scope derived forwarding to scalar registers.
+
+So the slogan is not "EHR-native"; it is **register-native,
+schedule-valued**. The EHR is how a register looks through a
+partial-schedule window, and it earns entity status exactly at
+boundaries, where the window is genuinely partial. The §10 one-family
+reading remains the right migration vehicle, but the family is a
+facade over (element × schedule coordinates × realization), not the
+foundation.
 
 ## 15. The pre-.bo eager layer: giving up early inlining
 
@@ -961,6 +1087,10 @@ default can follow the measurements rather than precede them.
   GHC Hadrian (Shake at scale, including its stabilization cost).
 - Module systems: ML signatures/structures; VHDL
   entity/architecture/configuration; GHC Backpack.
+- Rule-based semantics: Kôika (Bourgeat, Pit-Claudel, Chlipala,
+  Arvind, PLDI 2020); Rosenband's Ephemeral History Register
+  (MEMOCODE 2004) and performance-specification scheduling
+  (Rosenband/Arvind).
 - In-tree precedents: staged-flow branch arc (per-module Bluesim
   codegen, link-regen); trs BIR segment/link split; the link-time `.ba`
   walk; GenWrap's from-wrapper and the `veriPortProps` import-BVI
