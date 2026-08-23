@@ -2,9 +2,11 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.1 — strawman distilled from a design discussion
+**Status:** Draft v0.2 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
+v0.2 adds: the ba as witness (connect, not conflate); clocks and resets
+under the semantic/physical split.
 
 ---
 
@@ -225,6 +227,18 @@ were homeless for twenty years, and the audit procedure for the
 contract format: anything re-derived per session at a boundary belongs
 in it.
 
+**The ba connects, not conflates.** An implementation is precisely the
+thing that connects a semantic contract to a physical realization, so
+the `.ba` legitimately contains both layers *and the mapping between
+them* — it is the **witness** that they cohere. The conflation sin
+belongs to VModInfo-as-the-boundary-abstraction, not to the
+implementation artifact. Consequences: for a derived pair, conformance
+— including every sharing-class obligation of §10 — was *proved by the
+child's own scheduler during elaboration*; the ba records that proof,
+so no checker re-derives it. Checkers are needed only where the witness
+is absent: asserted realizations (BVI) and re-binding a realization to
+a semantic contract other than the one it was elaborated against.
+
 ## 8. Two maps, three imports, one action
 
 - **contract : Name → Promise** — API material; the only thing in a
@@ -378,6 +392,57 @@ contract) and **link-time** (semantic instance → realization). And
 *foreign realization* (the port map — which always belonged to the
 realization, not the contract).
 
+### Clocks and resets under the split
+
+The split's first concrete application inside the compiler: **the
+(oscillator, gate) wire pair is a physical realization choice, and
+today it is baked into elaboration.** `AClock` is literally
+`{ aclock_osc :: AExpr, aclock_gate :: AExpr }` (ASyntax.hs:980), and
+IExpand threads gate wires through the semantic evaluator
+(`getClockGate` et al.) — physical plumbing inside the semantic phase.
+
+Under the split:
+
+- **Semantic clock** = domain identity plus *relationships*: this
+  domain's edges are a subset of that domain's, controlled by an
+  abstract gating condition G (itself a Bluespec-level semantic value);
+  derivation and crossing promises. In bsc's per-cycle semantics,
+  "gate off ⇒ nothing in the domain fires" is all a parent's
+  elaboration and scheduling ever consume.
+- **Physical realization** = how a domain's clock arrives at each
+  boundary: a bare wire; an (osc, gate) pair; gate absorbed into an ICG
+  cell (what ASIC flows actually do — bsc's CLK_GATE outputs are
+  routinely unused there); or **enable-folding** — the gate rendered as
+  a conjunct of the child's implicit conditions.
+- **Nothing happens in elaboration.** IExpand stops threading gate
+  wires; clocks become abstract domain references; all osc/gate
+  materialization moves to the realization/link stage. A substantial
+  simplification of a notorious complexity source.
+- **Enable-folding is a boundary coercion, not a semantics.** It
+  applies exactly when the gating signal is not deliverable at a module
+  boundary (the bound realization has no gate input — the BVI case
+  today). In the per-cycle semantic model it is *exact* — identical
+  firing sets — while differing only in properties outside the model
+  (power, physical clock activity, clock-tree structure). A
+  transformation invisible to the semantic layer and meaningful only
+  physically is the *definition* of a realization choice: the cleanest
+  possible demonstration that the layer boundary is drawn correctly.
+  Legality: bsc-generated children are always enable-suppressible by
+  construction (every firing is EN-guarded); foreign realizations only
+  if their asserted contract says so. The reverse coercion (ungated
+  parent, gate-expecting child) is tying the gate true.
+- Bluesim and trs never wanted gate *wires* — they want the semantic
+  relationship (edge suppression) and today reverse-engineer it from
+  the physical encoding. Under the split they consume the semantic
+  layer directly — the `veriPortProps` XXX comment's wish, granted for
+  clocks too.
+
+Reset is symmetric (sync/async assertion style, polarity, and port
+encoding are realization; domain membership and assertion semantics are
+semantic) — and the recent InitialReset fix is the miniature precedent:
+moving its hold register to a polarity-independent encoding was exactly
+a physical-encoding-leaked-into-semantics repair.
+
 ## 11. Migration order
 
 1. **External Shake driver** over today's artifacts (§3) — ships
@@ -413,6 +478,14 @@ realization, not the contract).
 - Whether `vlink` should also perform cross-boundary flattening on
   request (recovering combined-mode optimization within the split
   architecture).
+- The surface typing of gating conditions once gates leave elaboration
+  (today's gate-as-wire surface operations need semantic-condition
+  counterparts).
+- An ICG-cell realization library and its conformance story
+  (glitch-safety obligations live entirely in the physical layer).
+- Whether enable-folding should be expressible as a user-visible
+  realization annotation (per boundary) rather than only an automatic
+  fallback.
 
 ## References
 
