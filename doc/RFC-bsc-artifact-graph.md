@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.12 — strawman distilled from a design discussion
+**Status:** Draft v0.13 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung.
 
 ---
 
@@ -115,14 +115,47 @@ zero-drift property is literal, not aspirational. Before cabalization
 the driver would vendor sources or scrape subprocess output, and
 adding shake to the make build means the deprecated
 `cabal v1-install`-into-the-global-db path (INSTALL.md:117) that every
-builder and packager feels. Ship the driver as its **own executable
-package** (say `bsc-make`) with `build-depends: bsc, shake`: shake
-stays out of bsc-the-library's dependency footprint (a small upstream
-ask; distro packaging untouched; the "touches nothing in bsc" property
-preserved in packaging form), and v1 scans in-process while spawning
-`bsc` per compile — process isolation, no reentrancy audit. Order:
-cabalization lands, the driver package lands beside it, the testsuite
-stays untouched.
+builder and packager feels. Ship the rung-1 driver as its **own
+executable package** (say `bsc-make`) with `build-depends: bsc,
+shake`: at that rung shake stays out of bsc-the-library's dependency
+footprint and nothing in bsc changes. But that is migration posture,
+not the destination.
+
+**The destination is replacement, not a sidecar.** `-u` is wanted gone
+*completely* — same flag, new engine: `bsc -u`'s implementation
+becomes the Shake engine and the custom machinery behind it is deleted
+(`chkDeps`'s recompile marking, `needsUpd`'s timestamp comparison and
+blind propagation, `compile_with_deps`' sequential loop), because
+parallelism is then free — and **fine-grained parallelism is free once
+the §6 node breakdown lands**. The freeness is structural, not luck:
+the graph exists for *caching*; Shake schedules whatever graph it is
+handed; so scheduling width is a corollary of the decomposition, never
+a separate parallelization project. The ladder — each rung the same
+engine over a finer graph:
+
+1. **Package-level** (the sidecar; zero bsc changes): DAG-width
+   parallel `.bo` compiles, each worker process internally sequential.
+2. **Internalized** (post-cabalization; shake joins bsc's own
+   dependencies): `bsc -u` *is* the engine, spawning worker
+   invocations per package — the CLI surface unchanged, the custom
+   staleness code deleted, every existing `-u` user getting parallel
+   builds without changing anything.
+3. **Stage-level**: phase-split worker invocations over iface/impl and
+   segment nodes (the staged-flow branches already ship this shape for
+   Bluesim) — pipeline parallelism: an iface completing unblocks
+   importers while its impl is still compiling.
+4. **Node-level** (fine-grained): nodes execute in-process in one
+   engine; concurrency ≈ graph width at node granularity — per-module
+   elaborations, per-def simps (§15's single-flight is this rung),
+   per-module segments, all scheduling independently.
+
+The one toll on the ladder: rung 4 needs the reentrancy audit (global
+interning state) or a daemon — and until it is paid, rung 3's process
+workers stay cheap precisely because nodes are serialized artifacts
+(the reload cost *is* the node encoding). From rung 2 on, the engine
+belongs in the *library*, not the executable: bluetcl, bluehs, and the
+LSP consume the same memoized query surface (§5), and the sidecar
+dissolves into it. The testsuite stays untouched throughout.
 
 ## 4. Containment in a static-graph build (Bazel)
 
@@ -636,18 +669,26 @@ Consequences:
 
 1. **External Shake driver** over today's artifacts (§3) — ships
    parallelism; touches nothing in bsc.
-2. **Make `contract(ba)` total** (§7) — ABin additions + projections;
+2. **Internalize the engine** (§3's ladder, rung 2) — `bsc -u` becomes
+   the Shake engine under the same flag, spawning workers per package;
+   `needsUpd`/`compile_with_deps` and the rest of the custom staleness
+   walker are deleted. Post-cabalization; shake joins bsc's
+   dependencies; the sidecar dissolves.
+3. **Make `contract(ba)` total** (§7) — ABin additions + projections;
    coordinate with in-flight format-tag bumps.
-3. **iface/impl split of the `.bo`** (§6) — ships cutoff and the staged
+4. **iface/impl split of the `.bo`** (§6) — ships cutoff and the staged
    flow; the CtxRed-retirement raw-telescope serialization is the iface
-   content.
-4. **Semantic/physical factoring of the boundary** (§10) — VModInfo
+   content. The engine picks up stage-level pipeline parallelism here
+   for free (§3 ladder, rung 3).
+5. **Semantic/physical factoring of the boundary** (§10) — VModInfo
    splits into SemContract + Realization; vseg/vlink for Verilog,
    completing backend symmetry.
-5. **Contracts as values + generated `.bc` + resolver shadowing** (§9).
-6. **Demand-driven specialization** on the rails 1–5 laid (§4 hooks;
+6. **Contracts as values + generated `.bc` + resolver shadowing** (§9).
+7. **Demand-driven specialization** on the rails 1–6 laid (§4 hooks;
    contract-value hashes as node keys).
-7. **Per-definition impl demand** only if profiling justifies.
+8. **Per-definition impl demand** only if profiling justifies — with
+   the reentrancy audit unlocking §3's rung 4 (in-process node-level
+   parallelism) whenever its measured value calls for it.
 
 ## 12. Open questions
 
