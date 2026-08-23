@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.14 — strawman distilled from a design discussion
+**Status:** Draft v0.15 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache).
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers).
 
 ---
 
@@ -306,6 +306,82 @@ in-repo and version-pinned consumers; tagged serialized schemas as the
 cross-version surface. The exposed-modules set should converge on the
 vocabulary as the node work lands — wholesale exposure is the
 scaffolding, not the contract.
+
+### Interning as the serialization strategy
+
+The custom serializers exist mostly to preserve **sharing**. BinData's
+own header says so: the module is "carefully crafted" for lazy
+bounded-space streaming *and* to avoid "losing structure sharing in
+the generated binary stream." The exit: **require every type that
+needs sharing to be interned, and serialize the intern table
+directly** — everything outside the tables is then tree-shaped, and
+tree-shaped serialization is derivable, not hand-written. The tree
+already contains both halves of this design, as unsystematized
+fragments:
+
+- **IType is the complete existence proof, at construction time.**
+  Interior nodes are private constructors carrying an intern id and a
+  memoized analysis (`ITAp_ !Int !VarSet IType IType`); construction
+  routes through interning smart constructors; **bidirectional pattern
+  synonyms** (`pattern ITAp f a <- ITAp_ _ _ f a where ITAp = mkITAp`,
+  IType.hs:96) keep the entire pattern-matching surface of the
+  compiler undisturbed. Hash-consing with zero client churn, shipped.
+- **BinData is the manual write-time version.** A `BinTable` of five
+  hand-registered shared types (FString, Id, Position, Type, IType)
+  with a first-encounter-emits-value / later-encounter-emits-index
+  scheme built during the lazy write walk — plus a six-step "HOW TO
+  ADD A NEW TYPE TO THE SET OF STRUCTURES THAT GET SHARED" recipe
+  (BinData.hs:100) whose cost is visible in the commented-out
+  `aexpr_table` and `loc_table` lines: candidates discovered, never
+  landed. That stalled discovery *is* the custom-serializer business.
+
+Systematized: one generic `Interned` mechanism (the IType pattern —
+id-carrying private constructors, interning smart constructors,
+bidirectional pattern synonyms) applied to every sharing-critical
+type; one table engine in the serializer that treats *any* interned
+type uniformly (the embedded id makes write-side memoization O(1) —
+no structural hashing at emit); and derived (Generic) instances for
+everything else, legitimately, because after interning the residue is
+trees. GenBin (702 lines), GenABin (993), and most of BinData (1,581)
+collapse into the engine plus derivation lists plus the schema tags.
+
+One refinement to "serialize the intern table directly": the table
+that serializes is the **reachable, walk-ordered projection** from the
+artifact's roots — never the global table (session-history-ordered,
+holds unrelated entries, and would leak both bytes and
+nondeterminism). This is in fact what BinData's lazy
+first-encounter/index scheme already produces; global intern ids never
+appear in the stream. Walk-order canonicality is also exactly the
+**canonical serialization** the API subsection above obligates nodes
+to have — content addressing and interned serialization are one
+principle at two grains (§15's definition-cache keys are the third).
+
+The forcing function, mechanized: derive everything naively, run the
+size regression against today's artifact corpus, and the blowups
+*name* the intern-required set — discovery becomes a measurement loop
+instead of a stalled judgment call. Bonuses that ride along: interned
+nodes carry memoized analyses (the `VarSet` field is the precedent —
+free variables computed once per node, not per traversal);
+re-interning on read gives **cross-artifact dedup in memory** (loading
+fifty packages shares their types); and intern keys force the
+identity-vs-decoration decision per type — the position rule applied
+at value grain (does an Id's position participate in its identity? the
+intern key answers, explicitly).
+
+Costs, honestly: construction-time interning taxes hot allocation
+paths — GHC deliberately does *not* hash-cons its Type for exactly
+this reason, so CType-in-the-typechecker is an empirical question
+(bsc already crossed the bridge for IType; write-time-only sharing —
+what BinData does for Type today — remains the per-type fallback, and
+it still deletes the custom serializer). BinData's bounded-space lazy
+streaming is a real property the engine must preserve (derivation
+replaces the per-constructor bodies, not the monad). And the interning
+tables must become **threaded contexts, not more globals** —
+IType.hs's three `unsafePerformIO` IORef tables (internTable,
+tconTable, vsCanonTable) are the rung-4 reentrancy blocker in
+miniature; universalizing that pattern would deepen the blocker,
+universalizing the *context-threaded* version is a down payment on the
+audit. Design the two together.
 
 ## 7. Contracts: precise and declared
 
@@ -780,6 +856,12 @@ Consequences:
 - The supported exposed-modules set (§6's API subsection): which node
   types and derivations constitute the promised surface, and the
   deprecation path for everything currently exposed as scaffolding.
+- The intern-required set (§6's interning subsection): which types
+  beyond FString/Id/Position/Type/IType earn interning (the
+  size-regression discovery loop names them); construction-time vs
+  write-time interning per type (the GHC hash-consed-Type counterpoint
+  applied to CType); and the intern-key identity discipline (positions
+  in or out, per type).
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
