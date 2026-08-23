@@ -2,14 +2,17 @@
 
 Schedules as types, values, and contracts.
 
-**Status:** Draft v0.1 — 2026-08-23. Unifies two arcs that reached the
+**Status:** Draft v0.2 — 2026-08-23. Unifies two arcs that reached the
 same summit independently: the *value side* — §§14/14.b/14.c of
 `RFC-bsc-artifact-graph.md` (a design discussion, Ravi Nanavati with
 Claude) — and the *type side* — the scheduling-as-types arc of the
 scheduling-complexity session, whose companion implementation (the
 scheduler pair-enumeration transpose) landed as MatX-inc bsc PR 47.
 Not proposed upstream. The artifact-graph RFC's §§14–14.c remain as
-the summary; this document is the full treatment.
+the summary; this document is the full treatment. v0.2 resolves the
+urgency-axis question by ruling (§5.b): the new model has **one
+order** — the urgency/execution distinction is dropped; fancier
+arbitration is written down explicitly.
 
 ---
 
@@ -168,8 +171,8 @@ endpoint — module parameters and ascriptions with deferred
 realization. The pragma surface (`descending_urgency`,
 `execution_order`, `preempts`, `mutually_exclusive`, `conflict_free`)
 demotes to **constructors of a typed Schedule value**, validated at
-construction, preserving bsc's real urgency-vs-execution-order
-distinction in the type. The `-sched-dynamic` SchedAlt machinery is
+construction — with the urgency constructors deleted per §5.b's
+one-order ruling. The `-sched-dynamic` SchedAlt machinery is
 runtime-*selected* schedule values already shipped in the trs
 composition artifact; the static story is one more constructor, and
 the dynamic engine an evaluation strategy over schedule values.
@@ -198,6 +201,56 @@ and hashes into specialization keys; types are what the checker
 verifies and the solver completes. Same object, two faces — exactly
 the contract/value story of the artifact-graph RFC, applied to
 scheduling.
+
+### 5.b One order: the urgency/execution distinction is dropped
+
+bsc today maintains two orders per cycle — **urgency** (who wins
+arbitration when conflicting rules contend) and **execution** (logical
+position in the one-rule-at-a-time semantics) — and they may disagree
+per pair: rule A can win arbitration over B while B executes earlier
+when both fire. The freedom exists to scrape concurrency out of edge
+cases, and it is a durable source of user confusion: two attribute
+families, two mental models, and an amplifier for §2's compound
+unpredictability.
+
+**Ruling (Ravi, 2026-08-23): the new model has one order.** Positions
+are it. Arbitration is positional — the sequential semantics runs
+positions in order, and a later action that cannot legally extend the
+cycle's history (a genuine conflict) does not fire. This is Kôika's
+discipline exactly: it has no urgency axis at all, and its
+every-schedule theorem never missed one. Note that value-overriding —
+a later write superseding an earlier one through an EHR — is not
+arbitration; it is sequential *composition*, which already favors
+later positions. The two conventions (earlier wins the right to fire;
+later wins the value) are consistent, not in tension: both are just
+"run the order forward."
+
+**"If you want the fancier arbitration, just write it down."** The
+expressiveness lost is the *implicit* kind only. A pair that needs
+B-before-A dataflow *and* A-beats-B arbitration on some third
+resource remains expressible — as an explicit guard or an arbiter the
+designer writes: stated intent (§8), not scheduler cleverness.
+Consequences through the design:
+
+- The Schedule value loses its urgency constructors.
+  `descending_urgency` migrates as positional priority
+  (earlier-listed = earlier-positioned); `preempts` survives on the
+  co-firing axis (a directed must-not-co-fire plus a position fact).
+- §6's two-axis relation domain is untouched — ordering and co-firing
+  were never the urgency split; arbitration simply collapses into the
+  ordering axis.
+- The solver produces **one model per cycle**: no urgency/earliness
+  merge, no reconciliation pass between two orders. The footprint
+  schema carries one position field serving both consumers.
+- §2's runtime-arbitration-coupling axis loses its amplifier — the
+  worst coupling chains ran through the divergence.
+
+**The loss is measurable, not asserted.** The divergence is statically
+visible today: the scheduler can flag every pair whose final urgency
+order differs from its final execution order. Running that census over
+the testsuite and a large private corpus turns "the loss is
+negligible" into a number — and names exactly the designs that need an
+explicit-arbiter rewrite under migration.
 
 ## 6. Footprints: the contract representation
 
@@ -396,7 +449,10 @@ API" (A20) to internal nets: witnessed renderings apply there too.
 4. **Migration is compatibility-critical.** mkCReg, the pragma bag,
    and the FIFO zoo must demote to derived forms with unchanged
    surfaces (the zoo becomes one text plus frozen indices) — any
-   step that breaks existing designs dies on arrival.
+   step that breaks existing designs dies on arrival. The one
+   deliberate break is §5.b's: designs exercising the
+   urgency/execution divergence need explicit-arbiter rewrites, and
+   the census names them in advance.
 
 ## 12. External challenge points
 
@@ -421,7 +477,9 @@ adversarial review:
    (PR 47's inverted index is the first factored artifact; the
    RuleRelationDB residency evidence is the forcing function).
 2. **Schedule value type**: the pragma surface demotes to
-   constructors, validated at construction; no semantic change.
+   constructors, validated at construction; no semantic change. The
+   §5.b urgency-divergence census runs here — today's scheduler, zero
+   new machinery — to size the one-order migration set with a number.
 3. **Verify mode**: declared schedules checked by subsumption (the
    post-GenWrap verify mode, shipped for schedules).
 4. **Position kind + relational provisos** behind a flag; method
@@ -480,9 +538,6 @@ commitment; 5–6 are the payoff demonstration; 7–8 are the endgame.
   runtime-selected binding a value-level case expression over
   schedule values, and what does the footprint of a dynamic module
   export?
-- The urgency axis: positions order execution; urgency orders
-  resource arbitration. One kind or two? (bsc's type preserves the
-  distinction; the solver story for urgency needs its own pass.)
 - Whether `Pred`/`Scheme`/`Qual` carry position provisos through the
   CType phase index unchanged, or positions want their own constraint
   syntax class.
