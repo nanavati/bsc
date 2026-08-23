@@ -2,14 +2,16 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.5 — strawman distilled from a design discussion
+**Status:** Draft v0.6 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
 under the semantic/physical split. v0.3 added: import strata. v0.4 added:
-§13, the relation to the post-GenWrap design (July 2026). v0.5 adds:
-§14 schedule polymorphism, and §15 the cross-module-inlining cost
-experiment.
+§13, the relation to the post-GenWrap design (July 2026). v0.5 added:
+§14 schedule polymorphism and the first draft of §15. v0.6 rewrites §15
+around the correctly identified target — the pre-.bo eager layer
+(LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
+demoted to §15.b.
 
 ---
 
