@@ -18,7 +18,7 @@ DECISION / PROPOSAL / RESOLUTION / NEEDS-RAVI.
    orphan bsc improvements become tiny ordinary PRs. Supersedes the
    stack's *shape*; deferred — per-rung PRs continue meanwhile.
 2. **Flavor transparency**: trs eats whatever .ba it is given
-   (Verilog-flavored default at MatX, Bluesim-flavored outside); the
+   (Verilog-flavored default internally, Bluesim-flavored outside); the
    exporter normalizes to one BIR semantics; the **dual-flavor seal**
    chains the Bluesim oracle onto the Verilog flavor; refusals are
    loud, per-construct, and on a burn-down ledger converging to
@@ -66,17 +66,18 @@ All-AOT invariant holds (1003/0 seals; engines all-aot). Toooba at
 Verilator parity (24% fewer instructions; the D1 differential is the
 equalizer; store-side EN sweep is the named next lever); link time is
 the named scaling wall (LLVM passes on one 25M-insn module; sharding-
-as-trs-emit is the doctrine answer). MatX corpus: 136 tests byte-exact
-all-AOT; zero known parity divergences; wire-heavy benches 2.4–6.6×
-FASTER than Bluesim -O3; unit tests ~10× end-to-end (boot 4–6ms vs
-bluetcl 55–70ms). Lever verdicts: dynamic residue is the universal
-lever ("nothing walked per cycle"); activity gating opt-in (null on
-active cores; fits large idle subsystems); vectorization dead on Flute
-shapes, census-gated upside as across-instance SIMD on MatX shapes;
-RunCore-for-BDPI dead for perf; cache *tuning* off the menu but
-structural locality on it. Performance claims stay corpus-conditional
-(the Flute-vs-MatX profile inversion is the deepest external-vs-MatX
-fact); the bar of record is the fastest opponent's wall.
+as-trs-emit is the doctrine answer). The internal corpus is sealed
+byte-exact all-AOT with zero known parity divergences, and wire-heavy
+internal shapes run well ahead of Bluesim (numbers and workload
+characterization in 07 §1). Lever verdicts: dynamic residue is the
+universal lever ("nothing walked per cycle"); activity gating opt-in
+(null on active cores; fits large idle subsystems); vectorization dead
+on Flute shapes, census-gated upside as across-instance SIMD on
+wire-heavy shapes; RunCore-for-BDPI dead for perf; cache *tuning* off
+the menu but structural locality on it. Performance claims stay
+corpus-conditional (the workload-shape inversion of 07 §1 is the
+deepest external-vs-internal fact); the bar of record is the fastest
+opponent's wall.
 
 RESOLUTION — **identity and honesty rungs gate productization**: the
 adopted-in-lane manifest/fail-closed rung (requested-vs-actual engine,
@@ -93,8 +94,9 @@ not review noise. "Parity of record" language stands for measurement;
 BVI-via-Verilator v5 (as built): shadow-vector execution behind the
 prim ABI; exactness theorem with export-time refusals as boundary
 conditions; verilation is a build step (run side load-only); compiled
-by default; census endpoint reached (residue = 5×Inout permanent +
-mesa); defined divergences pinned, never silent. Deployment: pinned
+by default; census endpoint reached (residue = five permanent Inout
+cases plus one named leaf; 07); defined divergences pinned, never
+silent. Deployment: pinned
 Verilator (the fork release cut from the fixed tip — stock 5.050
 carries a material $signed-slice miscompile); floor = --timing
 capability; re-run the r3 battery on any pin change; long-term posture
@@ -150,8 +152,12 @@ stated once:
    blocks / boundary coercion) recorded in manifests and certificates,
    and derivation coherence (deriving ValidateBits without co-derived
    Bits is an error; roundtrip law property-tested). This is the
-   near-term bug-finding face of the roadmap and Erez's recorded
-   feature ask; it must not gate on the longer program.
+   near-term bug-finding face of the roadmap, it is already deployed as
+   a validation pattern in production RTL, and it carries a recorded
+   internal feature ask (both in 07 §5); it must not gate on the longer
+   program. FACT (meeting record, 10): a formal write-up of X semantics
+   in Bluespec with a soundness argument is a committed action — it
+   should be the reference-semantics piece (item 1) written down.
 
 The reset-sequence RFC is the substrate contract: the observable
 window starts at each domain's first post-deassert edge; the sequence
@@ -183,7 +189,7 @@ lifts + G0129"; "KB: BVI-via-Verilator design (trs)"; "KB: bsc
 verilator integration" (reset/finish/two-state-z arcs); "KB: verilator
 open packed DPI"; "KB: bsc X-safe ValidateBits design"; "KB: bsc solver
 strategy" (X-analysis consumers); doc/RFC-simulation-reset-sequence.md;
-src/trs docs; MatX PRs #108–#158.
+src/trs docs; fork PRs #108–#158.
 
 ## 7. NEEDS-RAVI (rolled up in 09)
 
@@ -198,3 +204,8 @@ src/trs docs; MatX PRs #108–#158.
   doctrine leans no); ValidateBits Q1/Q3/Q6 residuals.
 - Sibling-branch landing; BENCH_ARCHIVE_TOKEN; the PR #108–#158 review
   program itself (open with zero review comments).
+- The **coverage story**: a Bluespec coverage-tracking infrastructure
+  is a committed direction (07 §5), but its proposal document was not
+  reachable by this review (10 §7) — share it so the design can be
+  reconciled with the verdict-node and observability programs here and
+  in 01/06.

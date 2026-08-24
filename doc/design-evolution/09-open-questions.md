@@ -28,8 +28,8 @@ documents/lanes; this is the decision queue.
    ownership split and flag-day rule.
 5. **One-order compatibility rung (03 §R3.1):** approve running the
    urgency/execution divergence census (today's scheduler; testsuite +
-   a MatX corpus) and the named-rung/format-generation treatment of the
-   break.
+   a large internal corpus, 07) and the named-rung/format-generation
+   treatment of the break.
 
 ## B. Design ratifications waiting (single-lane, ready)
 
@@ -58,10 +58,16 @@ documents/lanes; this is the decision queue.
 12. **Orphan program:** WOrphanInst→error timing (standalone vs with
     CtxRed P0); route the GenSign defect (own filing vs #1061 comment);
     whether NEW-2/NEW-3 ride along.
-13. **IExpr/IType landing:** the MatX CI 4-cell verdict consumption;
+13. **IExpr/IType landing:** the fork-CI 4-cell verdict consumption;
     the one-golden regold; forward rank-first Ord upstream?
 14. **CtxRed/VTA sequencing:** does P1 ride the VTA branch or land just
     ahead; authorize the born-reduced-deriving experiment.
+14a. **WrapField fix choice (04 §6):** field-name normalization vs
+    join-after-WrapMethod vs dictionary CSE — the dictionary-lifting
+    and evidence-digest work should build against the chosen lane.
+14b. **Contract-files ↔ manifest unification (01 §1):** ratify that the
+    3-phase flow proposal's contract files and the transitive manifest
+    are one artifact family before the flow proposal circulates.
 
 ## C. Ecosystem-facing proposals in waiting (your PR-policy gate)
 
@@ -84,9 +90,9 @@ documents/lanes; this is the decision queue.
 ## D. Strategy (no lane records an answer)
 
 21. **trs's ultimate home** (07 §4.1): side-tree forever, or an
-    eventual upstream offering (tool suite vs backend)? Related:
-    backfill the "bsc as smaller tools" sync notes into the KB — the
-    doctrine's cited origin is unrecorded.
+    eventual upstream offering (tool suite vs backend)? The
+    smaller-tools origin gap is now closed (10 §1); the strategy
+    question remains.
 22. **VCS engineering depth** (07 §4.3): how much investment the
     VCS-specific paths (trs shell under VCS, encrypted-IP flows,
     VCS-as-oracle CI seats) deserve.
@@ -104,3 +110,9 @@ documents/lanes; this is the decision queue.
     unpushed BVI-fallback proposal branch (needs a B-Lang-org push
     grant or git-am); the sibling winning-monorepo branch landing;
     matx-corpus reseal needs a matx-attached session.
+26. **Meeting-record access (10 §7):** share the coverage proposal
+    document and (optionally) the Gemini meeting-notes folder with the
+    agent service identity ai.agents@matx.com — the crawl could read
+    only the summary emails, not the full notes; the coverage proposal
+    was unreachable entirely. Manual capture needed for the Jul 22
+    roadmap meeting and May 13 "Formal Bluespec" (no auto-notes exist).

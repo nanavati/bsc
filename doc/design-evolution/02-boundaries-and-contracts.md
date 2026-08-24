@@ -138,8 +138,18 @@ artifacts.
 - **Doctrine** (trs): BVI is last-resort — source-level BSV
   substitution first (keeps the Bluesim oracle), curated prim-table for
   DesignWare-class IP second, verilated-leaf co-sim last. BVI pressure
-  at MatX is entirely in the -verilog flow (mkDwSimOrBs picks native
-  models under -sim) (FACT).
+  concentrates in the -verilog flow (FACT; deployment specifics in
+  07 §5).
+- **The long-horizon fifth program** (10 §4): redo the import mechanism
+  from scratch on top of SplitPorts — the BVI syntax predates the
+  typeclass that now owns type↔port mapping — restoring computed module
+  names (the dropped "module verilog" feature) and extending to
+  computable port names (pVeriPort is a string literal today;
+  "generally anything with string literals"). RESOLUTION: this is the
+  same design as the decomposition bullet reached from the surface
+  syntax side; when the rethink is scheduled, it must land as the
+  surface for the asserted-contract + foreign-realization split above,
+  not as a parallel construct.
 
 ## 5. Foreign functions: one logical ABI, per-tool transports (RESOLUTION)
 
@@ -149,13 +159,13 @@ ownership, effect class) with per-transport realizations recorded in
 the manifest. The transport matrix of record (FACT): VCS = polymorphic
 VPI (no usable polymorphic DPI); released Verilator = width-mangled
 monomorphized DPI (IEEE 35.5.4 requires mangled C symbols + generated
-shims); the MatX Verilator fork = open-packed DPI (implemented,
+shims); the pinned Verilator fork = open-packed DPI (implemented,
 validated, UNPUSHED — custody is the chat-delivered patch; re-land
-needs a write grant); iverilog = VPI. Monomorphize-with-mangled-symbols
+needs a write grant, 09.E); iverilog = VPI. Monomorphize-with-mangled-symbols
 is the portable near-term path; open arrays remain the cleaner form
 where supported and an upstream candidate (issue 3198; maintainer has
 said "PR welcome" since 2021). NEEDS-RAVI: the upstream plan (R3) and
-the MatX-inc/verilator write grant. Note for trs shell: shell exports
+the fork write grant (09.E). Note for trs shell: shell exports
 have concrete widths at generation time, so mangled DPI serves it on
 every tool — the open-packed capability matters for *polymorphic
 imports*, not the shell boundary.
@@ -188,7 +198,35 @@ manifest → conformance + realization plan → link, and a mutable run key
 must not retarget an artifact after layout. Prove the payoff with an
 implementation-swap test in which the semantic prefix cache-hits.
 
-## 8. Lane pointers
+## 8. The SystemVerilog output horizon (from the longer-horizon set)
+
+The longer-horizon project document (10 §4) defines a full SV output
+mode as an umbrella of independent pieces; recorded here because each
+piece is a consumer of this document's machinery:
+
+- **SV-type integration**: absorb external type-emission tooling into
+  the compiler so generated output manipulates types via SV's own type
+  system (field selection, not bit slicing), keeping user-implementable
+  typeclasses for the genuinely extensible parts. This rides the
+  codebook-witness discipline of §3 — emitting SV types is emitting the
+  encoding contract in a second syntax, so it must be generated from
+  the same fingerprinted witness, never a parallel implementation.
+- **Intent-bearing constructs**: always_ff/always_comb/logic, and
+  especially **unique case** — bsc often knows a case is exhaustive and
+  exclusive by construction, and emitting unique case propagates that
+  knowledge to downstream tools that would otherwise reprove or miss
+  it. This is T1 applied to the Verilog backend: a compiler-known fact
+  becomes a carried, consumable artifact.
+- **SV assertion emission** (some generatable without source-level
+  assertions; source assertions better still) and **native SV import**
+  (the richer-featured sibling of §4's import rethink).
+
+Delivery model per the source document: needs internal capacity; not
+contractor-shaped. No sequencing claim here beyond noting the witness
+dependency (§3) and that intent-bearing output composes with the
+lint-noise program (07 §5).
+
+## 9. Lane pointers
 
 "KB: SplitPorts port-structure design"; "KB: bsc semantic port
 properties"; "KB: HuffmanBits generic deriving"; "KB: bsc BVI fallback
@@ -197,7 +235,7 @@ open packed DPI"; "KB: bsc typeclass coherence" (orphan enforcement);
 "KB: bsc artifact graph" (§§7–10, 13 + reviews); post-genwrap-
 compiler.md; bsc issues 921, 1061, 713, 731, 658.
 
-## 9. NEEDS-RAVI (rolled up in 09)
+## 10. NEEDS-RAVI (rolled up in 09)
 
 - HuffmanBits adoption gate (a) vs (b); companion artifacts.
 - Open-packed DPI upstreaming (R3) + MatX-inc/verilator write grant.

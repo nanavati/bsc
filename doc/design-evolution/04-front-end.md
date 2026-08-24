@@ -125,7 +125,7 @@ stays native — the conversational-algebra exclusion stands.
 
 ## 4. The metadata substrates (IType, IExpr, notes)
 
-FACT: measured and implemented on the MatX fork — IType WHNF-only rnf,
+FACT: measured and implemented on the fork — IType WHNF-only rnf,
 interned ftv sets with substitution pruning, the ATF-free bit
 (architectural, audited); IExpr fv caches (superset rule; knot rule
 with the ICValue acyclicity correction), content hashing with
@@ -154,17 +154,77 @@ profile of the statement-count quadratic reproducer before surgery.
   explicit cases; masks are value-set membership, never ICUndet/X
   (cross-policy tests); cache column kinds only post-normalization;
   export per-obligation completeness (fuel abandonment must be visible
-  to LSP/verdicts).
+  to LSP/verdicts). STATUS CORRECTION (meeting record, 10 §5):
+  exhaustiveness checking is DEFERRED pending further testing and a
+  rebase onto recent upstream — the implementation fails on specific
+  hardware values and needs a standalone test approach, and
+  synthesizability of checked constructs is a hard requirement. The
+  design above stands; the deployment claim does not, yet.
 - **Language-extension policy** (DECISION, 2026-08-15): consult the
   literature before designing; VTA followed it (specified/generalized
   binders, deterministic source order, no explicit-forall
   prerequisite).
 - **Deriving via + '0/'1 classic literals**: implemented in the trs
-  compat port, upstream-PR-shaped; landing route NEEDS-RAVI.
-- The A0-freeze feature ask recorded from Erez's 22:00 1:1 (Lucas's
-  bit-pattern validity checking) is ValidateBits — see 05.
+  compat port, upstream-PR-shaped; landing route NEEDS-RAVI. The
+  unsized-bit-literal wishlist item of the March internal sync is the
+  recorded origin (10 §5).
+- ValidateBits carries a recorded internal feature ask and is already
+  deployed as a production validation pattern (07 §5) — see 05.
+- **Small-project inventory** (ramp menu, 10 §6): first-class ===
+  (generic emulation cannot reach tagged-union tag tests; Eq-method vs
+  built-in is the open design question); the TypeError typeclass
+  (upstream #286); both are typechecker-surface work that composes with
+  this document's error-reporting and coherence programs.
 
-## 6. Lane pointers
+## 6. Meeting-sourced history: dictionaries, wrappers, and strictness
+
+The meeting crawl (10 §5) recovered the documented pre-history of this
+document's §§2–4 programs; recorded here because it grounds them:
+
+- **The WrapField regression** (performance-assessment engagement,
+  Sep 2025): the fork's typeclass-driven wrapping (WrapField/WrapMethod/
+  SplitPorts) gives WrapField a String field-name type argument so
+  context-reduction failures can name the failing field. That argument
+  defeats joinNeededCtxs context joining, so blasting a Vector of
+  interfaces constructs the *same* dictionaries once per element — the
+  root-caused compile-time regression (commit 372bee64). Three fixes on
+  record (Ravi): drop the element index from the field name so contexts
+  join; join specially after reduction to WrapMethod (no String arg);
+  or CSE the generated dictionary code (partial precedent:
+  simplifyDictBindings), carefully not CSEing non-dictionary code whose
+  names feed errors and readable Verilog. Any chosen fix must
+  co-compose with §2's evidence-digest and dictionary-pool work.
+- **The wrapper dictionary flow-through defect** (compiler tour): the
+  wrapper phase *reconstructs* the big dictionaries the first typecheck
+  already built — "you should just look it up; we do not flow that
+  properly." The same enumeration-principle shape as T1: a
+  recompute-and-discard boundary fact waiting to be carried forward.
+- **The deriving-after-genwrap ordering defect** (tour): wrapper
+  generation cannot see the full instance universe because deriving
+  runs after it — a known structural wart on §2's coherence story and
+  the ramp trajectory's named destination.
+- **Strictness and Hyper→NFData**: Hyper predates NFData and its
+  replacement (upstream #811) is worth ~13% alone; the surgical
+  proposal of record makes ISyntax strict in everything except ICon's
+  IConInfo (eSubst never substitutes into ICon; laziness must survive
+  for the ICDef/ICValue/IClock/IReset/IInout/ILazyArray knots) — the
+  same knot-topology facts that §4's substrates and the notes design
+  build on.
+- **Sequencing confirmation**: strictness annotations plus ground-type
+  interning are being sequenced specifically to enable dictionary
+  lifting, whose fix is flagged as the release-blocking soundness item
+  — independently matching §2's hard sequencing facts. The union-find
+  binding-forest remedy of §4 is likewise on the meeting record, with
+  "purity essential for tooling compatibility" and a systematic
+  invariant-checking policy to be agreed upstream.
+- **Numeric-engine motivation** (tour): today's two-level system
+  (handcrafted simplifying instances, then thumbs-up/down SMT) cannot
+  learn (knows a+a=2a, not a+2a=3a) — the operative wish behind §3's
+  three-axis exploration. A fundep-improvement fix is expected to open
+  higher-rank types via GADT-style reasoning (Mar 27) — the front end's
+  stated growth direction (00 §3).
+
+## 7. Lane pointers
 
 "KB: bsc typeclass coherence" (+ dev-note mirror); "KB: bsc ATF rewrite
 rules design"; "KB: bsc toolchain" HEAD (VTA, CtxRed audit + plan) and
@@ -173,7 +233,7 @@ strategy"; "KB: bsc IType interning perf boundaries"; "KB: bsc IExpr
 metadata and notes design"; "KB: bsc pattern-match checking";
 CTXRED-RETIREMENT-PLAN.md; upstream #950, #964, #1042, #1061.
 
-## 7. NEEDS-RAVI (rolled up in 09)
+## 8. NEEDS-RAVI (rolled up in 09)
 
 - Ratify the policy ceiling (as amended) and the solver-ownership
   split.
@@ -183,7 +243,10 @@ CTXRED-RETIREMENT-PLAN.md; upstream #950, #964, #1042, #1061.
   orphan-mislink findings comment on #1061 or file separately.
 - CtxRed P1 sequencing vs the VTA branch; born-reduced deriving
   experiment authorization.
-- IExpr/IType landing calls: the MatX CI 4-cell matrix verdict, the
+- IExpr/IType landing calls: the fork-CI 4-cell matrix verdict, the
   one-golden regold, rank-first Ord upstream forwarding.
+- The WrapField fix choice (§6): field-name normalization vs
+  join-after-WrapMethod vs dictionary CSE — pick the lane so the
+  evidence-digest work builds against it.
 - Pattern-check: the fuel-observability diagnostic and the full-suite
   seal per 01's capability rules.

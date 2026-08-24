@@ -85,12 +85,16 @@ authority/freshness classes.
 - **Parallel tracks made explicit.** Three lines are independent of
   N1–N9 and should not queue behind them: (P1) the Shake driver +
   cabalization (artifact-graph rungs 1–2) — enables everything, blocks
-  on nothing; (P2) the reset-sequence/oracle-harness arc and the
+  on nothing, and now carries upstream's own momentum: the 3-phase
+  compile split + contract files decision and the prioritized Cabal
+  migration (10 §1) ride P1, with contract files unified with N1's
+  manifests (01 §1); (P2) the reset-sequence/oracle-harness arc and the
   verilator fix upstreaming — simulation-contract work with its own
   gates; (P3) CtxRed P0/P1 + born-reduced deriving — front-end identity
   work whose only coupling is N2's vocabulary; VTA lands after P1(CtxRed).
   Scheduling RFC steps 1–3 run parallel after N4 exists in draft form
-  (the footprint artifact IS part of N4).
+  (the footprint artifact IS part of N4; the tour's resources/uses
+  scheduler patch folds into step 1 per 03 §R3.7).
 - **Per-rung trs PRs continue** during all of this (DECISION, Ravi):
   the DAG gates *productization claims and cross-lane composition*,
   not the measured-campaign cadence.

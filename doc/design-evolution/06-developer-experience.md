@@ -9,11 +9,20 @@ DECISION / PROPOSAL / RESOLUTION / NEEDS-RAVI.
 
 ## 1. bluehs
 
-DECISIONS: bluehs proceeds (Erez-aligned, low-risk; tool delivery
+DECISIONS: bluehs proceeds (leadership-aligned, low-risk; tool delivery
 independent of compiler releases); packaging is the fat `bsc-internals`
 package exposing all ~226 modules, exact-commit, interfaces
 deliberately undesigned until bluehs teaches us what it wants; the
-freeze rule is *freeze only what bluehs cannot add later*.
+freeze rule is *freeze only what bluehs cannot add later*. Provenance
+(10 §§3,5): the May GHCi-integration proposal (load all compiler
+modules into an interactive session for scripting and metadata
+extraction) is the origin, and the posture is stated on the tour —
+"who needs an API: access to all of BSC's libraries in Haskell, settle
+to a sensible API once we understand what's useful"; the near-term
+driver is lint-waiver emission scripting, and the release is promised
+to outside collaborators for experimentation. bluehs is also the
+stated replacement direction for the bluetcl/BDW lineage (BDW being
+"a stress test for bluetcl").
 
 RESOLUTIONS (adopting the review): the raw package is an exact-commit
 exploratory API and never the blessed surface; the blessed surfaces are
@@ -46,6 +55,22 @@ Architecture (DECISION): two layers — an error-tolerant parser (bluehs
 script code, differential-parse-tested against the identity-CI corpus,
 promoted to normative only on receipts) plus bsc-as-library semantics
 off last-good artifacts. Freeze rating B: tip-lane, freeze-indifferent.
+
+The August LSP meeting (10 §3) settled four working decisions that
+refine this architecture: **path-based range indexing** decoupled from
+the primary syntax tree (range data does not force syntax-type
+modifications); parser modernization on **Megaparsec with error
+recovery and multi-error reporting** — which simultaneously answers the
+tour's parser complaints (multiple errors, better messages,
+highlighting; neither existing parser library is worth reusing);
+essential-features-first scope (stable navigation and type checking
+before breadth); and **resurrecting interface files as the persistent
+home for auxiliary metadata** (doc strings and kin) — which for this
+document means the last-good-artifact layer reads an *enriched* .bo
+lineage rather than a parallel store, consistent with the tour's
+finding that .bo already carries I-syntax with positions and per-package
+signatures but not source text. LSP position-encoding (byte-based
+offsets) is handled explicitly at the protocol boundary.
 Feature priorities (DECISION, from the Unison scoping): the baseline
 set (rename, references, hints); type-at-use-site (what compiler
 integration buys over PR 891); **Verilog→source touch-point tracing**
@@ -72,10 +97,15 @@ wave tooling alike; candidate-name heuristics are not the bridge.
 
 Engagement (FACT): PR 891 is in daily use and stops where the compiler
 starts; upstream wants an LSP and will review; the Unison DevEx program
-(~$300K NTE) is a severable staffing-memo decision (Erez, 2026-08-24);
-Jeff owns LSP direction; the Bluespec, Inc. upstream-review program
-(~$225K NTE) is the governance counterweight. The LSP acceptance bar
-placeholder ([RAVI: bar]) remains open in the memo.
+(~$300K NTE) is a severable staffing-memo decision, with the proposal
+mechanics (rates, scope, weekly status, shared channel) in motion per
+the August meeting; the Bluespec, Inc. upstream-review program
+(~$225K NTE) is the governance counterweight. The longer-horizon
+document independently rates the compiler-integrated LSP
+contractor-friendly — well-specified, self-contained, no internal
+context needed — which is the delivery-model argument for the
+engagement (10 §4). The LSP acceptance bar placeholder ([RAVI: bar])
+remains open in the memo.
 
 ## 3. Typed observability (the decoder witness)
 
@@ -99,6 +129,18 @@ an AOT-emitted specialized dump walk) behind a benchmark tripwire.
 The trs BVI observability tiers (boundary dump riding trs's
 format-agnostic sink; link-time traced model variants as distinct cache
 classes with per-instance side files) remain OPEN pending Ravi.
+
+Meeting-record additions (10 §5): a July decision restructured wave
+generation to support **three dump formats selected by user
+configuration** — the format-agnostic-sink posture above, arriving in
+bsc itself; the waveform→source mapping ambition is stated on the tour
+as a Verdi-class feature targeted at **Surfer** (chosen because it
+decomposes structs and tagged unions properly), confirming the Surfer
+translator direction; and the ramp menu carries the small complementary
+item of emitting **Bluespec-type comments on generated ports,
+registers, and wires** (comment syntax following the source language) —
+the human-readable shadow of the decoder witness, worth keeping
+consistent with it rather than independent.
 
 ## 4. One query surface (the convergence)
 

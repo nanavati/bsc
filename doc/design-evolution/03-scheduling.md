@@ -29,8 +29,19 @@ DECISION (Ravi, 2026-08-23): **one order** — the urgency/execution
 distinction is dropped; arbitration is positional; fancier arbitration
 is written down explicitly. The loss is measurable: the divergence
 census (flag every pair whose final urgency order differs from final
-execution order) runs with today's scheduler and names the migration
-set in advance.
+execution order) runs with today's scheduler — over the testsuite plus
+a large internal corpus (07) — and names the migration set in advance.
+
+The model has independent strategic confirmation: the longer-horizon
+project document (10 §4) names "reorganize scheduling around
+user-specified schedules" as the biggest project beyond any roadmap —
+the compiler *checks* a stated schedule rather than inferring one, with
+the margin note that compatibility between stated schedules must still
+be checked (which is exactly what contracts-as-constraint-sets and the
+verify mode of step 3 provide). Its named secondary payoff — interface
+arguments, dropped historically because the compiler couldn't capture
+their scheduling — becomes reachable once footprints ride interfaces as
+contracts: record it as a post-migration beneficiary, not a step.
 
 ## 2. Resolutions from the review
 
@@ -95,6 +106,17 @@ arbitration and cheap hardware are the same design choice. Chain/
 prefix-sharing encodings and per-clique reporting ride the footprint
 representation; this is a scheduling-QUALITY lever, not only speed.
 
+**R3.7 — The compile-time quadratic already has a measured answer.**
+FACT (compiler tour, 10 §5): scheduling today considers every rule
+pair, and an experimental patch exists reworking it in terms of
+resources and uses — same schedules, often much faster, with some
+harder cases not yet covered. That patch is a *precursor
+implementation* of the footprint representation (step 1): resources/
+uses are footprints by another name. RESOLUTION: fold the patch into
+migration step 1 rather than landing it as an independent optimization,
+so the faster scheduler and the persisted contract representation are
+one change with one certification.
+
 ## 3. Migration (per the RFC, with the review's additions)
 
 1. Footprint artifact (persist generators; .ba carries footprints,
@@ -126,7 +148,7 @@ RFC-polymorphic-scheduling.md v0.4; RFC-bsc-artifact-graph.md §§14–14.c
 ORDER decision, Codex reviews and adoptions); "KB: bsc polymorphic
 scheduling RFC (full text)" (mirror); the scheduling-complexity
 addendum (-sched-conditions, hardware quadratic, .ba generators);
-MatX PR 47; trs PRs #144/#151/#152; "KB: trs top-level lifts + G0129".
+fork PR 47; trs PRs #144/#151/#152; "KB: trs top-level lifts + G0129".
 
 ## 5. NEEDS-RAVI (rolled up in 09)
 

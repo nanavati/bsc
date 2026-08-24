@@ -27,7 +27,25 @@ compiled artifact; I-footprint and D1 locality dominate) while MatX RTL
 shapes were runtime-bounce-bound (artifact ~4%; wires/trampolines
 dominated) — one simulator, two economies. Lever verdicts are therefore
 corpus-conditional by design, and performance claims stay
-shape-specific.
+shape-specific. The MatX-side campaign numbers of record (FACT, moved
+here from 05 per the doc-set rule): 136 corpus tests byte-exact
+all-AOT with zero known parity divergences; wire-heavy benches 2.4–6.6×
+faster than Bluesim -O3; unit tests ~10× end-to-end (boot 4–6ms vs
+bluetcl 55–70ms).
+
+The usage-style divergence is equally structural (FACT, compiler tour):
+MatX writes the Haskell-syntax (classic/BH) front end almost
+exclusively; rules are mostly *constructed* by module-monad functions
+built on the prelude's rule-manipulation primitives rather than written
+as explicit rules-blocks; implicit conditions are turned off; and a
+scheduler-inserted stall is treated as a bug, not as conflict
+resolution — several stock defaults are flipped accordingly. The
+bootcamp pedagogy teaches the same posture (explicit design style over
+implicit conditions; debug from source analysis, never from generated
+Verilog). Upstream's defaults serve the opposite audience. Any change
+to default scheduling/implicit-condition behavior therefore prices out
+differently in the two worlds — one more reason the one-order break
+gets a census and a compatibility rung (03).
 
 ## 2. The per-axis postures
 
@@ -70,11 +88,12 @@ shape-specific.
 ## 4. The tensions that do NOT resolve by architecture (NEEDS-RAVI)
 
 1. **Where trs ultimately lives.** The side-tree doctrine keeps trs in
-   the MatX bsc repo; upstream's "bsc as smaller tools" direction (the
-   sync philosophy whose notes never reached the KB — a recorded gap
-   worth backfilling) suggests an eventual upstream-adjacent home.
-   Whether trs is ever offered upstream, and in what form (tool suite
-   vs backend), is a strategy call no lane records.
+   the MatX bsc repo; upstream's "bsc as smaller tools" direction —
+   whose origin is now on the record (the 2026-08-21 sync adopted the
+   3-phase compile split and contract files; 10 §1) — suggests an
+   eventual upstream-adjacent home. Whether trs is ever offered
+   upstream, and in what form (tool suite vs backend), is a strategy
+   call no lane records.
 2. **The one-order break's ecosystem cost.** The census will price it,
    but accepting the break for upstream users (vs fork-first) is a
    judgment call after the numbers.
@@ -90,7 +109,105 @@ shape-specific.
 5. **The compat features' route** ('0/'1 classic literals,
    deriving-via): stack rung vs upstream PRs first.
 
-## 5. Lane pointers
+## 5. The meeting record on the MatX side (2026 crawl)
+
+MatX-specific material from the meeting-notes crawl (10 records the
+Bluespec-general half). All items FACT unless labeled.
+
+**Release engineering of the fork.** Releases are cut from main
+(main = the release branch; 2026.4.2 was release-branch + 2 PRs), with
+benchmarking and output verification mandated for every release (5-run
+averaging; scripts provided). The consumption architecture settled in
+August: **three concurrent compiler release channels — production,
+preview, local-build** — with cherry-picking onto release branches to
+stay current despite upstream review latency, stacked PRs to decompose
+large branches, and **manifest-based branching** with a materialized
+preview branch as the testing baseline (a manifest tool exists and is
+being improved). DECISION (Aug 13): non-upstreamed features are managed
+via external scripts, never core-compiler modifications; the
+non-upstreamed lines of work in each release get documented. A compiler
+freeze for tape-out is planned. This is T2/T9 arriving through
+practice: the release manifests are the productized ancestor of 01's
+transitive-manifest program.
+
+**Hardware arcs the compiler serves.**
+- *CSRs*: the RDL flow generates **typed Bluespec and SystemVerilog
+  from a Rust type field in the register definition** (RDL files are
+  the source of truth; typed interfaces, not raw bits; backdoor
+  interfaces eliminated); block architecture consensus is APB clients
+  off controller blocks rather than direct CSR clients; Bluespec's
+  type safety and metaprogramming are the cited advantage for CSR
+  datapaths; the sim model must match RTL with the same host software
+  on both.
+- *Interface decomposition* (May 7, the port-splitting origin):
+  monolithic interface methods cause scheduling circularity; decompose
+  into independently scheduled actions with bypass wires; Rust
+  interface generation limited to top-level subsystems.
+- *Verification framing* (Mar 25): the traditional method — a Haskell
+  model plus the Bluespec representation extracting stimulus and
+  expected responses — against brittle independent DV tests; the TA and
+  RE DMA engines are internally different (descriptor-table encodings),
+  falsifying the "uber DMA descriptor type" modeling assumption.
+- *Validation in production* (Aug 20): DMA-descriptor architectural
+  validation uses unknown-checks that preserve synthesis structures —
+  ValidateBits/primIsUnknown in real use on MatX RTL. ValidateBits is
+  also the recorded internal feature ask from the A0-freeze review
+  (Erez 1:1; Lucas's bit-pattern validity checking).
+- *Coverage*: a Bluespec **coverage story** (coverage-tracking
+  infrastructure) is committed in the project portfolio, with a
+  coverage document shared internally; the document itself was not
+  reachable by this crawl (10 §7).
+- *Simulation targets*: Verilator adoption targeted at 90% for local
+  testing flexibility; the Rust simulator gets benchmarked on the
+  RISC-V SoC; simulator-comparison benchmarking moves to **public
+  open-source suites so results can be shared without exposing IP**
+  (consistent with the trs campaign's public-corpus posture);
+  simulation decouples from synthesis so non-synthesizable debug
+  features stay available. Bluesim remains one of the few simulation
+  paths that works on Mac — the reason the ramp menu keeps the
+  Bluesim-C++-to-build-system handoff alive even though MatX uses
+  Bluesim less than typical Bluespec shops.
+- *Lint policy* (Jul 23): DECISION — implement compiler patches
+  directly with no toggle flags (deadline pressure); two-tier strategy
+  (reduce lint noise in generated Verilog; better warnings for real
+  issues); simulation-only signals categorized away from hardware
+  logic (probes under translate_off); "identifying real bugs before PD
+  remains critical."
+- *b2v pipeline*: r2 translates Rust ISA types to Bluespec (types must
+  be *unpacked* because Bluespec lacks type families — a concrete MatX
+  motivation for the ATF program in 04); b2v translates onward to SV
+  via Generic for DV consumers. Ramp-menu items: emit == and ===
+  alongside b2v types and generate *validation* functions, tested
+  differentially against the Rust Bits trait (which validates —
+  "Bluespec doesn't, in the pursuit of more efficient hardware") and
+  against ValidateBits once landed. BVI pressure at MatX concentrates
+  entirely in the -verilog flow (mkDwSimOrBs picks native models under
+  -sim).
+- *PD quality loop* (Chris's arc, Aug 10–17): Yosys-based rapid
+  pre-synthesis floor-plan analysis (Manhattan-distance × flop-count
+  tension metric; DEF/LEF parsing at scale; grid heat maps; a combined
+  memory bank as the validation case), plus bluetcl+JSON bus-type
+  extraction for the PD team — the concrete descendant of the Mar 20
+  "fast hardware-quality feedback loop" requirement.
+
+**Organizational context that bounds the design work.** Compiler-team
+scope formally expanded beyond the single compiler (tools &
+infrastructure); the schedule shifts off A0 on Oct 1 toward the next
+tape-out, consistent with §1's freeze horizon. An org-level **repo
+separation mandate** (monorepo → separate repositories) landed in
+August with concerns recorded (integration, discoverability, atomic
+commits) and productivity measurement as mitigation — it intersects P1
+(build/driver work) and strengthens the manifest program, since
+cross-repo composition without atomic commits leans harder on artifact
+identity ("intelligent build systems remain necessary" under either
+structure). Hiring: two compiler-team hires approved; the strategy of
+record since March is "hire competent Haskell programmers, teach them
+hardware with LLM assistance"; interviews use collaborative RTL
+exercises; verification hiring prioritizes type-based thinking
+(Rust/OCaml/Haskell). The internal teaching curriculum (RTL→BS concept
+sequence ending at "bluespec patterns") is the onboarding complement.
+
+## 6. Lane pointers
 
 Every lane contributes here; the concentrated sources are "KB: trs
 full-AOT push" (doctrine + corpus inversion), "KB: bsc artifact graph"
@@ -98,10 +215,11 @@ full-AOT push" (doctrine + corpus inversion), "KB: bsc artifact graph"
 BVI-via-Verilator design" (pin posture, oracle succession), "KB: bsc
 issue inventory" (the upstream footprint: 96 issues, workaround
 cross-references), "KB: HW repo short-term strategy" (freeze horizon,
-governance), "KB: Bluespec LSP design" (engagement), and the matx
-repo's third_party/bluespec pinning machinery.
+governance), "KB: Bluespec LSP design" (engagement), the matx repo's
+third_party/bluespec pinning machinery, and — for §5 — the meeting
+corpus indexed in 10.
 
-## 6. NEEDS-RAVI
+## 7. NEEDS-RAVI
 
 Items 1–5 of §4, plus: the issue-inventory identity questions (sec E)
 and Codex's design-ownership-map proposal (issue → owning design → PR

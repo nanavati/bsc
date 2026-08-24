@@ -18,9 +18,22 @@ boundaries demoted to per-node deployment choices. `bsc -u` becomes the
 engine (the parallelism ladder: sidecar → internalized → stage-level →
 node-level); the node vocabulary becomes the public API; schema tags
 key both caches and consumers; the testsuite follows the engine once it
-lands. MatX's Bazel contains the same graph via tree artifacts,
-persistent workers, a REAPI-backed share, and frozen specialization
-manifests.
+lands. A static, hermetic outer build system contains the same graph
+via tree artifacts, persistent workers, a remote-execution-backed
+share, and frozen specialization manifests (the containment posture;
+the deployed instance is in 07).
+
+FACT (2026-08-21 sync; 10 §1): upstream adopted the **3-phase compile
+split into modular executables** with **contract files** for dependency
+management and cache efficiency, plus Cabal for native build tasks. The
+smaller-tools direction and this program are the same design seen from
+two sides: a phase boundary is worth a process seam exactly where its
+artifact earns caching, parallelism, or a second consumer — the trs
+porcelain rule (05 §1.4) applied to bsc itself. RESOLUTION: the 3-phase
+proposal's contract files and this document's transitive manifests must
+be specified as one artifact family — a contract file is the manifest
+of an inter-phase node — and the circulating 3-phase flow proposal
+should cite the format registry (§2) as its versioning substrate.
 
 ## 2. The manifest convergence (RESOLUTION — adopt as a named workstream)
 
@@ -190,5 +203,9 @@ LSP design".
   the landing gate wording.
 - Artifact-graph §14 sync to scheduling v0.4 (editorial; approve the
   supersession rewrite).
-- Whether cabalization P1 (bsc-as-library) proceeds on amy's line and
-  when the rung-1 bsc-make sidecar gets built.
+- Whether cabalization P1 (bsc-as-library) proceeds on the stdlib
+  maintainer's line and when the rung-1 bsc-make sidecar gets built —
+  noting the Cabal migration is now an upstream-prioritized decision
+  and the Unison engagement plans a cabalize PR (10 §§1,3).
+- Ratify the contract-files ↔ manifest unification (§1) so the 3-phase
+  flow proposal and the artifact-graph RFC don't fork the format.

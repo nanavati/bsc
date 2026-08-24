@@ -3,16 +3,22 @@
 A canonical map of the design evolution of bsc and trs — the theses, the
 documents, the resolutions, and the long-term vision.
 
-**Status:** v1.0 — 2026-08-24. Synthesized by Claude at Ravi Nanavati's
+**Status:** v1.1 — 2026-08-24. Synthesized by Claude at Ravi Nanavati's
 direction from a holistic review of the complete cross-agent knowledge
 base (30 KB drafts, snapshot 2026-08-23/24), the two canonical RFCs, the
-per-lane design records, and Codex's review corpus. This document set
-organizes and resolves; it does not replace the RFCs it cites. Where a
-statement here disagrees with a cited RFC's current revision, the RFC
-governs on mechanism and this book governs on cross-lane resolution
-until the RFC is updated. Labels follow the KB convention: FACT,
-DECISION (ratified by Ravi), PROPOSAL, RESOLUTION (this review's
-cross-lane call, adopted unless Ravi objects), NEEDS-RAVI.
+per-lane design records, Codex's review corpus, and (v1.1) the meeting-
+notes crawl — Gemini summaries for every Bluespec meeting and
+compiler-team 1:1 March–August 2026, the compiler-tour transcript, and
+the Bluespec Drive folder. This document set organizes and resolves; it
+does not replace the RFCs it cites. Where a statement here disagrees
+with a cited RFC's current revision, the RFC governs on mechanism and
+this book governs on cross-lane resolution until the RFC is updated.
+Labels follow the KB convention: FACT, DECISION (ratified by Ravi),
+PROPOSAL, RESOLUTION (this review's cross-lane call, adopted unless
+Ravi objects), NEEDS-RAVI. Organizing rule: **MatX-specific facts
+(deployment, corpus, schedule, organization) live only in 07**; every
+other document is written to be readable as Bluespec/trs design record
+and cites 07 where a deployment fact grounds a claim.
 
 ---
 
@@ -50,6 +56,11 @@ its companion documents are that whole:
   status, and the gates.
 - **09 — Open questions.** Everything that needs Ravi, consolidated
   and prioritized.
+- **10 — The meeting record.** The Bluespec decision timeline outside
+  the KB: the open-source syncs (including the smaller-tools decision),
+  the upstream engagement program, the LSP/Unison arc, the
+  longer-horizon project set, and compiler-internals facts first
+  recorded in meetings.
 
 The already-canonical design documents this set organizes (not
 replaces):
@@ -159,12 +170,15 @@ the lanes already claim (cited) from extrapolation (marked).
 the Shake engine (artifact-graph §3); the node vocabulary is the public
 API (§6); bluetcl, bluehs, and the LSP consume one memoized query
 surface; the testsuite is the graph's largest consumer (~48k verdict
-nodes, §16); MatX's Bazel contains the same graph through tree
-artifacts, workers, a REAPI-backed share, and frozen manifests (§4).
+nodes, §16); an outer static build system contains the same graph
+through tree artifacts, workers, a remote-execution share, and frozen
+manifests (§4; the deployed instance in 07). Upstream's own
+smaller-tools decision — the 3-phase compile split with contract files
+(10 §1) — is this program arriving from the build-integration side.
 Extrapolation: the same verdict/manifest discipline eventually carries
-MatX's full RTL CI — a compiler change re-runs compiles plus only the
-genuinely affected legs, fleet-wide, with cached PASS a soundness claim
-rather than an optimization.
+a customer's full RTL CI — a compiler change re-runs compiles plus only
+the genuinely affected legs, fleet-wide, with cached PASS a soundness
+claim rather than an optimization.
 
 **Boundaries become contracts; implementations become bindings.**
 VModInfo splits into IfcContract × BoundaryBinding with the .ba as the
@@ -210,8 +224,9 @@ hashes; engine-agnostic module boundaries with fusion regions
 ("the interpreter boils away only under the full compile"); -O re-fuse;
 trs shell speaking the 26-year generated-Verilog port protocol over
 DPI. The performance campaign's endpoint is "nothing walked per cycle";
-Toooba is at Verilator parity and MatX wire-heavy shapes are 2.4–6.6×
-ahead of Bluesim already (FACT, corpus-conditional). The X program
+Toooba is at Verilator parity and wire-heavy internal shapes are well
+ahead of Bluesim already (FACT, corpus-conditional; numbers in 07). The
+X program
 makes trs 3-state the reference semantics, keeps a 2-state benchmarking
 mode, and aims to *prove X unnecessary* per design, with certificates.
 Bluesim remains production until that proof program and the manifest/
@@ -232,19 +247,22 @@ codebook, everywhere, fingerprinted into identity.
 (S0–S4 staircases, censuses before proposals); compatibility breaks are
 measured, named rungs; the Unison LSP engagement and the Bluespec, Inc.
 upstream-review program balance investment against de facto takeover;
-MatX-only capabilities (open-packed DPI, pinned Verilator) stay
+fork-only capabilities (open-packed DPI, the pinned Verilator) stay
 fork-scoped with explicit upstreaming decisions. The reset-sequence
 RFC and the $random unification are the ecosystem-facing proposals in
-waiting.
+waiting, and the longer-horizon set (compiler-integrated LSP, full SV
+output mode, user-specified schedules, the import rethink; 10 §4) is
+the stated destination beyond every current roadmap.
 
 ## 4. The state of the union (FACTs, 2026-08-24)
 
 - **Landed/measured:** scheduler transpose (PR 47; 25× at 16k rules);
   trs rungs 1–40 (PRs #108–#158; all-AOT invariant; Toooba at Verilator
-  parity; MatX corpus byte-exact, zero known parity divergences); BVI-
-  via-Verilator v5 as-built; reset-sequence + two-state-z + verilator
-  timing arcs (iverilog fully green; every verilator failure named);
-  ATF rules evaluator (MatX PR 68/93 lineage); IType/IExpr substrates
+  parity; internal corpus byte-exact, zero known parity divergences —
+  07); BVI-via-Verilator v5 as-built; reset-sequence + two-state-z +
+  verilator timing arcs (iverilog fully green; every verilator failure
+  named); ATF rules evaluator (fork PR 68/93 lineage); IType/IExpr
+  substrates
   (measured, landing pending CI); semantic port properties (PRs
   #1059/#1060); pattern-match checker stack; prim-fixes + codegen
   stack-overflow fixes; wiretypemap/porttypes scaling; build
@@ -260,8 +278,10 @@ waiting.
   questions plus Codex's unadopted objections are tracked in 08/09.
 - **Known process debt:** the toolchain continuation draft is to be
   frozen; several Codex objections stand unanswered (PR #158 set,
-  BIR fragment addressability, format-registry demands); the
-  "bsc as smaller tools" sync notes never reached the KB.
+  BIR fragment addressability, format-registry demands). The
+  "bsc as smaller tools" gap is CLOSED: the sync record is recovered
+  and indexed (10 §1); the remaining meeting-record gaps are the
+  coverage proposal and two un-noted meetings (10 §7).
 
 ## 5. How to read this set
 
