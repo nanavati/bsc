@@ -1,102 +1,83 @@
 # The Bluespec/trs Design Book
 
-A canonical map of the design evolution of bsc and trs — the theses, the
-documents, the resolutions, and the long-term vision.
+Where bsc and trs are going, and why.
 
-**Status:** v1.2 — 2026-08-24. Synthesized by Claude at Ravi Nanavati's
-direction from a holistic review of the complete cross-agent knowledge
-base (30 KB drafts, snapshot 2026-08-23/24), the two canonical RFCs, the
-per-lane design records, Codex's review corpus, (v1.1) the meeting-
-notes crawl — Gemini summaries for every Bluespec meeting and
-compiler-team 1:1 March–August 2026, the compiler-tour transcript, and
-the Bluespec Drive folder — and (v1.2) the credentialed re-crawl
-deposits (full transcripts of the 2026-08-21 sync, the 2026-08-07 LSP
-session, and the 2026-08-10 portfolio meeting; the coverage proposal;
-the SV-interop ABI doctrine note; the project-inventory arc; the
-Slack deep pass) plus the concurrent lane sessions of 2026-08-24
-(trs #158-gating fixes; the verilator two-state arc's final ledger and
-the hardware-model-line ruling). This document set organizes and resolves; it
-does not replace the RFCs it cites. Where a statement here disagrees
-with a cited RFC's current revision, the RFC governs on mechanism and
-this book governs on cross-lane resolution until the RFC is updated.
-Labels follow the KB convention: FACT, DECISION (ratified by Ravi),
-PROPOSAL, RESOLUTION (this review's cross-lane call, adopted unless
-Ravi objects), NEEDS-RAVI. Organizing rule: **MatX-specific facts
-(deployment, corpus, schedule, organization) live only in 07**; every
-other document is written to be readable as Bluespec/trs design record
-and cites 07 where a deployment fact grounds a claim.
+**Status:** v2.0 — 2026-08-24. Synthesized by Claude at Ravi Nanavati's
+direction from the complete cross-agent knowledge base, the canonical
+RFCs, the per-lane design records, the review corpus, and the meeting/
+document record. **This book is design, not plan**: documents 00–07
+describe the destination architecture and its rationale, and 08
+collects the open design questions — the destination choices still
+needing Ravi's ruling. How we get there — landing order, migration
+steps, gates, status, provenance — is entirely separate, lives in the
+KB lanes (the per-lane drafts and the meeting-notes digest) and the
+RFCs' own migration sections, and is deliberately not planned further
+until the destination is agreed. MatX-specific considerations enter
+the design documents only as **use-model requirements** (static
+hermetic builds and caching, byte-stable artifacts, VCS and encrypted
+IP, generated-type scale, agent-driven development — collected in 07);
+MatX deployment history, schedules, and organization never do.
+
+Where a statement here disagrees with a cited RFC's current revision,
+the RFC governs on mechanism and this book governs on cross-lane
+resolution until the RFC is updated. Labels: FACT (established, with
+evidence), DECISION (ratified by Ravi), PROPOSAL, RESOLUTION (this
+review's cross-lane call, adopted unless Ravi objects), OPEN (a design
+question). Process/status labels do not appear in 00–07.
 
 ---
 
-## 1. What this is
+## 1. The map
 
-Through 2026, the Bluespec compiler (bsc) and the trs simulator
-accumulated a large body of design work spread across many lanes:
-two RFCs, a dozen design records, several implemented-but-unlanded
-substrates, a trs rung ledger, and hundreds of review findings. Each
-lane is locally coherent; what was missing was the whole. This book and
-its companion documents are that whole:
+- **00 (this document)** — the unifying theses and the vision.
+- **01 — Identity, artifacts, and the build.** The compiler as a graph
+  of typed durable artifacts; identity as content plus declared
+  schema; the manifest layer; the session architecture; tests as
+  graph nodes; determinism as a designed property.
+- **02 — Boundaries and contracts.** The semantic/physical split;
+  contracts as values; one owner for the port ABI; encodings as ABI;
+  import "BVI" unified; foreign functions; instance-specific
+  synthesis; the dissolution of genC/genVerilog; the SystemVerilog
+  interop ABI.
+- **03 — Scheduling.** One order; positions as the names of
+  scheduling; schedules as values and contracts; footprints; dynamic
+  schedules; the observable-event contract.
+- **04 — The front end.** Coherence and closure; orphan enforcement;
+  ATF evaluation; identity-not-cache for solved facts; the numeric
+  engine; the metadata substrates; pattern checking.
+- **05 — Simulation and verification.** The trs architecture; the X
+  program; the reset and finish contracts; the oracle discipline; the
+  coverage program; Bluesim's designed role.
+- **06 — Developer experience.** The LSP; bluehs; typed observability;
+  the one query surface; the parser/lexer modernization.
+- **07 — Use models.** The two use models this design serves, stated
+  as requirements; where their requirements genuinely conflict, and
+  the design postures that resolve or contain each conflict.
+- **08 — Open design questions.** The destination choices that need
+  Ravi's ruling for this design to be agreed.
 
-- **00 (this document)** — the unifying theses, the vision, and the map.
-- **01 — Identity, artifacts, and the build.** The artifact-graph
-  program and everything that keys off it: nodes, interning, schema
-  tags, manifests, Shake, Bazel containment, the testsuite migration,
-  build determinism.
-- **02 — Boundaries and contracts.** The semantic/physical split,
-  contracts as values, BVI in all its forms, the port ABI and its
-  witnesses, instance-specific synthesis, the retirement of
-  genC/genVerilog.
-- **03 — Scheduling.** The one-order model, positions, footprints, the
-  migration, and the reconciliation with engine phase machinery.
-- **04 — The front end.** Coherence, closure, CtxRed retirement,
-  visible type application, ATF evaluation, deriving, the numeric
-  engine, pattern checking, and the metadata substrates.
-- **05 — Simulation and verification.** trs architecture doctrine, the
-  full-AOT campaign, BVI-via-Verilator, the X program, oracles and
-  seals, Bluesim's role, the Verilog-harness contract, and the
-  coverage program.
-- **06 — Developer experience.** bluehs, the LSP, typed simulation
-  control, typed waves, and the query surface they share.
-- **07 — Two worlds.** Where upstream Bluespec and MatX pull in
-  different directions, and the posture per lane.
-- **08 — Landing order.** The cross-lane dependency DAG, per-node
-  status, and the gates.
-- **09 — Open questions.** Everything that needs Ravi, consolidated
-  and prioritized.
-- **10 — The meeting record.** The Bluespec decision timeline outside
-  the KB: the open-source syncs (including the smaller-tools decision),
-  the upstream engagement program, the LSP/Unison arc, the
-  longer-horizon project set, and compiler-internals facts first
-  recorded in meetings.
-
-The already-canonical design documents this set organizes (not
-replaces):
-
-| Document | Home | Status |
-|---|---|---|
-| RFC-bsc-artifact-graph.md v0.21 | nanavati claude/bsc-testsuite-cabal-dejagnu-cscgl9 | Draft; mirrored in KB |
-| RFC-polymorphic-scheduling.md v0.4 | same branch | Draft; mirrored in KB |
-| testsuite-after-shake.md v1.0 | same branch | Analysis; mirrored in KB |
-| post-genwrap-compiler.md (July 2026) | nanavati claude/model-rqj7c1 | Ancestor of the contract program |
-| CTXRED-RETIREMENT-PLAN.md (+ BA-contracts review) | nanavati claude/proposal-adversarial-review-ccew7z | Plan v0.1 + in-KB extensions |
-| doc/RFC-simulation-reset-sequence.md | nanavati claude/reset-sequence | Implemented + validated |
-| typechecker-coherent-instance-commitment (dev note) | nanavati claude/typechecker-coherent-instances-dkmn8w | Pre-carve; digest in KB governs on vocabulary |
-| trs design docs (DESIGN.md, BIR.md, BOUNDARY-CONTRACT.md, v5 BVI doc) | MatX-inc/bsc trs stack + KB | As-built + doctrine |
-| Per-lane KB design records (ValidateBits, SplitPorts, IExpr, IType, ATF, port properties, HuffmanBits, BVI fallback, solver strategy, LSP, bluehs, toplift, open-packed DPI, pattern-match) | Gmail KB drafts | Review surfaces |
+The normative artifacts this book organizes (not replaces):
+RFC-bsc-artifact-graph.md, RFC-polymorphic-scheduling.md,
+testsuite-after-shake.md, RFC-simulation-reset-sequence.md, the
+post-genwrap design, CTXRED-RETIREMENT-PLAN.md, the trs design
+documents, the SV-interop ABI doctrine note, the coverage proposal,
+and the per-lane KB design records. Homes, versions, and provenance are
+indexed in the KB (the bootstrap index and the meeting-notes digest).
 
 ## 2. The unifying theses
 
 Nine theses recur across every lane. They are the design's identity;
-each companion document is one or two of them worked out.
+each design document is one or two of them worked out.
 
 **T1 — Everything the compiler knows becomes a value with provenance.**
 Contracts, schedules, clocks, resets, X policy, encodings (codebooks),
 bindings, obligations, diagnostics, test verdicts: each is reified as a
 typed value carrying its position on the provenance lattice
-(derived / asserted / validated). The pattern was set by the July 2026
-post-GenWrap design (IfcContract, licenses) and generalizes without
-exception. A fact the compiler recomputes-and-discards at a boundary is
-a contract field waiting to be named (the enumeration principle).
+(derived / asserted / validated). A fact the compiler
+recomputes-and-discards at a boundary is a contract field waiting to
+be named. The one-sentence form: *compiler contracts move from
+inferred-and-implicit to declared-certified-pinned — layouts,
+schedules, X.*
 
 **T2 — Identity is content plus declared schema.** Cache keying, API
 versioning, and format tagging are one mechanism: every durable node
@@ -104,247 +85,185 @@ carries a schema/pass version; a representation change bumps the tag;
 the bump invalidates exactly the affected cache entries and is
 simultaneously the version signal a consumer reads. Corollaries: the
 canonical serialization of a contract value is the cache key of the
-specialization providing it; instance/dictionary evidence and Huffman
-codebook fingerprints are ABI identity, not implementation detail;
-intern ids and heap identities never leak into durable identity.
+specialization providing it; instance/dictionary evidence and codebook
+fingerprints are ABI identity, not implementation detail; intern ids
+and heap identities never leak into durable identity.
 
 **T3 — Facts flow up; models flow down; nothing is ambient.** Partial
-orders, contracts, and landmarks flow up into signatures and lockfiles.
-Solver models, linearizations, chosen realizations, and simplifier
-outputs flow down as pinned artifacts recorded with what they produced.
-Re-deriving a model ambient at consumption time is the bug class this
-rule deletes (asch_rev_exec_order is the in-tree precedent; the
-scheduling RFC's pinned-model rule and the port-properties one-plan
-demand are the same law).
+orders, contracts, and landmarks flow up into signatures and
+lockfiles. Solver models, linearizations, chosen realizations, and
+simplifier outputs flow down as pinned artifacts recorded with what
+they produced. Re-deriving a model ambient at consumption time is the
+bug class this rule deletes.
 
 **T4 — Judgment is the typechecker's monopoly; everything else
 evaluates.** Open-world reasoning — instance selection under
 refinement, improvement, deferral — happens exactly once, in the
 typechecker, and its results are consumed into signatures. Every
 persisting phase downstream evaluates over sealed, closed, coherent
-fact sets: ATF ground evaluation, elaboration's ground solves, the
-definition cache. The licensing theorem appears three times in the
-corpus and is one theorem: *early commitment is meaning-preserving
-exactly when the match is coherent AND closed* (type-closed and
-world-closed). Sealed ATF families, the orphan ban, and ordered-clause
-commitment are its enforcement at three levels.
+fact sets. The licensing theorem, once: *early commitment is
+meaning-preserving exactly when the match is coherent AND closed*
+(type-closed and world-closed). Sealed ATF families, the orphan ban,
+and ordered-clause commitment are its enforcement at three levels.
 
 **T5 — One structure, many realizations.** The semantic contract /
 physical realization split (IfcContract vs BoundaryBinding) is the
 master instance; structural-vs-macro realization, engine-agnostic
-module boundaries (trs fusion regions), per-instance realization
-selection at link time, and the dissolution of genC/genVerilog into
-per-instance capability requests are the same cut applied again.
-A20 governs: design for type and schedule/clocking compatibility,
-never wire compatibility — port names stop being API.
+module boundaries, per-instance realization selection at link time,
+and the dissolution of genC/genVerilog into per-instance capability
+requests are the same cut applied again. Design for type and
+schedule/clocking compatibility, never wire compatibility — port names
+stop being API.
 
 **T6 — The scheduler stops being an optimizer and becomes a checker.**
-One order (DECISION, Ravi 2026-08-23). Positions are the missing names
-of scheduling; footprints are the contract representation; pairwise
-matrices are derived views; maximize-firing gives way to stated intent;
+One order (DECISION). Positions are the missing names of scheduling;
+footprints are the contract representation; pairwise matrices are
+derived views; maximize-firing gives way to stated intent;
 over-constrained is an error, never a search. The EHR dissolves into a
 register observed at many points; the FIFO zoo dissolves into one
 polymorphic text.
 
 **T7 — Verification is by witness, and replacement requires proof.**
 Byte-exact differential oracles with succession plans; dual-flavor
-seals; prediction ledgers scored HIT/MISS; sealed corpora; X-freedom
-certificates. The governing sentence (Ravi): trs replacing Bluesim
-requires *proving we don't need X, not asserting it*. The bar of record
-on any design is the fastest opponent's wall.
+seals; sealed corpora; X-freedom certificates. The governing sentence
+(Ravi): trs replacing Bluesim requires *proving we don't need X, not
+asserting it*. Correctness is never established by review or by the
+absence of warnings — and because oracles are blind to provenance,
+every claim also carries fail-closed telemetry.
 
 **T8 — Carry structure forward; never discard-then-reconstruct.**
-Path conditions, SchedInfo footprints, branch structure, boundary
-facts: the compiler historically threw away structured intent early and
-paid a quadratic, solver-assisted price to approximate it back. The
-cure has one shape — keep the structure; run expensive machinery only
-on the residue. (The scheduler transpose, the -sched-conditions
-analysis, footprints-not-matrices, and generators-not-tables are all
-this thesis.)
+Path conditions, schedule footprints, branch structure, boundary
+facts, source positions: discarding structured intent early and
+paying a quadratic, solver-assisted price to approximate it back is
+the compiler's historical failure shape. The cure has one form — keep
+the structure; run expensive machinery only on the residue; persist
+generators, never materialized views.
 
-**T9 — Two products, one architecture.** Upstream bsc evolves by RFC,
-staged migration, and compatibility censuses; MatX rides pinned tools,
-side-trees, and manifest-keyed caches. The same identity discipline
-serves both: a fork, a pin, or a mode is a *binding choice recorded in
-a manifest*, never an unrecorded divergence.
+**T9 — Two use models, one architecture.** A fork, a pin, or a mode is
+a *binding choice recorded in a manifest*, never an unrecorded
+divergence. Requirements from either use model (07) enter the design
+as declared, versioned inputs — not as environmental assumptions.
 
-Three corollaries stated crisply enough elsewhere to adopt as named
-principles (they refine T1/T3/T5/T7 rather than adding theses):
-**single source of truth** — any fact with two consumers is computed
-once in one owned place, and every other copy is a generated, checkable
-projection, because independent re-derivation is where silent
-divergence is born; **fail closed, name every residual** — when a
-property cannot be established the system stops with a named, ledgered
-reason, and the ledger of loud refusals *is* the roadmap; and **the
-hardware-model line** (DECISION, Ravi 2026-08-24, from the reset arc):
-primitives model real hardware — simulation-only behavior never enters
-their synthesizable semantics; two-state emulation gaps are closed by
-per-test simulator knobs or honest XFAILs, never by teaching library
-primitives extra initialization semantics ("extra init semantics are a
-slippery slope"). The portfolio's own one-sentence statement of T1
-(the Aug 7 crib, 10 §4): *compiler contracts move from
-inferred-and-implicit to declared-certified-pinned — layouts (done:
-the interop ABI), schedules (starting: certification), X (specified:
-semantics).* The cross-cut's fuller twelve-theme decomposition maps
-onto T1–T9 and is preserved in the review's working notes.
+Named corollary principles:
 
-## 3. The vision, as a narrative
+- **Single source of truth.** Any fact with two consumers is computed
+  once in one owned place; every other copy is a generated, checkable
+  projection. Independent re-derivation is where silent divergence is
+  born.
+- **Fail closed; name every residual.** When a property cannot be
+  established, the system stops with a named, ledgered reason. Silent
+  fallback, silent coverage loss, and zero-fill are one bug class; the
+  ledger of loud refusals *is* the roadmap.
+- **The hardware-model line** (DECISION, Ravi). Primitives model real
+  hardware; simulation-only behavior never enters their synthesizable
+  semantics. Simulator-emulation gaps are closed by per-test simulator
+  configuration or honest expected-failure markers — never by teaching
+  library primitives extra initialization semantics.
+- **Modal vs committed judgment.** Anywhere the toolchain commits
+  early, viability checks run unguarded: a guarded modal check turns
+  "not yet" into "never", and in a commitment regime "never" is what
+  licenses a commit.
 
-Where this all converges if pushed to completion — distinguishing what
-the lanes already claim (cited) from extrapolation (marked).
+## 3. The vision
 
-**The compiler becomes a graph of typed, durable artifacts.** bsc -u is
-the Shake engine (artifact-graph §3); the node vocabulary is the public
-API (§6); bluetcl, bluehs, and the LSP consume one memoized query
-surface; the testsuite is the graph's largest consumer (~48k verdict
-nodes, §16); an outer static build system contains the same graph
-through tree artifacts, workers, a remote-execution share, and frozen
-manifests (§4; the deployed instance in 07). Upstream's own
-smaller-tools decision — the 3-phase compile split with contract files
-(10 §1) — is this program arriving from the build-integration side.
-Extrapolation: the same verdict/manifest discipline eventually carries
-a customer's full RTL CI — a compiler change re-runs compiles plus only
-the genuinely affected legs, fleet-wide, with cached PASS a soundness
-claim rather than an optimization.
+**The compiler becomes a graph of typed, durable artifacts.** The
+driver is a build engine over a node vocabulary that is itself the
+public API; bluetcl, bluehs, the LSP, and the test orchestrator
+consume one memoized, snapshot-keyed query surface; the testsuite is
+the graph's largest consumer, its verdicts first-class cached nodes.
+The same graph is containable by an outer static, hermetic build
+system — a use-model requirement (07) designed in from the start via
+frozen specialization manifests, not retrofitted. The compile pipeline
+itself decomposes into phase executables whose inter-phase artifacts
+are contract-carrying, cacheable values — the smaller-tools direction
+and the artifact graph are one design seen from two sides: a phase
+boundary deserves a process seam exactly where its artifact earns
+caching, parallelism, or a second consumer.
 
 **Boundaries become contracts; implementations become bindings.**
-VModInfo splits into IfcContract × BoundaryBinding with the .ba as the
-witness that connects them; Verilog gains vseg/vlink and completes the
-backend symmetry with Bluesim and trs; import "BVI" decomposes into an
-asserted contract plus a foreign realization; the BVI-fallback clause
-makes real-IP-vs-model a structural, taint-free binding; instance-
-specific synthesis serves polymorphic imports; and genC/genVerilog
-retire into per-instance realization capabilities, splitting the
-expensive backend-neutral prefix (parse, typecheck, elaborate,
-schedule, contracts, symbolic segments) from small binding-keyed
-codegen leaves. Constraint obligations ride bindings and an
-undischarged obligation is an error — IP integration stops being a
-silent-unsoundness channel.
+Every synthesized boundary factors into a semantic contract and a
+physical realization, joined by a witness; backends gain symmetric
+segment/link seams so any conforming realization substitutes at link
+without re-elaboration — "elaborate once, simulate many ways."
+import "BVI" decomposes into an asserted contract plus a foreign
+realization; fallback and soft-IP become structural, taint-free
+bindings; instance-specific synthesis serves polymorphic imports; and
+genC/genVerilog dissolve into per-instance realization capabilities.
+An undischarged obligation is an error — IP integration stops being a
+silent-unsoundness channel. The rendering of Bluespec types into
+SystemVerilog and Rust is governed as one ABI, emitted from one
+type-to-rendering library.
 
 **Scheduling becomes a typed dimension of the language.** Positions as
 a kind; schedules as values (bindings of position variables);
-footprints as boundary contracts; the schedule lockfile; Kôika mode as
-the endpoint of the fill dial. The migration's first three steps
-(footprint artifact, schedule value type + one-order census, verify
-mode) are independently shippable and useful.
+footprints as boundary contracts; the compiler checks stated
+schedules rather than inferring and imposing them; the schedule
+lockfile joins the build; a totally-specified (Kôika-style) mode is
+the endpoint of the fill dial. Interface arguments — dropped
+historically because the compiler couldn't capture their scheduling —
+return as a natural beneficiary once footprints ride interfaces.
 
-**The front end becomes coherent, closed, and raw-identity.** The
-coherence stack (#1032–#1038) lands upstream; orphan instances of
-representation-owning classes become use-site errors; ATF families are
-sealed-or-nonoverlapping and reduce by pure ground evaluation
-everywhere outside the typechecker; CtxRed retires with written
-telescopes as identity and solved facts as caches — which is what
-unblocks visible type application; deriving becomes born-reduced;
-numeric solving grows along three named axes under the policy ceiling
-"complete where decidable, axiomatic where not, heuristic never"
-(NEEDS-RAVI to ratify). Extrapolation: with implication constraints and
-the inert-set store, numeric-refinement case statements, higher-rank
-types, and GADT-like reasoning become reachable — the front end's
-2027+ growth direction.
+**The front end becomes coherent, closed, and raw-identity.**
+Instance resolution commits only under the closure theorem, and its
+evidence is carried, digested, and ABI-bearing; orphan instances of
+representation-owning classes are use-site errors; ATF families are
+sealed and reduce by pure ground evaluation everywhere outside the
+typechecker; the written form is identity and solved facts are a
+cache — which is what unblocks visible type application and
+born-reduced deriving; numeric solving grows along three named axes
+under the ceiling "complete where decidable, axiomatic where not —
+no uncheckable or non-monotone acceptance." Beyond that lie
+implication constraints, higher-rank types, and GADT-style reasoning.
 
 **trs becomes the reference simulation platform; Bluesim becomes the
-designated-world evaluator.** The doctrine of record (Ravi, 2026-08-22/23):
-frozen-bsc side-tree; flavor-transparent BIR with the dual-flavor seal;
-the trs porcelain (trs-bir / plan / emit / ld / run / shell) with
-durable artifact boundaries; per-module fragments with interface/body
-hashes; engine-agnostic module boundaries with fusion regions
-("the interpreter boils away only under the full compile"); -O re-fuse;
-trs shell speaking the 26-year generated-Verilog port protocol over
-DPI. The performance campaign's endpoint is "nothing walked per cycle";
-Toooba is at Verilator parity and wire-heavy internal shapes are well
-ahead of Bluesim already (FACT, corpus-conditional; numbers in 07). The
-X program
-makes trs 3-state the reference semantics, keeps a 2-state benchmarking
-mode, and aims to *prove X unnecessary* per design, with certificates.
-Bluesim remains production until that proof program and the manifest/
-fail-closed identity rungs land — replacement is earned, not declared.
+designated-world evaluator.** trs is hierarchical, flavor-transparent,
+and staged into small tools over durable artifact boundaries;
+per-module fragments carry interface/body hashes so separate
+compilation just works; module boundaries are engine-agnostic with
+fusion regions, so compiled, interpreted, and verilated-leaf
+implementations interchange per instance; the shell speaks the
+established generated-Verilog port protocol so trs drops into
+existing flows. The X program makes 3-state trs the reference
+semantics with a 2-state benchmarking mode, and aims to *prove* X
+unnecessary per design, with certificates; Bluesim remains the
+byte-parity oracle and world-sampler. Replacement is earned by proof
+and identity discipline, not declared.
 
-**Observability becomes typed.** Bluespec-typed waveform decoding via
-generated decoding functions (total over 4-state, X/Z policy per
-decoder kind), delivered in-artifact or as sidecars serving the Verilog
-flow's waves too; arena slots carrying BIR types feeding a Surfer
-translator; Verilog→source touch-point tracing as the LSP's headline
-feature; bluehs typed simulation control over the same bk_* seam trs
-already implements. Extrapolation: the "one dictionary-keyed decoder
-and validator artifact" (Codex) becomes the single witness consumed by
-LSP hovers, wave viewers, trs state inspection, and ValidateBits — one
-codebook, everywhere, fingerprinted into identity.
+**Observability and coverage become typed and structural.** One
+fingerprinted decoder/validator witness per encoding-owning instance
+serves waveform decoding, state inspection, validity checking, and
+editor hovers; wave-to-source navigation rides a small protocol
+client plus a compiler-emitted type sidecar; coverage is emitted by
+the compiler — the last tool that still sees design meaning — as
+rule/conflict/mux-arm/select-point instruments and type-driven
+covergroups with structural point identity, so accumulated coverage
+survives position-fidelity improvements. One evaluator
+position-propagation investment serves both consumers. Agents are a
+first-class consumer: quality state-and-event capture plus a probe
+tool can matter more than human viewers.
 
-**The ecosystem grows without capture.** Upstream persuasion is staged
-(S0–S4 staircases, censuses before proposals); compatibility breaks are
-measured, named rungs; the Unison LSP engagement and the Bluespec, Inc.
-upstream-review program balance investment against de facto takeover;
-fork-only capabilities (open-packed DPI, the pinned Verilator) stay
-fork-scoped with explicit upstreaming decisions. The reset-sequence
-RFC and the $random unification are the ecosystem-facing proposals in
-waiting, and the longer-horizon set (compiler-integrated LSP, full SV
-output mode, user-specified schedules, the import rethink; 10 §4) is
-the stated destination beyond every current roadmap.
+**The ecosystem grows without capture.** Compatibility breaks are
+measured, named, and versioned; upstream-facing changes ship with
+their censuses; fork-only capabilities stay fork-scoped with explicit
+upstreaming decisions; external engagements are structured so
+investment does not become de facto takeover. The design is
+upstream-shaped by default; the use-model requirements of 07 are
+declared inputs, not forks of the truth.
 
-## 4. The state of the union (FACTs, 2026-08-24)
+## 4. How to read this set
 
-- **Landed/measured:** scheduler transpose (PR 47; 25× at 16k rules;
-  now upstream PR 1087); trs rungs 1–40 (PRs #108–#158; all-AOT
-  invariant; Toooba at Verilator parity; internal corpus byte-exact,
-  zero known parity divergences — 07), with the four #158-gating
-  review findings closed and pushed 2026-08-24 (05 §2); BVI-via-
-  Verilator v5 as-built; reset-sequence + two-state-z + verilator
-  timing arcs at their final ledger (iverilog at the environment
-  floor; verilator failures all named, none masked; the
-  disable-at-$finish emission and the hardware-model-line ruling —
-  05 §4); '0/'1 classic literals + deriving-via landed on the fork's
-  main (upstream route still open — 09 C.19); ATF rules evaluator
-  (fork PR 68/93 lineage); IType/IExpr substrates (measured, landing
-  pending CI); semantic port properties (PRs #1059/#1060, open
-  upstream; default-flip gated per 02 §2); staged-flow upstream PRs
-  1092–1094 (with -elab-only ruled transitional until the phase
-  split); prim-fixes + codegen stack-overflow fixes;
-  wiretypemap/porttypes scaling; build determinism (GHC findBest
-  patch in validation; Warmup).
-- **Designed, awaiting decisions or prerequisites:** VTA (blocked on
-  CtxRed P1); CtxRed retirement plan; BVI fallback/soft-IP; SplitPorts
-  restructure (never compiled — gate on compile + bytes + capability
-  matrix); pattern-match checker stack (design settled; deployment
-  DEFERRED — 04 §5, 10 §5); ValidateBits (v3, mostly ratified);
-  HuffmanBits generic deriving (gate (a)/(b) NEEDS-RAVI); the
-  coverage program (proposal in hand — 05 §6); the SV-interop ABI
-  doctrine (ratified internally, upstream trajectory — 02 §8); solver
-  strategy (policy ceiling NEEDS-RAVI); notes/phase-index refactor;
-  bluehs sim scripting; LSP architecture (operative design settled at
-  the Aug 7 session; Unison terms proposed, not agreed — 06 §2).
-- **The two RFCs** carry the structural program; their §12/§15 open
-  questions plus Codex's unadopted objections are tracked in 08/09.
-- **Known process debt:** the toolchain continuation draft is to be
-  frozen; several Codex objections stand unanswered (PR #158 set,
-  BIR fragment addressability, format-registry demands). The
-  "bsc as smaller tools" gap is CLOSED: the sync record is recovered
-  and indexed (10 §1); the remaining meeting-record gaps are the
-  coverage proposal and two un-noted meetings (10 §7).
+Read 00 → the area documents you own → 07 for the use-model
+requirements → 08 for what still needs deciding. Every design document
+ends with its RESOLUTIONS and its OPEN questions; 08 collects
+everything needing Ravi.
 
-## 5. How to read this set
-
-Read 00 → 08 → the area documents you own. Every area document ends
-with its RESOLUTIONS and its NEEDS-RAVI items; 09 collects the latter.
-The KB remains the review surface: responses to any of this belong in
-the KB lane drafts, per the cross-agent protocol.
-
-**Editorial law** (adopted from the cross-cut doc-set analysis): a
-sentence belongs in this canonical set iff it would still be true and
-useful after every currently-open PR lands or dies; everything else is
-a pointer. Corollary exclusions, with destinations: status/bookkeeping
-ledgers (PR maps, seal counts, rung closures) stay in the KB lane
-drafts and PR bodies — these docs cite them by pointer and date, and
-carry only design *verdicts* extracted from them; the issue inventory
-becomes a machine-readable ownership map beside the book (Codex's
-issue → owning doc → gate → status proposal); KB process material stays
-in the protocol drafts; org/engagement/budget material stays in its own
-documents, with only the derived constraints imported (07); operational
-recipes and environment traps belong in the repo's INSTALL/DEVELOP/
-testsuite docs.
-
-**Recorded structural option** (NEEDS-RAVI, editorial): the same
-analysis recommends splitting 05 into two documents — trs-and-engines
-vs X/reset/multi-valued semantics — on the argument that the X
-program's conflicts are semantic and cross-engine rather than
-trs-internal. The current single-05 shape is kept for reference
-stability; split on your say-so.
+**Editorial law.** A sentence belongs in this set iff it would still
+be true and useful after every currently-open PR lands or dies. These
+documents carry no PR numbers, no branch names, no landed/pending
+status, and no dates-as-status; measured evidence appears only as the
+rationale for a design choice, stated as a finding. Status ledgers and
+sequencing live in the KB lanes and the RFCs' migration sections;
+provenance lives in the KB meeting-notes digest. Planning how to get
+there is deliberately deferred until this destination is agreed. The
+KB remains the review surface: responses belong in the KB lane
+drafts, per the cross-agent protocol.

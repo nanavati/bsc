@@ -1,16 +1,17 @@
 # 02 — Boundaries and Contracts
 
 The semantic/physical split and everything that binds at a boundary:
-contracts as values, BVI in all its forms, the port ABI and its
-witnesses, instance-specific synthesis, and the retirement of
-genC/genVerilog.
+contracts as values, the port ABI and its witnesses, encodings as ABI,
+import "BVI" unified, foreign functions, instance-specific synthesis,
+the dissolution of genC/genVerilog, and the SystemVerilog interop ABI.
 
-**Status:** v1.0 — 2026-08-24 (Claude, holistic review). Mechanism
-homes: RFC-bsc-artifact-graph.md §§7–10, 13; post-genwrap-compiler.md
-(July 2026); the KB lanes named in §8. Labels: FACT / DECISION /
-PROPOSAL / RESOLUTION / NEEDS-RAVI.
+**Status:** v2.0 — 2026-08-24 (Claude). Design only; sequencing and
+status, sequencing, and provenance live in the KB lanes and the
+meeting-notes digest, outside this set. Mechanism homes:
+RFC-bsc-artifact-graph.md §§7–10, 13; the post-genwrap design; the
+SV-interop ABI doctrine note.
 
-## 1. The split, restated once
+## 1. The split
 
 Every synthesized boundary factors into a **semantic contract**
 (IfcContract: interface types, method-level scheduling projection,
@@ -24,276 +25,225 @@ mapping from the semantic half. Same-cycle combinationally-bisimilar
 re-encodings are physical freedom; latency changes are a different
 semantic contract. Binding is two-stage: elaboration-time
 (name → semantic contract) and link-time (instance → realization),
-with vseg/vlink completing backend symmetry so any conforming
-realization substitutes at link without parent recompilation. A20
-governs throughout.
+with symmetric segment/link seams per backend so any conforming
+realization substitutes at link without parent recompilation. Design
+for type and schedule/clocking compatibility, never wire
+compatibility.
 
-## 2. The port ABI needs a single owner (RESOLUTION)
+## 2. One owner for the port ABI
 
-Port layout is today defined independently by GenWrap/SplitPorts, the
-BVI port table, trs export paths (which hard-code method port zero),
-top-level lifting, and final Verilog identifier legalization — and the
-orphan-mislink suite proved the failure mode is real hardware
-corruption with zero diagnostics (five demonstrated silent mislinks;
-same-name same-width reversed-lane ports; import-graph-dependent
-pinouts; the GenSign synonym-omission companion defect).
+Port layout must have a single owner. *Why:* when layout is defined
+independently by wrapper generation, the BVI port table, simulator
+export paths, top-level lifting, and final identifier legalization,
+the failure mode is real hardware corruption with zero diagnostics —
+demonstrated by the orphan-mislink study: same-name, same-width ports
+with divergent layouts link cleanly (including a reversed-lane pinout
+byte-indistinguishable from the correct one), and pinouts can depend
+on import order.
 
 RESOLUTION — one canonical **BoundaryBinding/PortTree** owns the
 physical ABI: leaf identities and order, final names and the rename
-map (through PR-42-style legalization — candidate names are not
-authoritative), widths, roles, sharing classes, zero-width behavior,
-clock/reset ports, and the committed Bits/SplitPorts/WrapPorts
-*evidence* that produced the layout. Everything else (semantic port
-properties, waveform correlation, trs binding, BVI fallback
-conformance, LSP touch-points) consumes it. Preconditions, in order:
+map (candidate names are never authoritative — legalization is part of
+the owner), widths, roles, sharing classes, zero-width behavior,
+clock/reset ports, and the committed encoding/splitting *evidence*
+that produced the layout. Everything else — semantic port properties,
+waveform correlation, simulator binding, fallback conformance, editor
+touch-points — consumes it. Design invariants:
 
-1. **Coherence-side enforcement first** (see 04): no-orphans class
-   property on Bits/SplitPorts/WrapField/WrapMethod/WrapPorts; use-site
-   orphan rejection; the GenSign expanded-head fix ("fix it
-   independently and first" — Codex; RESOLUTION: agreed).
-2. **SplitPorts restructure gate.** The tuples-all-the-way-down
-   restructure (PortsOf mirrors the type; PairPorts collapse; flat
-   ATTuple retained at ASyntax) is IMPLEMENTED BUT NEVER COMPILED
-   (FACT). Gate before ratification: compile; byte-identical Verilog on
-   the four named falsifier areas; the 8..128-field timing sweep (the
-   O(n²) question is open and unmeasured); property tests for the
-   leaf-order invariant (checkPortNames counts, it does not order —
-   and orphan case 4 shows order divergence links cleanly); a backend
-   capability matrix (trs, BVI, SAL/lambda paths) before certifying the
-   serialized ABI change; schema bump per 01.
-3. **Semantic port properties** (PRs #1059/#1060) partition per the
-   review: structural role facts may live in IfcContract; rule-
-   liveness, arbitration, EN-fold, and dropped-arm facts belong to one
-   completed schedule and live in BoundaryBinding keyed by schedule
-   digest; under SchedAlt only the intersection across legal arms is
-   contract material. Complement folds must state their two-state
-   domain (X policy tag). One canonical mux/binding plan is shared by
-   lowering and analysis (T3). The default flip waits for the
-   vtest-enabled goldens and the clean capability-visible suite.
+- **Coherence first**: the classes that select physical
+  representation (Bits, SplitPorts, the wrapper classes,
+  ValidateBits, literal classes, codebooks) carry a no-orphans
+  property, enforced at use sites (04); their instance evidence joins
+  artifact identity — typeclass resolution *is* ABI.
+- **Structure is kept, not flattened**: a split value keeps the shape
+  of its type (a struct splits into one element per field, tuples all
+  the way down), and the leaf-order invariant that lets any flat view
+  index the tree is checked, not assumed — order, not just count.
+- **Schedule-scoped facts are partitioned**: structural role facts may
+  live in the semantic contract; rule-liveness, arbitration, and
+  enable-folding facts belong to one completed schedule and live in
+  the binding, keyed by schedule digest; under dynamic alternatives
+  only the intersection across legal arms is contract material.
+  Derived boolean facts state their truth domain (two-state vs
+  four-state) explicitly.
+- One canonical mux/binding plan is shared by lowering and analysis
+  (T3): readers never re-derive it.
 
-## 3. Encodings are ABI: the codebook witness (RESOLUTION)
+## 3. Encodings are ABI: the codebook witness
 
-The HuffmanBits result generalizes: **width agreement does not imply
-encoding agreement**, and the codebook policy (merge order,
-tie-breaking, edge labeling) is ABI. The width theorem (root height =
-ceil(log2 Σ 2^p_i)) makes generic deriving possible — only the width
-must be type-level; tags are elaboration values that partially evaluate
-away — and retires the repo's impossibility comments.
+**Width agreement does not imply encoding agreement**; the codebook
+policy (merge order, tie-breaking, edge labeling) is ABI. The width
+theorem (root height = ceil(log2 Σ 2^p_i)) makes generic deriving of
+Huffman-class encodings possible — only the width must be type-level;
+tags are elaboration values that partially evaluate away.
 
-RESOLUTION: adopt Codex's "one versioned witness" frame — for each
-encoding-owning instance, generate pack, decode, and validate from one
-fingerprinted codebook witness; the fingerprint joins semantic/
-specialization identity wherever packed values cross a package,
-simulator, trace decoder, or cache boundary; invalid/unknown decode
-semantics are specified (fail closed; unpack stays total but never
-implies validity — ValidateBits is the validity oracle). Adoption gate
-recommendation stands: **(a) port assign_tags exactly (S1–S7) with a
-differential fuzz gate against the reference Rust implementation's tag
-tables (VARIANT_TAGS — 07 §2)** (the roundtrip attribute is
-insufficient); canonicalization (b) remains a later coordinated
-flag-day. Migration must be coherence-safe: compile the generic head
-on the pinned bsc across all 21 existing registrations (07 §2) plus
-one unregistered; atomic cutover; shuffled-import and old/new .bo
-mixture tests. NEEDS-RAVI: ratify gate (a); share the study's companion
-artifacts.
+RESOLUTION — **one versioned witness per encoding-owning instance**:
+pack, decode, and validate are generated from one fingerprinted
+codebook witness; the fingerprint joins semantic identity wherever
+packed values cross a package, simulator, trace decoder, or cache
+boundary; invalid/unknown decode semantics are specified (fail
+closed; unpack stays total but never implies validity — ValidateBits
+is the validity oracle). Where an encoding is shared with another
+language's implementation, equivalence is established by differential
+fuzz against that implementation's tables — a roundtrip property is
+provably insufficient (it cannot see agreed-but-wrong tables).
 
-## 4. BVI: one construct, four programs (RESOLUTION of the family)
+## 4. import "BVI": one construct, five programs
 
-`import "BVI"` appears in four lanes that must stay one design:
+The same construct appears in five designs that must stay one:
 
-- **Decomposition** (artifact-graph §10): an asserted semantic contract
-  plus a foreign realization; scheduling annotations become carried
-  constraint obligations (asserted, upgradable to validated).
-- **Fallback / soft-IP** (bsc-side): a declared pure-Bluespec fallback
-  (model or stub tier) selected *structurally* — Verilog binds at
-  output time via a per-import ifdef swapping only the module name
-  (fallback synthesized through the BVI's own port map), Bluesim binds
-  at link, the parent .ba identical in all cases: no new tainting axis.
-  RESOLUTION — adopt with Codex's conditions as v1 requirements: an
-  explicit binding map + manifest entry (import → real/model/stub,
-  tier, trust, source closure, macros, capabilities) rather than
-  implicit substitution; schedule refinement compared per permitted
-  CALL CONTEXT (same-rule parallel; each cross-rule order — the
-  P-into-CF set insertion is not a lattice), sourced from the canonical
-  schedule artifact; conformance to the BoundaryBinding/PortTree of §2;
-  stubs opt-in and test-gated; effect/trust tier recorded (schedule
-  conformance is not behavioral substitutability); same-package v1
-  ownership rule with a thin local wrapper; question-mark bodies and
-  Bits-only zero stubs are not safe contracts — the stub generator is
-  stubOf(IfcContract) at the boundary or a sealed witness with
-  roundtrip/definedness laws; VMIfDef integrates explicitly with
-  identifier legalization. KNOB COLLISION (cross-cut finding): the
-  initial-block warning is guarded by BSV_NO_INITIAL_BLOCKS, which the
-  ValidateBits blessed X-configuration *defines* — suppressing the stub
-  warning exactly in the checking configuration; emit the
-  stub-substitution warning harness-side, not behind that guard. Status correction (FACT): a two-commit
-  old-base implementation exists on origin/verilog-import-fallback;
-  the proposal doc is the design of record and the implementation
-  rebases onto the schema foundation.
-- **trs execution** (BVI-via-Verilator v5, as built): the shadow-vector
-  model with an exactness theorem whose refusals are its boundary
-  conditions; verilation as a build step; pinned Verilator; oracle
-  succession per fixture (iverilog → VCS designated); defined
-  divergences pinned, never silent. Its .ba-graft seam (substituting a
-  plain-BSV implementation in bsc link-time hierarchy assembly) is the
-  same mechanism as the fallback clause seen from the simulator — and
-  re-enters the X-freedom proof domain. RESOLUTION: the fallback clause
-  and the graft are one design with two consumers; specify once
-  (bsc-side), let trs consume the substituted hierarchy.
-- **Doctrine** (trs): BVI is last-resort — source-level BSV
-  substitution first (keeps the Bluesim oracle), curated prim-table for
-  DesignWare-class IP second, verilated-leaf co-sim last. BVI pressure
-  concentrates in the -verilog flow (FACT; deployment specifics in
-  07 §5).
-- **The long-horizon fifth program** (10 §4): redo the import mechanism
-  from scratch on top of SplitPorts — the BVI syntax predates the
-  typeclass that now owns type↔port mapping — restoring computed module
-  names (the dropped "module verilog" feature) and extending to
-  computable port names (pVeriPort is a string literal today;
-  "generally anything with string literals"). RESOLUTION: this is the
-  same design as the decomposition bullet reached from the surface
-  syntax side; when the rethink is scheduled, it must land as the
-  surface for the asserted-contract + foreign-realization split above,
-  not as a parallel construct.
+- **Decomposition**: an asserted semantic contract plus a foreign
+  realization; scheduling annotations become carried constraint
+  obligations (asserted, upgradable to validated), and the boundary
+  is checked when a compiled module is instantiated in a foreign
+  design.
+- **Fallback / soft-IP**: a declared pure-Bluespec fallback (model or
+  stub tier) selected *structurally* — the Verilog realization binds
+  at output time by swapping only the module name through the BVI's
+  own port map; simulator realizations bind at link; the parent
+  artifact is identical in all configurations, so there is no new
+  tainting axis. Design conditions: an explicit binding map + manifest
+  entry (import → real/model/stub, tier, trust, source closure,
+  capabilities) rather than implicit substitution; schedule
+  refinement checked per permitted *call context* (same-rule parallel;
+  each cross-rule order — set inclusion on relation letters is not the
+  check), sourced from the canonical schedule artifact; conformance to
+  §2's port owner; stubs opt-in and test-gated, with the stub
+  generator derived from the semantic contract or a sealed witness
+  with roundtrip/definedness laws — don't-care bodies and
+  Bits-only zero stubs are not safe contracts; effect/trust tier
+  recorded, because schedule conformance is not behavioral
+  substitutability; substitution warnings are emitted by the harness,
+  never guarded by configuration macros that legitimate builds define.
+- **Foreign execution under a verilated engine**: a shadow-vector
+  execution model behind the simulator's primitive ABI, with an
+  exactness theorem whose export-time refusals are its boundary
+  conditions; verilation is a build step; defined divergences are
+  pinned, never silent. Its artifact-graft seam — substituting a
+  plain-Bluespec implementation in link-time hierarchy assembly — is
+  the fallback clause seen from the simulator, and is what restores
+  X-provability (05): specify once, consume twice.
+- **Doctrine**: BVI is last-resort — source-level substitution first
+  (keeps the reference oracle), a curated primitive table for
+  standard-IP classes second, verilated-leaf co-simulation last.
+- **The long-horizon rethink**: redo the import surface from scratch
+  on top of SplitPorts (the BVI syntax predates the typeclass that now
+  owns type↔port mapping), restoring computed module names and
+  extending to computed port names — "generally anything with string
+  literals." This is the same design as the decomposition bullet
+  reached from the surface-syntax side; when built, it is the surface
+  for the asserted-contract + foreign-realization split, not a
+  parallel construct.
 
-## 5. Foreign functions: one logical ABI, per-tool transports (RESOLUTION)
+## 5. Foreign functions: one logical ABI, per-tool transports
 
-Adopt the ForeignABI descriptor: model each foreign function once
-(typed args/results, widths, direction, signedness, state domain,
-ownership, effect class) with per-transport realizations recorded in
-the manifest. The transport matrix of record (FACT): VCS = polymorphic
-VPI (no usable polymorphic DPI); released Verilator = width-mangled
-monomorphized DPI (IEEE 35.5.4 requires mangled C symbols + generated
-shims); the pinned Verilator fork = open-packed DPI (implemented,
-validated, UNPUSHED — custody is the chat-delivered patch; re-land
-needs a write grant, 09.E); iverilog = VPI. Monomorphize-with-mangled-symbols
-is the portable near-term path; open arrays remain the cleaner form
-where supported and an upstream candidate (issue 3198; maintainer has
-said "PR welcome" since 2021). NEEDS-RAVI: the upstream plan (R3) and
-the fork write grant (09.E). Note for trs shell: shell exports
-should have concrete widths at generation time, in which case mangled
-DPI serves it on every tool and the open-packed capability matters for
-*polymorphic imports*, not the shell boundary — a reading to be
-confirmed (09 item 22); if a width-polymorphic shell boundary ever
-exists, VCS forces a VPI realization there.
+RESOLUTION — the **ForeignABI descriptor**: model each foreign
+function once (typed args/results, widths, direction, signedness,
+state domain, ownership, effect class) with per-transport realizations
+recorded in the manifest. The transport landscape is a requirement,
+not a choice: one major commercial simulator offers no usable
+polymorphic DPI (its transport is polymorphic VPI); stock open-source
+simulators require width-mangled monomorphized DPI; an open-packed DPI
+capability (one import serving all packed widths) exists as a pinned
+experimental capability with an upstream path. Monomorphize-with-
+mangled-symbols is therefore the portable floor; open arrays remain
+the cleaner form where supported. "DPI yes/no" is not a manifest
+entry — transport identity, link identity, and collision checks are.
+Simulator-shell exports are expected to be monomorphic at generation
+time (widths concrete), making mangled DPI sufficient there — a
+reading to be confirmed (08); if a width-polymorphic shell boundary
+ever exists, the VPI realization covers it.
 
-## 6. Instance-specific synthesis (issue 921)
+## 6. Instance-specific synthesis
 
-The BVI-fallback's parameterized-import tier is the easiest ISS client
-(port protocol fully dictated by VModInfo). Staging stands: v1
-monomorphic; v1.5 explicit specialization stubs driven by the
-frozen-manifest protocol (the InstSynth messageM loop, mechanized);
-v2 the ISS engine (GenWrap-during-elaboration at discovered types).
-Specialization is driven from the type instantiation during
+Polymorphic imports and parameterized IP want per-instance synthesis:
+specialization is driven from the type instantiation during
 elaboration — parameter-value inversion at link is unsound (FACT).
-Contract-value hashes are the cache keys (T2); demand-driven ba(inst)
-rides the artifact graph's reentrant-genModule machinery.
+Staging by design: monomorphic first; explicit specialization stubs
+driven by a frozen-manifest protocol; then the full engine
+(wrapper-generation during elaboration at discovered types).
+Contract-value hashes are the cache keys (T2); demand-driven
+per-instance artifacts ride the graph's reentrant elaboration
+machinery.
 
-## 7. Retiring genC/genVerilog (RESOLUTION — adopt as a vision item with gates)
+## 7. Dissolving genC/genVerilog
 
 Once implementation selection is structural and late-bound, the
 elaboration-time backend probes become compatibility relics: parse,
 typecheck, elaboration, scheduling, contracts, and symbolic segments
 form one backend-neutral cached prefix; only binding-keyed codegen
-leaves specialize. Adopt with its two gates: (i) census and migrate
-every genC/genVerilog use, representing genuine backend requirements as
-explicit capabilities or fail-closed link refusals; (ii) **binding
-precedes realization-dependent planning** — implementation selection
-must be fixed before PlanB/AOT-layout-class decisions (the live_en/
-arena example), i.e. the pipeline is semantic segment → binding +
-manifest → conformance + realization plan → link, and a mutable run key
-must not retarget an artifact after layout. Prove the payoff with an
-implementation-swap test in which the semantic prefix cache-hits.
+leaves specialize. The stated end state: backend-agnostic
+implementation artifacts with selection at link — "elaborate once,
+simulate many ways"; encrypted-IP swaps, test stubbing, and
+behavioral memories become link choices. Standing customer classes
+for per-instance selection: encrypted-IP substitutes,
+computed-parameter imports, conditional emulation-with-coverage
+builds, X-mode simulation profiles, and behavioral fallbacks for
+foreign modules without a native model. Two design rules make it
+sound: (i) genuine backend requirements are represented as explicit
+capabilities or fail-closed link refusals, never probes; (ii)
+**binding precedes realization-dependent planning** — implementation
+selection is fixed before layout-class decisions, and a mutable run
+key must never retarget an artifact after layout. This retirement
+depends on schedule specification (03): a checked schedule contract is
+what makes multiple implementations of one boundary safe.
 
-This retirement is now the *stated end state on the transcript record*
-(10 §1): backend-agnostic .ba files with implementation selection at
-link time — "genC/genVerilog demoted to near-irrelevant"; encrypted-IP
-swaps, stubbing, and behavioral memories become link choices;
-"elaborate once, simulate many ways." Five standing customer classes
-for per-instance implementation selection are on the record (10 §4's
-crib): encrypted-IP substitutes, a computed-parameter fix class
-(cousin of upstream #1064), conditional emulation-with-coverage
-builds, an X-mode simulation profile, and Bluesim fallbacks for
-Verilog modules without a C model. And the transcript states the
-precondition this document shares with 03: **module implementation
-selection depends on schedule specification** — "the only way you can
-make sure you have a proper contract across multiple implementations"
-is specify-then-check schedules, tying this retirement to the schedule
-certification rung.
+## 8. The SystemVerilog interop ABI
 
-## 8. The SystemVerilog output horizon and the interop ABI doctrine
-
-The longer-horizon project document (10 §4) defines a full SV output
-mode as an umbrella of independent pieces; recorded here because each
-piece is a consumer of this document's machinery:
-
-- **SV-type integration**: absorb external type-emission tooling into
-  the compiler so generated output manipulates types via SV's own type
-  system (field selection, not bit slicing), keeping user-implementable
-  typeclasses for the genuinely extensible parts. This rides the
-  codebook-witness discipline of §3 — emitting SV types is emitting the
-  encoding contract in a second syntax, so it must be generated from
-  the same fingerprinted witness, never a parallel implementation.
-
-This umbrella now has a governing document: the **SV-interop ABI
-doctrine note** (v1, Aug 2026; recovered by the credentialed crawl —
-10 §4). It names the rendering of Bluespec types into SV — packed
+The rendering of Bluespec types into SystemVerilog and Rust — packed
 layouts, field/tag names, tag encodings including variable-length
-Huffman-class codes, canonical form, package structure — as a de facto
-data-layout-and-naming ABI to be governed as one. Its clauses are this
-document's theses arriving as policy: **canonical form is clause 1**
-(what equality masks, what generation fills — ratification in
-progress); the **one-library rule** — the SV emitter and the Rust
-emitter must be projections of ONE type-to-rendering library, because
-two hand-maintained descriptions are two ABIs (the name-drift bug
-already shipped once); a written compatibility policy per type-edit
-class; versioned type names for freezes (freeze one name, not N bit
-indices); a golden layout manifest as a CI check; and **ship-in-pairs
-bidirectionality** — pack/unpack (for encoded types the codec IS the
-boundary; prefix matchers are emitted logic, never solver problems),
-render/project (typed port emission pairs with typed views), and
-name/select (accessor packages over bit-index selection), with v1's
-read side pure selection and mutation staying Bluespec-side. Status:
-ratified and enforced internally over bsc emissions (07 §5); the
-intended trajectory is upstreaming the clauses as the language's
-missing interop chapter. The accepted cost is compiler layout freedom
-— upstream layout changes become ABI events, which is itself an
-argument for the upstream-review investment (07 §4.4). The
-tag-encoding clause is §3's codebook-is-ABI result restated as
-governance; the render/project axis is where SplitPorts (§2) and the
-semantic port properties sit.
-- **Intent-bearing constructs**: always_ff/always_comb/logic, and
-  especially **unique case** — bsc often knows a case is exhaustive and
-  exclusive by construction, and emitting unique case propagates that
-  knowledge to downstream tools that would otherwise reprove or miss
-  it. This is T1 applied to the Verilog backend: a compiler-known fact
-  becomes a carried, consumable artifact.
-- **SV assertion emission** (some generatable without source-level
-  assertions; source assertions better still) and **native SV import**
-  (the richer-featured sibling of §4's import rethink).
+codes, canonical form, package structure — is governed as **one ABI**
+(the doctrine note; ratified as policy):
 
-Delivery model per the source document: needs internal capacity; not
-contractor-shaped. No sequencing claim here beyond noting the witness
-dependency (§3) and that intent-bearing output composes with the
-lint-noise program (07 §5).
+- **Canonical form is clause 1**: what equality masks and what
+  generation fills for don't-care bits.
+- **The one-library rule**: every language emitter is a projection of
+  ONE type-to-rendering library — two hand-maintained descriptions are
+  two ABIs, and name drift between them has already shipped a bug
+  class once.
+- A written compatibility policy per type-edit class; versioned type
+  names for freezes (freeze one name, not N bit indices); a golden
+  layout manifest as a CI check.
+- **Ship-in-pairs bidirectionality**: pack/unpack (for encoded types
+  the codec IS the boundary; prefix matchers are emitted logic, never
+  solver problems); render/project (typed port emission pairs with
+  typed views); name/select (accessor packages over bit-index
+  selection). The read side is pure selection; mutation stays
+  Bluespec-side; dynamic projection out of encoded types is real
+  hardware cost and opt-in.
+- The accepted cost is compiler layout freedom: layout changes become
+  ABI events.
 
-## 9. Lane pointers
+The broader SV output horizon rides the same machinery: SV-type
+integration generated from the same witness as §3 (never a parallel
+implementation); intent-bearing constructs — always_ff/always_comb/
+logic and especially **unique case**, which propagates the compiler's
+exhaustive-and-exclusive-by-construction knowledge to downstream tools
+that would otherwise reprove or miss it (T1 applied to the backend);
+SV assertion emission; native SV import as the richer sibling of §4's
+import rethink.
 
-"KB: SplitPorts port-structure design"; "KB: bsc semantic port
-properties"; "KB: HuffmanBits generic deriving"; "KB: bsc BVI fallback
-+ soft-IP design"; "KB: BVI-via-Verilator design (trs)"; "KB: verilator
-open packed DPI"; "KB: bsc typeclass coherence" (orphan enforcement);
-"KB: bsc artifact graph" (§§7–10, 13 + reviews); post-genwrap-
-compiler.md; bsc issues 921, 1061, 713, 731, 658.
+## 9. Pointers
 
-## 10. NEEDS-RAVI (rolled up in 09)
+Mechanism and evidence: the artifact-graph RFC's contract sections;
+the post-genwrap design; the SplitPorts, semantic-port-properties,
+HuffmanBits, BVI-fallback, BVI-via-Verilator, and open-packed-DPI
+lanes; the SV-interop ABI doctrine note; the orphan-mislink study.
+Indexed in the KB; open design decisions in 08.
 
-- HuffmanBits adoption gate (a) vs (b); companion artifacts.
-- Open-packed DPI upstreaming (R3) + MatX-inc/verilator write grant.
-- BVI fallback: ratify the structural binding design with the Codex
-  conditions as v1 scope; route the soft-IP implementation rebase.
-- SplitPorts: authorize the compile+sweep gate work (a toolchain
-  session task).
-- Orphan policy: WOrphanInst→error timing (standalone or with P0);
-  routing of the GenSign defect filing (own issue vs bsc#1061 comment).
-- Port-properties default flip after the capability-visible suite.
+## 10. RESOLUTIONS and OPEN questions
+
+- RESOLUTION: one port-ABI owner; coherence enforcement precedes any
+  serialized physical-ABI change; leaf order checked by construction
+  AND validated.
+- RESOLUTION: one versioned codebook witness; differential fuzz
+  against the sibling implementation is the equivalence gate.
+- RESOLUTION: the fallback clause and the simulator graft are one
+  design with two consumers.
+- RESOLUTION: the ForeignABI descriptor with per-tool realizations;
+  the interop ABI's one-library rule.
+- OPEN: the codebook adoption gate — port the existing planner exactly
+  vs canonicalize both sides (a pre-silicon flag-day choice).
+- OPEN: strict conformance mode as default for foreign execution.
+- OPEN: canonical-form clause ratification; anonymous/structural
+  types at boundaries; recursive encoded types (the doctrine's queue).

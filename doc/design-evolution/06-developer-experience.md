@@ -1,272 +1,200 @@
-# 06 — Developer Experience: bluehs, the LSP, and Typed Observability
+# 06 — Developer Experience: the LSP, bluehs, and Typed Observability
 
-The tooling program: the compiler as a library, the language server,
-typed simulation control, and typed waves — and the one query surface
-they converge on.
+The tooling destination: the compiler as a library, the language
+server, typed simulation control, typed waves and coverage display,
+the parser/lexer modernization, and the one query surface they
+converge on.
 
-**Status:** v1.0 — 2026-08-24 (Claude, holistic review). Labels: FACT /
-DECISION / PROPOSAL / RESOLUTION / NEEDS-RAVI.
+**Status:** v2.0 — 2026-08-24 (Claude). Design only; engagement terms,
+staffing, and status live in the KB lanes, outside this set.
 
-## 1. bluehs
+## 1. bluehs: the compiler as a library
 
-DECISIONS: bluehs proceeds (leadership-aligned, low-risk; tool delivery
-independent of compiler releases); packaging is the fat `bsc-internals`
-package exposing all ~226 modules, exact-commit, interfaces
-deliberately undesigned until bluehs teaches us what it wants; the
-freeze rule is *freeze only what bluehs cannot add later*. Provenance
-(10 §§3,5): the May GHCi-integration proposal (load all compiler
-modules into an interactive session for scripting and metadata
-extraction) is the origin, and the posture is stated on the tour —
-"who needs an API: access to all of BSC's libraries in Haskell, settle
-to a sensible API once we understand what's useful"; the near-term
-driver is lint-waiver emission scripting, and the release is promised
-to outside collaborators for experimentation. bluehs is also the
-stated replacement direction for the bluetcl/BDW lineage (BDW being
-"a stress test for bluetcl").
+The design: expose all of bsc's libraries in one exact-commit package
+first, and let consumers teach the API — "interfaces deliberately
+undesigned until bluehs teaches us what it wants"; the blessed
+surfaces are small consumer-taught wrappers grown when consumers land;
+the eventual component split (solver, Tcl, raw internals, simulation
+control as separately-linked pieces) is that later milestone's
+requirement, not v1's. Distribution manifests carry source commit,
+schema, toolchain ABI, platform, and kernel-ABI pins (T2). The freeze
+rule: freeze only what bluehs cannot add later. Scope boundary of
+record: SVA is not deliverable through bluehs — it processes different
+source. bluehs is also the stated successor direction for the
+Tcl-based tooling lineage (the workstation UI having long been "a
+stress test for bluetcl"), and the near-term driver is scripting the
+compiler for emission tasks (lint waivers) that previously required
+compiler round-trips.
 
-RESOLUTIONS (adopting the review): the raw package is an exact-commit
-exploratory API and never the blessed surface; the blessed surfaces are
-small consumer-taught wrappers grown when consumers land. The eventual
-component split (solver, Tcl, raw internals, simulation control as
-separately-linked pieces — today every script inherits STP/Yices/Tcl
-linkage) is that milestone's requirement, not v1's. Distribution
-manifests carry source commit, schema, GHC ABI, platform, bk ABI, and
-native pins (T2).
+**Typed simulation scripting** (PROPOSAL, evidence complete): a typed
+second frontend over the same simulator-kernel seam the Tcl frontend
+uses — not a replacement, pulled in by a concrete consumer. The
+kernel ABI needs no additions for parity (it is strictly read-only;
+the Tcl frontend has no write path either). Differentiators: typed
+state decode through the recorded-types spine, property-based
+stimulus via sidecar modules, invariant/coverage sidecars, and the
+same interface driving trs artifacts unchanged (drop-in kernel ABI).
+The first robust consumer is an isolated-worker lockstep differential
+driver — in-process lockstep is not generally independent (shared
+foreign state, stdio, RNG). Interactive poke/deposit is the ONE
+candidate kernel extension, weighed separately because it costs
+freeze surface in two engines; a synchronous stepping API (inline
+single-step without the helper thread) exists as a candidate kernel
+addition with model fuzzing as its consumer — kernel-ABI evolution is
+coordinated across all its stakeholders before anything freezes (08).
 
-Scope facts from the meeting record (10 §§1,5; the freeze chats): SVA
-cannot be delivered through bluehs — it involves processing different
-source; the valuable adjacent items are next-design-scale. GHC 9.14's
-GHCi change dramatically improves bluehs performance (01 §6), which
-strengthens the 9.14-for-releases line.
+## 2. The language server
 
-**Simulation scripting** (PROPOSAL, evidence complete): a typed second
-frontend over the same BluesimLoader/bk_* seam bluetcl uses — not a
-Bluetcl replacement, not v1 scope, pulled in by a concrete consumer.
-The bk_* ABI needs no additions for parity (it is strictly read-only;
-bluetcl offers no write path either). NEW FACT bearing on the kernel
-question: a **synchronous stepping API** (bk_sync_*) now exists on a
-branch — inline single-stepping without the helper thread, ~340×
-cheaper per step — built for model fuzzing (05 §5); it is read/step
-control, not poke, but its author's fuzzing prototype will produce a
-concrete hook-ask list, and the Bluesim-ABI freeze coordination item
-(09 item 10) now has a named second stakeholder. Differentiators: typed state
-decode through the recorded-types spine, property-based stimulus via
-sidecar modules, invariant/coverage sidecars, and the same interface
-driving trs artifacts unchanged (drop-in bk_* ABI). The natural first
-consumer is the Bluesim-vs-trs lockstep differential driver — with the
-review's condition adopted: in-process lockstep is not generally
-independent (shared BDPI/stdin/files/RNG state); the first robust
-consumer uses isolated workers or record/replay of external effects.
-Interactive poke is the ONE candidate kernel extension and is weighed
-separately (it costs freeze surface in both Bluesim and trs; the
-sidecar-stimulus route covers most needs without it).
+Architecture (DECISION): two layers — an error-tolerant parser (new
+code, differential-parse-tested against an identity corpus, promoted
+to normative only on receipts) plus bsc-as-library semantics off
+last-good artifacts. The operative design from the joint scoping:
 
-## 2. The LSP
+- **Path-indexed ranges outside CSyntax.** Ranges never go onto the
+  core syntax type: the blast radius would be the whole typechecker,
+  and CSyntax is a *derived* artifact for the BSV front end, so any
+  annotation scheme must live outside it regardless. The parser
+  produces the tree plus a path→range map; the typechecker reports
+  errors by path (it recurses on the tree, so tracking is trivial);
+  comments become path-keyed annotations the same way (the docstring
+  map). T8 applied to diagnostics.
+- **Parser modernization is the foundational step**: both parsers
+  rebuilt on a modern combinator library with source ranges,
+  multi-error recovery, and better messages — bolting recovery onto
+  the existing parsers was tried and made errors worse; neither old
+  library is worth reusing. One open implementation choice under the
+  settled decision: a table-driven LALR(1) port is judged practical
+  (layout moves to a lexer-side stack; error recovery nearly free)
+  and sits beside the chosen combinator route (08). Shared step zero
+  for docstrings, hover docs, and any formatter: **comments must
+  survive lexing** — both current lexers discard them. A measured
+  modern lexer (token-identical, byte-identical compiler rebuilds,
+  large speedups on lexing-bound workloads) is the substrate either
+  parser path builds on.
+- **Definition-level granularity; incremental parsing rejected.**
+  Files are small, parsing is fast, full-document sync suffices, and
+  mandatory top-level type signatures mean every definition
+  typechecks independently — parse-error poison pills mirror the
+  existing type-error mechanism, composing recovery with partial
+  compilation.
+- **Interface files are the metadata home**: resurrected
+  signature-level artifacts (much lighter than full implementation
+  artifacts; the same design serves a fast type-check-only mode)
+  carry ranges and docstrings; range reporting also enters the main
+  compiler flow.
+- **Feature scope by consumer reality**: hover with type + docstring
+  (including as-declared vs normalized display), go-to-definition,
+  references, and type holes are the core; textual completions and
+  renames are deprioritized *because LLM agents cover them* — agents
+  are a first-class LSP consumer class in their own right;
+  waves-to-source navigation is adjacent UI space, not LSP proper
+  (§3). Multi-location diagnostics are protocol-verified (the
+  typeclass position-universe case); byte-based position encoding is
+  negotiated explicitly. Type-at-use-site remains the canonical
+  example of what compiler integration buys over a syntax-only
+  server.
+- **Touch-point tracing from generated Verilog back to source** —
+  registers, instantiations, ports, rule predicates — is the named
+  most-impactful feature: the compiler knows the information and has
+  simply never had an interface to expose it. Source-to-RTL
+  provenance is a many-to-many DAG, never one selected position.
+- **Build integration inverts**: the LSP extracts the build graph and
+  drives itself from it — it never generates build files.
+- **Editor portability**: a portable baseline on language-agnostic
+  features; editor-specific extras allowed where they genuinely pay;
+  no environment left out.
 
-Architecture (DECISION): two layers — an error-tolerant parser (bluehs
-script code, differential-parse-tested against the identity-CI corpus,
-promoted to normative only on receipts) plus bsc-as-library semantics
-off last-good artifacts. Freeze rating B: tip-lane, freeze-indifferent.
+Semantic authority is a versioned, action-keyed protocol: every reply
+binds workspace/config, document version and buffer digest, snapshot
+and transitive action identity, and classifies itself Exact /
+StaleLastGood / Pending / Unavailable; stale semantics may display but
+never silently drive refactors. The long-running worker cannot inherit
+process-global compiler state — disposable workers keyed by action
+generation first; session reuse arrives with the session architecture
+(01 §3). The rust-analyzer precedent governs status: a non-official
+parser against the reference compiler is standard sequencing, and
+promotion is receipts-gated (an incremental-edit trace corpus — parser
+behavior on transient broken buffers — is the stronger gate).
 
-The August joint scoping session (10 §3; full transcript now in the
-lane draft) settled the operative design, refining this architecture:
+## 3. Typed observability
 
-- **Path-indexed ranges outside CSyntax**: ranges never go onto
-  CSyntax (blast radius = the whole typechecker; and CSyntax is a
-  *derived* artifact for the BSV front end, so any annotation scheme
-  must live outside it regardless) — the parser produces the tree plus
-  a path→range map; the typechecker stays essentially untouched and
-  reports errors by path; comments become path-keyed annotations the
-  same way. This is 04/01's carry-structure-forward thesis applied to
-  diagnostics.
-- **Parser modernization on Megaparsec** as the foundational first
-  step (both parsers; source ranges; multi-error recovery; the
-  implementing engineer took it as the codebase ramp) — answering the
-  tour's parser complaints, with the recorded fact that a prior
-  experiment bolting recovery onto the existing parsers made errors
-  worse, not better.
-- **Definition-level granularity; full incremental parsing REJECTED**
-  (files are small, parsing is fast, LSP full-document sync suffices,
-  no good Haskell incremental framework exists). Error recovery
-  composes with partial compilation because mandatory top-level
-  signatures let every definition typecheck independently —
-  parse-error poison pills mirror the existing type-error mechanism.
-- **A two-step proving ground**: parsers re-engineered, then
-  range-based type diagnostics validated — each an independently
-  useful compiler improvement that retires the core uncertainty before
-  larger lifts.
-- **BI interface files resurrected** as the persistent home for
-  auxiliary metadata (ranges, docstrings) — converging with the
-  independent check-only-mode motivation (01 §1: already
-  reimplemented) rather than a parallel store.
-- **Feature scope by consumer reality**: hover with type+docstring,
-  go-to-definition, references, and type holes are the core; textual
-  completions and renames are deprioritized *because LLM agents cover
-  them* — agents are named a major LSP consumer class in their own
-  right; waves-to-source navigation is judged adjacent UI space, not
-  LSP proper (see §3). Multi-location diagnostics are verified
-  possible in the protocol (the typeclass position-universe case);
-  byte-based position encoding is negotiated explicitly.
+One artifact serves every consumer: generated **decoding functions**
+(not static type tables — encodings can be custom), total over
+4-state input, X/Z propagation defined per decoder kind, keyed by
+type + resolved encoding evidence + codebook fingerprint + compiler
+schema (02 §3), delivered in-artifact or as sidecars.
 
-The engagement's M1–M4 milestones track exactly these (parser →
-BI files → range diagnostics → core editor capabilities); terms are
-proposed, not agreed (07 §4.4). Touch-point tracing — named the single
-most impactful feature in the May scoping — is a stated priority
-WITHOUT a milestone; whether that is deliberate sequencing is an open
-question (09). The rust-analyzer precedent governs parser status: a
-non-official parser against the reference compiler is standard
-sequencing, promotion is receipts-gated (with Codex's
-incremental-edit-trace corpus as the proposed stronger gate).
+- **The type sidecar**: the compiler emits a companion file mapping
+  dumped signals to source types (enums by constructor, tagged
+  unions, structs); a viewer-side translator consumes it, making the
+  wave *format* irrelevant to decoding. Container ruling: FST over
+  VCD — FST's scope records carry a type slot that VCD simply lacks
+  (a comment convention was rejected as a hack around a format gap);
+  proprietary formats are reached by conversion until direct reads
+  are worth their licensing entanglements.
+- **Wave-to-source needs no viewer fork**: the open viewer speaks a
+  small JSON control protocol with a go-to-declaration event carrying
+  the signal's full hierarchical path; the tool-side work is a
+  protocol client plus a path→source map from compiler position info
+  — and one editor-side client can serve the open viewer and the
+  commercial one (which is scriptable enough to speak the same
+  protocol). The compiler-side piece is shared across all routes.
+- **The position-tracking doctrine** (Ravi): coverage display (05 §6)
+  and wave-to-source both want better position propagation through
+  the evaluator; state-element positions are already good — the
+  shared investment is positions for *intermediate* signals: one
+  substrate, two named consumers.
+- **The agent-consumer reframing**: a quality capture of state and
+  events plus a command-line probe tool can beat a human waveform
+  viewer for debugging throughput — and the signals worth capturing
+  typed are exactly the state elements and ports (everything else is
+  a function of state; record state + fire events, not full
+  evaluation). This reframes the decoder witness's first consumer as
+  possibly a probe tool rather than a viewer, without changing the
+  artifact.
+- Human-readable shadow: emit source-language-typed comments on
+  generated ports, registers, and wires — kept consistent with the
+  decoder witness, never independent.
 
-One unreconciled alternative stands (10 §5): the lexer-modernization
-arc judged a table-driven **LALR(1) port practical** (layout moves to
-a lexer-side stack; error recovery nearly free), which sits beside the
-Megaparsec decision as an open implementation question, not a second
-decision. Shared step zero for docgen, hover docs, and any formatter:
-**comments must survive lexing** (both current lexers discard them).
-The measured Alex-lexer replacement (token-identical, byte-identical
-rebuilds, up to ~6.3× on lexing-bound workloads, ~1.7× at large real
-files) is the substrate either parser path builds on.
-Feature priorities (DECISION, from the Unison scoping): the baseline
-set (rename, references, hints); type-at-use-site (what compiler
-integration buys over PR 891); **Verilog→source touch-point tracing**
-(named most impactful); typed bit-vector unpack via the evaluator.
-Build integration inverts: the LSP extracts the build graph and drives
-itself from it — never generates build files. Portable baseline;
-VS Code extras allowed.
+Dump policy: the waveform signal set follows the reference simulator;
+typed dumping is the recorded aspiration; dump throughput has a named
+direction (write-time dirty sets, then an AOT-emitted specialized dump
+walk) behind a benchmark tripwire; wave generation supports multiple
+dump formats by user configuration through one format-agnostic sink.
 
-RESOLUTIONS (adopting the review): semantic authority becomes a
-versioned, action-keyed protocol — every reply binds workspace/config,
-document version and buffer digest, snapshot and transitive action
-identity, and classifies itself Exact / StaleLastGood / Pending /
-Unavailable; stale semantics may display but never silently drive
-refactors. The long-running worker cannot inherit process-global
-compiler state — start with disposable workers keyed by action
-generation; session reuse arrives with the session-context program
-(01 §3). Source↔RTL provenance is a many-to-many DAG, not one selected
-position (the multi-position open question is answered in that
-direction). Typed decoding sandboxes with resource limits and a total
-X/Z policy. Waveform correlation consumes final physical names — the
-versioned AId-path→final-VId map (with aliases, inout rewires, scope,
-width, role, decoder reference) feeds wiretypemap, BoundaryBinding, and
-wave tooling alike; candidate-name heuristics are not the bridge.
+## 4. One query surface
 
-Engagement (FACT): PR 891 is in daily use and stops where the compiler
-starts; upstream wants an LSP and will review; the Unison DevEx program
-is a severable staffing decision with funding pending (figures and
-status in 07 §4.4, 09 A.3), with the proposal mechanics (rates, scope,
-weekly status, shared channel) in motion per the August meeting; the
-Bluespec, Inc. upstream-review program (same pending status) is the
-governance counterweight. The longer-horizon
-document independently rates the compiler-integrated LSP
-contractor-friendly — well-specified, self-contained, no internal
-context needed — which is the delivery-model argument for the
-engagement (10 §4). The LSP acceptance bar placeholder ([RAVI: bar])
-remains open in the memo.
+From the library rung of the artifact graph onward, the engine lives
+in the library: bluetcl, bluehs, the LSP, and the test orchestrator
+consume the same memoized, snapshot-keyed query surface over artifact
+nodes; a stable worker/query protocol is the terminal node of the
+whole program. The session architecture (01 §3) is its
+precondition. Bluetcl neither grows nor deprecates: one
+implementation, two frontends; the Tcl surface keeps the
+interactive-shell half and the EDA-familiar syntax; the interactive
+test corpus is the parity anchor.
 
-## 3. Typed observability (the decoder witness)
+## 5. Pointers
 
-One artifact serves every consumer (RESOLUTION, from 02 §3 + the
-BVI/waves lanes): generated **decoding functions** (not static type
-tables — Bits instances can be custom), total over 4-state input, X/Z
-propagation defined per decoder kind (derived: per-field localization;
-custom unpack: whole-value X), keyed by type + resolved Bits dictionary
-+ codebook fingerprint + compiler schema, delivered in-artifact (trs
-online decode) or as sidecars/viewer filters (the bluetcl-over-GTKWave
-route, which also serves the Verilog flow's waves). Consumers: LSP
-hovers and unpack, trs typed waves (arena slots carry BIR types →
-Surfer translator + type sidecar, per-rule WILL_FIRE tracks — a
-committed direction), VCD/FST tooling, BVI boundary ports (typed via
-the contract even though the model is untyped), ValidateBits.
+Mechanism and evidence: the LSP design lane (the joint-scoping record
+and its reviews); the bluehs and sim-scripting lanes; the
+surfer-integration and coverage documents; the lexer/parser
+modernization records. Indexed in the KB; open design decisions in 08.
 
-Dump policy (DECISION): the waveform signal set follows Bluesim for
-now; Bluespec-typed dumping is the recorded aspiration; trs dump
-throughput has a named eventual direction (write-time dirty sets, then
-an AOT-emitted specialized dump walk) behind a benchmark tripwire.
-The trs BVI observability tiers (boundary dump riding trs's
-format-agnostic sink; link-time traced model variants as distinct cache
-classes with per-instance side files) remain OPEN pending Ravi.
+## 6. RESOLUTIONS and OPEN questions
 
-Meeting-record additions (10 §§5–6): a July decision restructured wave
-generation to support **three dump formats selected by user
-configuration** — the format-agnostic-sink posture above, arriving in
-bsc itself; the waveform→source mapping ambition is stated on the tour
-as a Verdi-class feature targeted at **Surfer** (chosen because it
-decomposes structs and tagged unions properly), confirming the Surfer
-translator direction; and the ramp menu carries the small complementary
-item of emitting **Bluespec-type comments on generated ports,
-registers, and wires** (comment syntax following the source language) —
-the human-readable shadow of the decoder witness, worth keeping
-consistent with it rather than independent.
-
-The credentialed crawls (10 §§4–5) then filled in the working plan:
-
-- **Wave-to-source is feasible today without forking Surfer**: Surfer
-  speaks WCP and implements a goto_declaration event carrying the
-  signal's full hierarchical path; the tool-side work is a WCP client
-  plus a path→Bluespec-source map from bsc position info. The elegant
-  endgame is one editor-side WCP client serving Surfer *and* Verdi (a
-  Verdi-side Tcl script speaking the same JSON protocol — hooks
-  unverified until the local manuals are read). The bsc-side piece is
-  shared across all routes.
-- **The type-sidecar plan** (the surfer-integration working doc): bsc
-  emits a companion file mapping dumped signals to source types; a
-  Bluespec translator for Surfer consumes it, making the wave format
-  irrelevant to decoding. Container ruling: **FST over VCD** — FST
-  scope records carry a slot for the module type, which VCD simply
-  lacks (the VCD-comment convention was dropped as a hack around a
-  format gap); Bluesim has FST support now; the FSDB path goes through
-  fst conversion until direct-read licensing is worth raising. A
-  March-era decoder-plugin proof of concept exists with a recorded
-  shortcut list; adoption is honestly zero until the decoding ships
-  ("never delivered the decoding that would make it better than
-  Verdi").
-- **The position-tracking doctrine** (Ravi, 2026-08-24): coverage and
-  wave-to-source both benefit from better position tracking through
-  the evaluator; state-element positions are already good, and both
-  consumers may care about *intermediate* signals — one evaluator
-  position-propagation investment, two named consumers (05 §6's
-  workstream B display upgrade, and wave-to-source on non-state
-  signals).
-- **The agent-consumer reframing** (the portfolio transcript): a
-  quality capture of state and events plus a command-line probe tool
-  lets an agent hunt bugs at far lower cost than a human viewer — and
-  the signals worth capturing typed are exactly the state elements and
-  ports (everything else is a function of state; record state +
-  CAN_FIRE/WILL_FIRE events, not full evaluation). This reframes the
-  decoder witness's first consumer as possibly a probe tool rather
-  than a viewer, without changing the artifact.
-
-## 4. One query surface (the convergence)
-
-From artifact-graph ladder rung 2 onward, the engine lives in the
-library: bluetcl, bluehs, the LSP, and the test orchestrator consume
-the same memoized, snapshot-keyed query surface over artifact nodes
-(a stable worker/query protocol is the DAG's terminal node — 08). The
-session-context program (01 §3) is its precondition. Bluetcl neither
-grows nor deprecates: one implementation, two frontends; bluetcl keeps
-the interactive-shell half and the EDA-familiar surface; the testsuite
-keeps its 23 interactive .cmd tests as the parity anchor.
-
-## 5. Lane pointers
-
-"KB: bluehs simulation scripting design"; "KB: Bluespec LSP design";
-"KB: bsc toolchain" HEAD (bluehs section; wiretypemap/porttypes
-scaling); "KB: BVI-via-Verilator design" §9 (observability, decoders);
-"KB: bsc verilator integration" (final-name map objection); "KB: trs
-full-AOT push" (typed waves, Surfer); "KB: HuffmanBits" (codebook
-witness); bsc PR 891; upstream #503, #1002.
-
-## 6. NEEDS-RAVI (rolled up in 09)
-
-- The Unison engagement decision (with the staffing memo) and the LSP
-  acceptance bar; whether touch-point tracing's absence from M1–M4 is
-  deliberate sequencing.
-- The Megaparsec-vs-LALR(1) parser-implementation question (§2) — an
-  open implementation choice under the settled modernization decision.
-- bluehs sim-scripting: ratify the PROPOSAL's v1 bar (parity without
-  poke) and the first-consumer choice; the poke/deposit kernel
-  extension question — now coupled to the bk_sync/fuzzing hook-ask
-  coordination (05 §5).
-- trs observability tier 2 and the dump-default flip after the traced-
-  run benchmark.
+- RESOLUTION: path-indexed ranges; definition granularity; interface
+  files as the metadata home; receipts-gated parser promotion.
+- RESOLUTION: the action-keyed semantic-authority protocol; no
+  process-global state in long-running workers.
+- RESOLUTION: one decoder witness for every observability consumer;
+  FST-class containers carry the types; one protocol client serves
+  multiple viewers.
+- OPEN: the parser implementation choice (combinator vs LALR) under
+  the settled modernization decision.
+- OPEN: touch-point tracing's place in the engagement's milestone
+  sequence.
+- OPEN: poke/deposit and the synchronous stepping API — one
+  coordinated kernel-ABI decision.
+- OPEN: the docstring marker standard (comments-survive-lexing is
+  step zero either way).
