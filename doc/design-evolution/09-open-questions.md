@@ -25,11 +25,21 @@ documents/lanes; this is the decision queue.
    decidable, axiomatic where not, heuristic never," as amended to
    "no uncheckable or non-monotone acceptance," as the permanent
    acceptance-frontier rule — plus the scheduler-vs-typechecker solver
-   ownership split and flag-day rule.
+   ownership split and flag-day rule. Packaging corollary the cross-cut
+   surfaces as implied-but-never-stated: ship the X-analysis solver
+   stack with trs (already MatX-packaged under the side-tree doctrine)
+   rather than bundling ~30MB of engines into core bsc releases,
+   deferring the upstream-bundling question until an upstream consumer
+   exists — ratify or amend.
 5. **One-order compatibility rung (03 §R3.1):** approve running the
    urgency/execution divergence census (today's scheduler; testsuite +
    a large internal corpus, 07) and the named-rung/format-generation
-   treatment of the break.
+   treatment of the break — including the **venue** question the
+   cross-cut raises: does one-order ship fork-first or upstream-first,
+   and does the census also run over upstream corpora?
+5a. **Two-tier landing rule (08 §2):** ratify (or amend) the policy
+   that schema-serializing / cross-engine-identity work gates on N1
+   while semantics-preserving work lands on its own evidence.
 
 ## B. Design ratifications waiting (single-lane, ready)
 
@@ -44,14 +54,20 @@ documents/lanes; this is the decision queue.
    config: warn vs error; lean warn-once-per-module), Q4 (reserve the
    unknown-arm spelling), Q6 (X-lane defaults; name the blessed
    two-knob configuration); the X-payload doctrine question (leans
-   "payload X flows"); final D7-prose alignment.
+   "payload X flows"); final D7-prose alignment. Plus the governance
+   edge the cross-cut names: may an upstream-visible primitive have its
+   reference semantics defined by the (internal) 3-state trs, or should
+   the completeness bound be pinned in a simulator-independent spec?
 9. **BVI-via-Verilator:** Q4 strict mode (recommendation on record:
    ratify strict); pick and provision the pinned Verilator (the fork
    release from the fixed tip); observability tier 2; landing the
    branch into the stack.
 10. **bluehs sim scripting:** ratify the v1 bar (parity, no poke) and
     the first consumer (isolated-worker lockstep driver); the
-    poke/deposit kernel-extension question.
+    poke/deposit kernel-extension question — TIME-SENSITIVE per the
+    cross-cut: poke is a bk_* kernel ABI change and the kernel ships
+    with the freeze (07 §1), so this is the one "freeze-indifferent"
+    claim that fails; decide in-or-out before the kernel freezes.
 11. **SplitPorts:** authorize the compile + byte-identity + 8..128
     timing-sweep gate as a toolchain-session task; rejected
     alternatives (1)/(4)/(5) stay live until then.
@@ -68,6 +84,11 @@ documents/lanes; this is the decision queue.
 14b. **Contract-files ↔ manifest unification (01 §1):** ratify that the
     3-phase flow proposal's contract files and the transitive manifest
     are one artifact family before the flow proposal circulates.
+14c. **Own the session-context program (01 §3):** it is the named
+    prerequisite of four lanes (parallelism rung 4, the LSP worker,
+    bluehs persistence, the ATF ground-memo's conditional acceptance)
+    and currently has no owner — assign one; it is likely the largest
+    single internal refactor of the period.
 
 ## C. Ecosystem-facing proposals in waiting (your PR-policy gate)
 
@@ -92,10 +113,32 @@ documents/lanes; this is the decision queue.
 21. **trs's ultimate home** (07 §4.1): side-tree forever, or an
     eventual upstream offering (tool suite vs backend)? The
     smaller-tools origin gap is now closed (10 §1); the strategy
-    question remains.
+    question remains. Two sharpenings from the cross-cut: (a) the
+    artifact-graph RFC's "trs consumes bir nodes" reading quietly
+    assumes trs is a first-class backend of the future bsc — decide
+    whether BIR versioning is an internal or public contract; (b) the
+    **monorepo insertion path is unowned** (07 §5): who designs the
+    post-freeze rollout (release channel, build-rule changes, PD-ABI
+    non-impact proof), and is the B0 window the target?
+21a. **Testsuite premise ownership:** is upstream acceptance of the
+    Shake engine (staircase S4) an actual goal with an owner and
+    timeline, or should planning assume fork-only (which flips the
+    testsuite verdict to do-not-migrate and keeps DejaGNU + the S1
+    tools)?
+21b. **Divergence policy ratification:** adopt T9's operational form
+    as the decision-of-record — any fork divergence must be pinned,
+    declared in artifact identity, and carry an upstream exit plan —
+    so future lanes inherit it rather than rediscovering it.
+21c. **PR-hold scope:** does the 2026-08-23 hold apply uniformly, or
+    can byte-neutral bug fixes (the transpose, ethmac keywords,
+    verilator regression filings) proceed while policy is sorted?
 22. **VCS engineering depth** (07 §4.3): how much investment the
     VCS-specific paths (trs shell under VCS, encrypted-IP flows,
-    VCS-as-oracle CI seats) deserve.
+    VCS-as-oracle CI seats) deserve. Includes confirming the
+    transport reading of 02 §5: trs-shell exports are monomorphic at
+    generation time, so mangled DPI should serve VCS — if a
+    width-polymorphic shell boundary ever exists, VCS forces a VPI
+    realization there.
 23. **Issue-inventory identity questions** (sec E): BracketMaster
     mapping; mieszko's affiliation dates; pre-2023 scope — plus
     adopting the issue→design ownership map as a maintained artifact.

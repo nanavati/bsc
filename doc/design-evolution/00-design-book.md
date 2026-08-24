@@ -161,6 +161,17 @@ side-trees, and manifest-keyed caches. The same identity discipline
 serves both: a fork, a pin, or a mode is a *binding choice recorded in
 a manifest*, never an unrecorded divergence.
 
+Two corollaries the cross-cut theme analysis states crisply enough to
+adopt as named principles (they refine T3/T5/T7 rather than adding
+theses): **single source of truth** — any fact with two consumers is
+computed once in one owned place, and every other copy is a generated,
+checkable projection, because independent re-derivation is where silent
+divergence is born; and **fail closed, name every residual** — when a
+property cannot be established the system stops with a named, ledgered
+reason, and the ledger of loud refusals *is* the roadmap. The
+cross-cut's fuller twelve-theme decomposition maps onto T1–T9 and is
+preserved in the review's working notes.
+
 ## 3. The vision, as a narrative
 
 Where this all converges if pushed to completion — distinguishing what

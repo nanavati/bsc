@@ -97,17 +97,55 @@ authority/freshness classes.
   scheduler patch folds into step 1 per 03 §R3.7).
 - **Per-rung trs PRs continue** during all of this (DECISION, Ravi):
   the DAG gates *productization claims and cross-lane composition*,
-  not the measured-campaign cadence.
+  not the measured-campaign cadence. The cross-cut analysis sharpens
+  this into a **two-tier landing rule** (PROPOSAL, NEEDS-RAVI):
+  upstream-facing semantics-preserving work (transposes, fixes,
+  analyses) lands on its own evidence; anything *serializing new schema
+  or claiming cross-engine identity* (dynsched .ba/BIR fields,
+  port-property metadata, BVI contracts, codebook witnesses, toplift
+  salts) waits for N1. This matches the audit's rationale without
+  freezing delivery.
 - **Testsuite migration** is a consumer of P1's rung 2 plus N1's
   verdict classes, on the upstream-landed premise only.
 
 ## 3. The critical path to a coherent product
 
-N1 → N2 → N4 → {N5, N6, N7} → N8 → N9, with N0/N3 as cross-cutting
-enablers and P1–P3 in parallel. The single highest-leverage unbuilt
-artifact is N1's manifest: it is named as the missing piece by nine
-independent reviews, it retroactively soundifies already-landed work
-(the recertification set), and every later node writes into it.
+GenSign-fix → N1 → {N2 ∥ N4} → N5 → N7 → N8 → N9, with N0/N3 as
+cross-cutting enablers and P1–P3 in parallel. The single
+highest-leverage unbuilt artifact is N1's manifest: it is named as the
+missing piece by nine independent reviews, it retroactively soundifies
+already-landed work (the recertification set), and every later node
+writes into it.
+
+Corrections adopted from the cross-cut DAG analysis (v1.1):
+
+- **N2 and N4 are parallel after N1, both mandatory before N5.** The
+  source chain exists in two versions with opposite N2/N4 orderings
+  (Codex's index-draft chain vs its composite-order proposal); the
+  corpus gives no hard edge between them — only a soft N2→N4
+  simplification (specialization keys hash dictionary trees *because*
+  bsc classes are not coherent; a landed coherence stack may simplify
+  N4's keys). Any citation of "the" chain must say which version.
+- **A layer 0 of dependency-free starts exists and should start now:**
+  the GenSign expanded-head fix (04 — Codex's own "independently and
+  first", omitted from its chain); the determinism substrate (01 §6);
+  the orchestrator-neutral testsuite items (01 §5); and the three
+  censuses (cacheability; urgency/execution divergence — runs on
+  today's scheduler; used-set/flavor-diff). The two cheapest
+  de-risking moves are N1's tag registry (no dependencies; converts
+  N6's retrofit debts into mechanical checks) and the censuses (each
+  turns a contested ordering claim into a number).
+- **N6 is retrospective**: the chain's function there is a
+  *recertification* order over already-landed work, not a landing
+  order.
+- **N7 splits by maturity**: the X-policy/ValidateBits piece is
+  design-complete and deliberately independent (05 §4 — do not force
+  it to co-land with soft-IP binding); the soft-IP piece is
+  design-plus-old-base-implementation; the BVI-via-Verilator piece is
+  implemented with its objection set as the acceptance bar.
+- **The binding constraint is review capacity, not design order**: the
+  freeze, the PR hold, and the idle upstream stack make early nodes
+  review-bound (07 §4.4, 09 A.3).
 
 ## 4. Lane → node map
 

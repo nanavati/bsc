@@ -166,7 +166,16 @@ transitive-manifest program.
   features stay available. Bluesim remains one of the few simulation
   paths that works on Mac — the reason the ramp menu keeps the
   Bluesim-C++-to-build-system handoff alive even though MatX uses
-  Bluesim less than typical Bluespec shops.
+  Bluesim less than typical Bluespec shops. Ground-truth check
+  (repo survey): **trs has zero references in the monorepo today** —
+  "MatX-internal" currently means the fork plus the trs PR stack, and
+  fleet adoption (replacing the BscBluesimLink/-O1 path with trs link
+  under the byte-stability release bar) is a separate, post-freeze,
+  currently *unowned* rollout design. A standing caution from the same
+  survey: the one fork scheduling-default flip that reached the fleet
+  (-no-aggressive-conditions) produced a quadratic interaction
+  (upstream #1056) the monorepo still works around on every build —
+  fork-default scheduling changes leak.
 - *Lint policy* (Jul 23): DECISION — implement compiler patches
   directly with no toggle flags (deadline pressure); two-tier strategy
   (reduce lint noise in generated Verilog; better warnings for real
@@ -182,7 +191,8 @@ transitive-manifest program.
   "Bluespec doesn't, in the pursuit of more efficient hardware") and
   against ValidateBits once landed. BVI pressure at MatX concentrates
   entirely in the -verilog flow (mkDwSimOrBs picks native models under
-  -sim).
+  -sim); the trs BVI census residue on the corpus is five permanent
+  Inout cases plus the one mesa leaf (02 §4, 05 §3).
 - *PD quality loop* (Chris's arc, Aug 10–17): Yosys-based rapid
   pre-synthesis floor-plan analysis (Manhattan-distance × flop-count
   tension metric; DEF/LEF parsing at scale; grid heat maps; a combined

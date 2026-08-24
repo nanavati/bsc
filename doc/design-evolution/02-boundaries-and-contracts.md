@@ -121,7 +121,11 @@ artifacts.
   Bits-only zero stubs are not safe contracts — the stub generator is
   stubOf(IfcContract) at the boundary or a sealed witness with
   roundtrip/definedness laws; VMIfDef integrates explicitly with
-  identifier legalization. Status correction (FACT): a two-commit
+  identifier legalization. KNOB COLLISION (cross-cut finding): the
+  initial-block warning is guarded by BSV_NO_INITIAL_BLOCKS, which the
+  ValidateBits blessed X-configuration *defines* — suppressing the stub
+  warning exactly in the checking configuration; emit the
+  stub-substitution warning harness-side, not behind that guard. Status correction (FACT): a two-commit
   old-base implementation exists on origin/verilog-import-fallback;
   the proposal doc is the design of record and the implementation
   rebases onto the schema foundation.
