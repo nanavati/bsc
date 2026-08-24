@@ -1,10 +1,10 @@
 
 # procedure to test Verilog simulation with different RTL gen flags
 # (assumes that the the only module is the top)
-proc test_veri { top } {
+proc test_veri { top {link_options ""} } {
     # test without inlining
     test_veri_only_bsv_modules_options \
-	"$top" {} {-no-inline-reg} "sys$top.v.out.expected"
+	"$top" {} {-no-inline-reg} "sys$top.v.out.expected" "" $link_options
     copy "$top.bi" "$top.bi.no-inline-reg"
     copy "$top.bo" "$top.bo.no-inline-reg"
     copy "$top.bsv.bsc-vcomp-out" "$top.bsv.bsc-vcomp-out.no-inline-reg"
@@ -18,7 +18,7 @@ proc test_veri { top } {
 
     # test with inlining
     test_veri_only_bsv_modules_options \
-	"$top" {} {-inline-reg} "sys$top.v.out.expected"
+	"$top" {} {-inline-reg} "sys$top.v.out.expected" "" $link_options
     copy "$top.bi" "$top.bi.inline-reg"
     copy "$top.bo" "$top.bo.inline-reg"
     copy "$top.bsv.bsc-vcomp-out" "$top.bsv.bsc-vcomp-out.inline-reg"
@@ -37,7 +37,22 @@ proc test_veri { top } {
 test_veri ClockDiv
 
 ## a test of a crossing register using optimized crossing flop
-test_veri ClockDiv2
+# The fast rule reads the slow-domain crossing register before the slow
+# clock's first edge.  Real (level-sensitive) async clear holds the
+# register at its reset value in that window, and four-state simulators
+# reproduce that through the X -> asserted edge firing the reset branch
+# at time 0.  Two-state Verilator has neither the level path nor the
+# edge, so THIS TEST passes Verilator's own four-state-initialization
+# emulation flag (--x-initial-edge) -- a per-test simulator knob, not a
+# hardware-model change.  The flag is not global because it
+# over-approximates elsewhere: a derived signal that initializes to 1
+# (an inverted clock, ~0) counts as an X->1 posedge and ticks consumers
+# that four-state's ~X = X keeps silent.
+if { $verilog_compiler eq "verilator" } {
+    test_veri ClockDiv2 {-Xv --x-initial-edge}
+} else {
+    test_veri ClockDiv2
+}
 
 ## a test for a crossing using fifos
 test_veri ClockDivFifo

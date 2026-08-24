@@ -184,29 +184,54 @@ triggered processes in, "asserted" wins.  Asynchronous assertion is
 also *required*, not just safe: clock-generating logic sits upstream of
 its own domain's clock and can only be reset without one.
 
-**Propagation through reset synchronizers.**  The manufactured pulse
-reaches only consumers wired to the harness reset itself; a reset
-synchronizer swallows it.  Its hold register initializes asserted
-(initial-state consistency, above), so the re-assert edge writes the
-value already held, and the deassert half can only move the hold
-register at a clock edge — and the pulse window is clock-free by
-construction.  The synchronizer's output therefore never edges, and
-async-assert consumers *downstream* of it wait for an asserting edge
-that never comes.  A four-state simulator delivers that edge at time 0
-anyway (the output leaves X when the hold register initializes); a
-two-state simulator delivers nothing — observably wrong in the window
-before the destination clock's first edge (`sysClockDiv2`'s crossing
-register, clocked by a divided clock whose first edge lands after the
-first read, kept its `mkRegU` fill).  Under `` `ifdef VERILATOR ``
-each synchronizer (`SyncResetA`, `SyncReset`, `SyncReset0`) therefore
-*regenerates* the pulse locally on its output — deassert at 2,
-re-assert at 3, the same reserved window — putting the emulated time-0
-edge exactly where four-state delivers it, stage by stage down the
-tree.  Regeneration rather than forwarding keeps synchronizers fed by
-generated resets (which never pulse, e.g. the `MakeReset` family's
-internal synchronizer) correct: when the hold register is genuinely
-deasserted by time 3 the output mux simply returns to it and no
-spurious assert edge is produced.
+**Propagation through reset synchronizers — and the hardware-model
+line.**  The manufactured pulse reaches only consumers wired to the
+harness reset itself; a reset synchronizer swallows it.  Its hold
+register initializes asserted (initial-state consistency, above), so
+the re-assert edge writes the value already held, and the deassert
+half can only move the hold register at a clock edge — and the pulse
+window is clock-free by construction.  The synchronizer's output
+therefore never edges.  This is mostly harmless: any register's reset
+clause also applies at its own clock edges by LEVEL, and synchronizers
+hold their output asserted for RSTDELAY destination edges past
+release, so every clocked consumer resets no later than its first
+edge.  The one residual gap is a *read before the destination clock's
+first edge*: a fast rule reading a slow-domain async-reset register in
+the startup window sees its uninitialized fill, where real
+(level-sensitive) async clear holds the reset value and four-state
+simulators reproduce that through the time-0 X -> asserted edge
+firing the reset branch (`sysClockDiv2`'s crossing register).
+
+Three mechanisms were built or considered for that gap and rejected,
+in order, by an explicit DECISION (Ravi, 2026-08-24): **the
+primitives model real hardware, and simulation-only behavior does not
+belong in their synthesizable semantics.**
+
+* *Pulse regeneration in the synchronizers* (each synchronizer
+  re-emitting the deassert/assert pulse on its own output under
+  `` `ifdef VERILATOR ``): implemented, validated, and REVERTED —
+  it makes harness choreography part of a hardware model.
+* *Global `--x-initial-edge`* (Verilator's own four-state
+  initialization-edge emulation): rejected on evidence — it
+  over-approximates.  A derived signal that initializes to 1 (an
+  inverted clock, `~0`) counts as an X -> 1 posedge and ticks
+  consumers that four-state's `~X = X` keeps silent (`sysResetInv`
+  gained a count; divided-clock streams shifted).
+* *Reset-value initialization* (sim-only initial blocks loading
+  async-reset registers with their reset values under
+  `` `ifdef VERILATOR ``): rejected as a slippery slope — extra
+  initialization semantics, however defensible individually,
+  accumulate into a parallel semantics.
+
+The accepted disposition: a test that legitimately reads in that
+window passes `--x-initial-edge` for itself (`-Xv --x-initial-edge`
+at link, verilator-only, documented at the test) — a per-test
+simulator knob, not a hardware-model change.  Tests that cannot or
+should not are expected-to-differ with the mechanism documented.  The
+harness pulse itself STAYS: it is testbench choreography (main.v /
+sim_main.cpp), it fires direct async-assert consumers, and
+`BSV_NO_INITIAL_BLOCKS` four-state builds rely on its edge alone to
+define the reset network.
 
 **Internal synchronized deassertion** changes at destination-clock
 edges by design — and is safe there because it is produced by a flop
@@ -315,9 +340,10 @@ mechanism documented at the test.
 * `SyncResetA.v`, `SyncReset.v`, `ClockSelect.v`,
   `UngatedClockSelect.v`, `MakeReset{,0,A}.v`: initial state agrees
   with the time-0 asserted level (initial-state consistency, above).
-* `SyncResetA.v`, `SyncReset.v`, `SyncReset0.v`: under `` `ifdef
-  VERILATOR ``, the output regenerates the startup pulse in the
-  reserved window (propagation through reset synchronizers, above).
+* Tests that read async-reset state before the destination clock's
+  first edge pass `--x-initial-edge` per-test under verilator
+  (propagation through reset synchronizers, above; the synchronizer
+  primitives themselves are unchanged by DECISION).
 * The compiler emits `#0` before `$finish` in the generated
   system-task blocks, and the verilator harness defers the `$finish`
   notice line to after the last eval (companion task rule, above).
