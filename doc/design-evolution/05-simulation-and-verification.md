@@ -201,7 +201,7 @@ src/trs docs; fork PRs #108–#158.
 - The compat commit ('0/'1 + deriving-via) landing route: stack rung
   vs upstream PRs.
 - X-payload doctrine question (does writing an X payload X the rule?
-  doctrine leans no); ValidateBits Q1/Q3/Q6 residuals.
+  doctrine leans no); ValidateBits Q1/Q3/Q4/Q6 residuals.
 - Sibling-branch landing; BENCH_ARCHIVE_TOKEN; the PR #108–#158 review
   program itself (open with zero review comments).
 - The **coverage story**: a Bluespec coverage-tracking infrastructure

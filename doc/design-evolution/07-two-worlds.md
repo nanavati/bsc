@@ -103,9 +103,10 @@ gets a census and a compatibility rung (03).
    VCS-specific paths get is a priority call.
 4. **Upstream review bandwidth.** The coherence stack has been idle
    since July awaiting review; PRs #108–#158 carry zero review
-   comments; the Bluespec, Inc. program (~$225K) exists to fix exactly
-   this. Funding and sequencing are Monday-meeting decisions, not
-   design.
+   comments; the Bluespec, Inc. upstream-review program (~$225K NTE)
+   exists to fix exactly this, with the Unison DevEx engagement
+   (~$300K NTE) as its delivery-side sibling. Both are pending
+   staffing-memo decisions (Monday meeting), not design.
 5. **The compat features' route** ('0/'1 classic literals,
    deriving-via): stack rung vs upstream PRs first.
 

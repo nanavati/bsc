@@ -184,8 +184,9 @@ Folded into the area documents with citations; consolidated here:
 - **Interning enables dictionary lifting** (Aug 13): strictness
   annotations plus ground-type interning are sequenced specifically to
   make dictionary lifting sound and fast; independently, the
-  dictionary-lifting fix is flagged as the release-blocking soundness
-  item (Aug 17) — matching the KB's lift-dictionaries hold (04 §2).
+  dictionary-lifting fix is flagged as the urgent, prioritized
+  soundness item for the recent release (Aug 17) — matching the KB's
+  lift-dictionaries hold (04 §2).
 - **Union-find typechecker architecture** proposed (Aug 6) with "purity
   essential for tooling compatibility" and a systematic invariant-
   checking policy to be agreed with upstream. SUPERSEDED (Ravi,
@@ -200,7 +201,15 @@ Folded into the area documents with citations; consolidated here:
 - **Scheduling quadratic + the resources/uses patch (tour)**: scheduling
   considers every rule pair; an experimental patch reworks it in terms
   of resources and uses — same schedules, often much faster, "doesn't do
-  some of the nastier things" (03 §3).
+  some of the nastier things" (03 §R3.7).
+- **Wave-generation restructuring** (Jul 7): a release candidate
+  restructured wave generation with compact file storage, and the
+  DECISION was taken to enable **three dump formats selected by user
+  configuration** (06 §3 consumes this as the format-agnostic-sink
+  posture arriving in bsc itself).
+- **X-semantics write-up committed** (Aug 10): a formal write-up of X
+  semantics in Bluespec with a soundness proof is a committed action —
+  the reference-semantics piece of 05 §4 written down.
 - **Numeric solving (tour)**: two-level today (handcrafted simplifying
   instances, then SMT thumbs-up/down); the stated wish is an engine
   that *learns* (knows a+a=2a; cannot conclude a+2a=3a) — motivating

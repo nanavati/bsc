@@ -215,8 +215,9 @@ document's §§2–4 programs; recorded here because it grounds them:
   build on.
 - **Sequencing confirmation**: strictness annotations plus ground-type
   interning are being sequenced specifically to enable dictionary
-  lifting, whose fix is flagged as the release-blocking soundness item
-  — independently matching §2's hard sequencing facts. A union-find
+  lifting, whose fix is flagged as the urgent, prioritized soundness
+  item for the recent release — independently matching §2's hard
+  sequencing facts. A union-find
   typechecker architecture was proposed in the same meeting arc (with
   "purity essential for tooling compatibility" and a systematic
   invariant-checking policy to be agreed upstream) but was subsequently

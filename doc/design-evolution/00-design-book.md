@@ -275,16 +275,18 @@ the stated destination beyond every current roadmap.
   named); ATF rules evaluator (fork PR 68/93 lineage); IType/IExpr
   substrates
   (measured, landing pending CI); semantic port properties (PRs
-  #1059/#1060); pattern-match checker stack; prim-fixes + codegen
-  stack-overflow fixes; wiretypemap/porttypes scaling; build
-  determinism (GHC findBest patch in validation; Warmup).
+  #1059/#1060, open upstream; default-flip gated per 02 §2);
+  prim-fixes + codegen stack-overflow fixes; wiretypemap/porttypes
+  scaling; build determinism (GHC findBest patch in validation;
+  Warmup).
 - **Designed, awaiting decisions or prerequisites:** VTA (blocked on
   CtxRed P1); CtxRed retirement plan; BVI fallback/soft-IP; SplitPorts
   restructure (never compiled — gate on compile + bytes + capability
-  matrix); ValidateBits (v3, mostly ratified); HuffmanBits generic
-  deriving (gate (a)/(b) NEEDS-RAVI); solver strategy (policy ceiling
-  NEEDS-RAVI); notes/phase-index refactor; bluehs sim scripting; LSP
-  architecture.
+  matrix); pattern-match checker stack (design settled; deployment
+  DEFERRED — 04 §5, 10 §5); ValidateBits (v3, mostly ratified);
+  HuffmanBits generic deriving (gate (a)/(b) NEEDS-RAVI); solver
+  strategy (policy ceiling NEEDS-RAVI); notes/phase-index refactor;
+  bluehs sim scripting; LSP architecture.
 - **The two RFCs** carry the structural program; their §12/§15 open
   questions plus Codex's unadopted objections are tracked in 08/09.
 - **Known process debt:** the toolchain continuation draft is to be

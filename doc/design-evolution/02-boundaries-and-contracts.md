@@ -88,12 +88,13 @@ simulator, trace decoder, or cache boundary; invalid/unknown decode
 semantics are specified (fail closed; unpack stays total but never
 implies validity — ValidateBits is the validity oracle). Adoption gate
 recommendation stands: **(a) port assign_tags exactly (S1–S7) with a
-differential fuzz gate against Rust VARIANT_TAGS** (the roundtrip
-attribute is insufficient); canonicalization (b) remains a later
-coordinated flag-day. Migration must be coherence-safe: compile the
-generic head on the pinned bsc across all 21 registrations plus one
-unregistered; atomic cutover; shuffled-import and old/new .bo mixture
-tests. NEEDS-RAVI: ratify gate (a); share the study's companion
+differential fuzz gate against the reference Rust implementation's tag
+tables (VARIANT_TAGS — 07 §2)** (the roundtrip attribute is
+insufficient); canonicalization (b) remains a later coordinated
+flag-day. Migration must be coherence-safe: compile the generic head
+on the pinned bsc across all 21 existing registrations (07 §2) plus
+one unregistered; atomic cutover; shuffled-import and old/new .bo
+mixture tests. NEEDS-RAVI: ratify gate (a); share the study's companion
 artifacts.
 
 ## 4. BVI: one construct, four programs (RESOLUTION of the family)
@@ -170,9 +171,11 @@ is the portable near-term path; open arrays remain the cleaner form
 where supported and an upstream candidate (issue 3198; maintainer has
 said "PR welcome" since 2021). NEEDS-RAVI: the upstream plan (R3) and
 the fork write grant (09.E). Note for trs shell: shell exports
-have concrete widths at generation time, so mangled DPI serves it on
-every tool — the open-packed capability matters for *polymorphic
-imports*, not the shell boundary.
+should have concrete widths at generation time, in which case mangled
+DPI serves it on every tool and the open-packed capability matters for
+*polymorphic imports*, not the shell boundary — a reading to be
+confirmed (09 item 22); if a width-polymorphic shell boundary ever
+exists, VCS forces a VPI realization there.
 
 ## 6. Instance-specific synthesis (issue 921)
 

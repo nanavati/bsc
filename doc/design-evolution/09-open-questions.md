@@ -44,9 +44,9 @@ documents/lanes; this is the decision queue.
 ## B. Design ratifications waiting (single-lane, ready)
 
 6. **HuffmanBits adoption gate:** (a) exact assign_tags port +
-   differential fuzz vs Rust VARIANT_TAGS (recommended; Codex ACK) vs
-   (b) canonicalize both sides (flag-day). Also: share the study's
-   companion artifacts.
+   differential fuzz vs the reference Rust tag tables (07 §2;
+   recommended; Codex ACK) vs (b) canonicalize both sides (flag-day).
+   Also: share the study's companion artifacts.
 7. **BVI fallback (02 §4):** ratify the structural binding design with
    the review conditions as v1 scope; decide the soft-IP
    implementation's rebase route.
@@ -118,8 +118,9 @@ documents/lanes; this is the decision queue.
     assumes trs is a first-class backend of the future bsc — decide
     whether BIR versioning is an internal or public contract; (b) the
     **monorepo insertion path is unowned** (07 §5): who designs the
-    post-freeze rollout (release channel, build-rule changes, PD-ABI
-    non-impact proof), and is the B0 window the target?
+    post-freeze rollout (release channel, build-rule changes, port-ABI
+    non-impact proof), and is the post-freeze window (07 §5) the
+    target?
 21a. **Testsuite premise ownership:** is upstream acceptance of the
     Shake engine (staircase S4) an actual goal with an owner and
     timeline, or should planning assume fork-only (which flips the
@@ -139,13 +140,16 @@ documents/lanes; this is the decision queue.
     generation time, so mangled DPI should serve VCS — if a
     width-polymorphic shell boundary ever exists, VCS forces a VPI
     realization there.
-23. **Issue-inventory identity questions** (sec E): BracketMaster
-    mapping; mieszko's affiliation dates; pre-2023 scope — plus
-    adopting the issue→design ownership map as a maintained artifact.
+23. **Issue-inventory identity questions** (the inventory's sec E —
+    an upstream GitHub-identity roster matter): the BracketMaster
+    account mapping; the mieszko account's affiliation dates; pre-2023
+    scope — plus adopting the issue→design ownership map as a
+    maintained artifact.
 24. **KB process:** freeze the toolchain continuation draft (Codex's
-    ratification-time ask); the monorepo Bazel-free generator harness
-    is used as a standing gate while Codex's fail-closed fingerprinting
-    conditions remain unadopted — accept the risk or fund the fix.
+    ratification-time ask); the internal Bazel-free generator harness
+    (07 §5's ground-truth survey; details in the trs lane) is used as a
+    standing gate while Codex's fail-closed fingerprinting conditions
+    remain unadopted — accept the risk or fund the fix.
 
 ## E. Standing custody/infrastructure items
 

@@ -3,9 +3,11 @@
 What must land before what, and why — the composite ordering that keeps
 individually-green lanes from composing into silent failures.
 
-**Status:** v1.0 — 2026-08-24 (Claude, holistic review). This adopts,
-corrects, and extends Codex's composite landing-order proposal
-(bootstrap index, 2026-08-23 22:27 UTC), whose rationale stands: the
+**Status:** v1.1 — 2026-08-24 (Claude, holistic review + cross-cut
+reconciliation). This adopts, corrects, and extends Codex's index-draft
+chain (bootstrap index, 2026-08-23 22:27 UTC), reconciled in §3 with
+its 22:17 composite-order proposal, which orders N2/N4 oppositely.
+The shared rationale stands: the
 combined Gmail + 113-PR audit found silent schema-compatibility,
 misbinding, cache-identity, X-policy, and oracle failures that
 disappear when branches are reviewed alone. Individual lanes do not
@@ -44,7 +46,9 @@ constructor-time ATF folding, and any persistent build worker; and the
 ATF ground-memo (PR 93) is unsound without a scoped lifetime.
 
 **N4. Canonical schedule artifact + BoundaryBinding/PortTree**
-(N1,N2→; D; 02 §2, 03) — one producer (bsc), consumers validate;
+(N1→, soft N2 edge — see §3; D; 02 §2, 03) — one producer (bsc),
+consumers validate; note 02 §2's "coherence-side enforcement first"
+precondition binds N5's *certification*, not this artifact itself;
 schedule digests; exported coordinates (auto-fire, alternatives);
 final-name map; the contract(ba) total projection (persist
 veriPortProps/true_ifc_ids). Carries the one-order compatibility rung.

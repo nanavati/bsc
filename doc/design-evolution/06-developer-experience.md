@@ -56,7 +56,7 @@ script code, differential-parse-tested against the identity-CI corpus,
 promoted to normative only on receipts) plus bsc-as-library semantics
 off last-good artifacts. Freeze rating B: tip-lane, freeze-indifferent.
 
-The August LSP meeting (10 §3) settled four working decisions that
+The August LSP meeting (10 §3) settled five working decisions that
 refine this architecture: **path-based range indexing** decoupled from
 the primary syntax tree (range data does not force syntax-type
 modifications); parser modernization on **Megaparsec with error
@@ -69,8 +69,8 @@ home for auxiliary metadata** (doc strings and kin) — which for this
 document means the last-good-artifact layer reads an *enriched* .bo
 lineage rather than a parallel store, consistent with the tour's
 finding that .bo already carries I-syntax with positions and per-package
-signatures but not source text. LSP position-encoding (byte-based
-offsets) is handled explicitly at the protocol boundary.
+signatures but not source text. The fifth: LSP position-encoding
+(byte-based offsets) is handled explicitly at the protocol boundary.
 Feature priorities (DECISION, from the Unison scoping): the baseline
 set (rename, references, hints); type-at-use-site (what compiler
 integration buys over PR 891); **Verilog→source touch-point tracing**
@@ -97,10 +97,11 @@ wave tooling alike; candidate-name heuristics are not the bridge.
 
 Engagement (FACT): PR 891 is in daily use and stops where the compiler
 starts; upstream wants an LSP and will review; the Unison DevEx program
-(~$300K NTE) is a severable staffing-memo decision, with the proposal
-mechanics (rates, scope, weekly status, shared channel) in motion per
-the August meeting; the Bluespec, Inc. upstream-review program
-(~$225K NTE) is the governance counterweight. The longer-horizon
+is a severable staffing decision with funding pending (figures and
+status in 07 §4.4, 09 A.3), with the proposal mechanics (rates, scope,
+weekly status, shared channel) in motion per the August meeting; the
+Bluespec, Inc. upstream-review program (same pending status) is the
+governance counterweight. The longer-horizon
 document independently rates the compiler-integrated LSP
 contractor-friendly — well-specified, self-contained, no internal
 context needed — which is the delivery-model argument for the
@@ -130,7 +131,7 @@ The trs BVI observability tiers (boundary dump riding trs's
 format-agnostic sink; link-time traced model variants as distinct cache
 classes with per-instance side files) remain OPEN pending Ravi.
 
-Meeting-record additions (10 §5): a July decision restructured wave
+Meeting-record additions (10 §§5–6): a July decision restructured wave
 generation to support **three dump formats selected by user
 configuration** — the format-agnostic-sink posture above, arriving in
 bsc itself; the waveform→source mapping ambition is stated on the tour
