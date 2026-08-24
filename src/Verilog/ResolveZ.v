@@ -15,14 +15,8 @@ module ResolveZ( IN_0, IN_1, OUT);
 
    tri [width - 1 : 0] 	BUS;
    
-`ifdef VERILATOR
-   // Two-state resolution: "undriven" arrives as all-zeros (see
-   // ConvertToZ), so OR is the resolution function.
-   assign BUS = IN_0 | IN_1 ;
-`else
    assign BUS = IN_0 ;
    assign BUS = IN_1 ;
-`endif
    assign OUT = BUS  ;   
    
 endmodule
