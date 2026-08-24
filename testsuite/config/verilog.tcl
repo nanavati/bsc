@@ -71,8 +71,8 @@ proc bsc_link_verilog { objects toplevel { options "" } } {
     set ::vlt_link_lock_reason ""
     if { $status != 0 && [verilator_no_timing] \
          && [file_contains $output "needs Verilator --timing"] } {
-        # the design needs a delay-based (--timing) harness, refused unless
-        # the BSC_VERILATOR_ENABLE_TIMING back door is set
+        # the design needs a delay-based (--timing) harness, refused
+        # because timing was explicitly disabled (BSC_VERILATOR_TIMING=0)
         set ::vlt_link_lock_reason "verilator-needs-timing"
     }
     if { $status != 0 && $verilog_compiler eq "verilator" \
@@ -113,10 +113,10 @@ proc link_verilog_no_main_pass { objects toplevel { options "" } } {
     if {$vtest == 1} {
       incr_stat "link_verilog_no_main_pass"
 
-      # Linking without BSC's main.v means the top module drives its own clock
-      # internally, which requires Verilator --timing (locked by default; see
-      # bsc_build_vsim_verilator).  So under Verilator this link is expected to
-      # fail unless the BSC_VERILATOR_ENABLE_TIMING back door is set.
+      # Linking without BSC's main.v means the top module drives its own
+      # clock internally, which requires Verilator --timing.  The build
+      # script selects --timing automatically for such designs, so this
+      # link only fails when timing is explicitly disabled.
       if { [verilator_no_timing] } {
           setup_xfail $target_triplet "verilator-no-main"
       }
@@ -129,13 +129,23 @@ proc link_verilog_no_main_pass { objects toplevel { options "" } } {
     }
 }
 
-# True when the Verilog simulator is Verilator and the --timing back door is
-# NOT enabled -- i.e. designs that require --timing (clock/reset generators,
-# or no-main self-driving tops) are expected to fail.
+# True when the Verilog simulator is Verilator and timing is explicitly
+# DISABLED (BSC_VERILATOR_TIMING=0) -- i.e. designs that require --timing
+# (clock/reset generators, or no-main self-driving tops) are expected to
+# fail.  The build script now selects --timing automatically for such
+# designs (BSC_VSIM_NEEDS_TIMING analysis), so with no override they link
+# and run normally; only the explicit-disable escape still fails them.
+# (The old key, the BSC_VERILATOR_ENABLE_TIMING back door, predates the
+# auto default and left the expected-fail armed on links that now pass.)
 proc verilator_no_timing {} {
     global verilog_compiler
-    return [expr {$verilog_compiler eq "verilator" \
-                  && ![info exists ::env(BSC_VERILATOR_ENABLE_TIMING)]}]
+    if { $verilog_compiler ne "verilator" } { return 0 }
+    if { [info exists ::env(BSC_VERILATOR_TIMING)] } {
+        switch -- $::env(BSC_VERILATOR_TIMING) {
+            0 - n - no - off - no-timing { return 1 }
+        }
+    }
+    return 0
 }
 
 # XXX Replace with 'bsc_link_verilog' when BSC supports a flag like '-no-include-main'

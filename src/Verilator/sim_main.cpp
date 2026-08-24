@@ -22,6 +22,39 @@
 
 #include QUOTE(mkV(TOP).h)
 
+#include <type_traits>
+
+// Port-presence probes: a no-main top (linked without BSC's main.v) is
+// self-clocked and may expose no CLK or RST_N port at all.  The pokes
+// below are then compiled away and the schedule is left entirely to the
+// model's own timed events (such a design is always a --timing build:
+// the no-main link marks it needs-timing).
+template <typename T, typename = void>
+struct BscHasCLK : std::false_type {};
+template <typename T>
+struct BscHasCLK<T, std::void_t<decltype(std::declval<T&>().CLK)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct BscHasRSTN : std::false_type {};
+template <typename T>
+struct BscHasRSTN<T, std::void_t<decltype(std::declval<T&>().BSV_RESET_NAME)>>
+    : std::true_type {};
+
+// The pokes must go through a template so the absent-port branch is a
+// DEPENDENT discarded statement: a plain 'if constexpr' in main() would
+// still type-check (and reject) the member access it discards.
+template <typename T>
+static void bsc_set_clk (T* top, vluint8_t v) {
+    if constexpr (BscHasCLK<T>::value) top->CLK = v;
+    else (void)v;
+}
+template <typename T>
+static void bsc_set_rst (T* top, vluint8_t v) {
+    if constexpr (BscHasRSTN<T>::value) top->BSV_RESET_NAME = v;
+    else (void)v;
+}
+
 // Tracing: verilator compiles in exactly one format -- VCD (--trace) or FST
 // (--trace-fst), which are mutually exclusive and signalled by VM_TRACE_FST.
 // Select the matching writer class and the plusarg/filename for it.  With
@@ -199,25 +232,25 @@ int main (int argc, char **argv, char **env) {
 #ifndef BSC_VERILATOR_TIMING
 
     // t=0: CLK low, reset asserted (level)
-    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
-    TOP->CLK = 0;
+    bsc_set_rst (TOP, BSV_RESET_VALUE);
+    bsc_set_clk (TOP, 0);
     step(TOP, 1);
 
     // t=1: first CLK edge, under reset -- BEFORE the pulse, so
     // synchronously-reset state is defined before the reset is ever
     // seen deasserted (a two-state simulator has no X-guard to keep
     // level-sensitive reset-gated logic quiet during the pulse)
-    TOP->CLK = 1;
+    bsc_set_clk (TOP, 1);
     step(TOP, 1);
 
     // t=2..3: deassert, then assert -- the assertion edge
-    TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+    bsc_set_rst (TOP, 1 - BSV_RESET_VALUE);
     step(TOP, 1);
-    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
+    bsc_set_rst (TOP, BSV_RESET_VALUE);
     step(TOP, 1);
 
     // t=4: de-assert reset, between clock edges
-    TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+    bsc_set_rst (TOP, 1 - BSV_RESET_VALUE);
     step(TOP, 1);
 
     // now resume normal CLK cycle
@@ -225,19 +258,19 @@ int main (int argc, char **argv, char **env) {
     //
     while (! contextp->gotFinish ()) {
 
-	TOP->CLK = 0;
+	bsc_set_clk (TOP, 0);
 	step(TOP, 5);
 	if (contextp->gotFinish ()) break;
 
-	TOP->CLK = 1;
+	bsc_set_clk (TOP, 1);
 	step(TOP, 5);
     }
 
 #else // BSC_VERILATOR_TIMING
 
     // t=0: CLK low, reset asserted (level)
-    TOP->CLK = 0;
-    TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
+    bsc_set_clk (TOP, 0);
+    bsc_set_rst (TOP, BSV_RESET_VALUE);
     eval_now (TOP);
 
     // t=1: first CLK edge, under reset -- BEFORE the pulse, so
@@ -245,7 +278,7 @@ int main (int argc, char **argv, char **env) {
     // seen deasserted (no X-guard exists in two-state simulation)
     advance_to (TOP, 1);
     if (! contextp->gotFinish ()) {
-        TOP->CLK = 1;
+        bsc_set_clk (TOP, 1);
         eval_now (TOP);
     }
 
@@ -253,12 +286,12 @@ int main (int argc, char **argv, char **env) {
     // async-assert primitives' 'always @(RST edge)' blocks key on
     advance_to (TOP, 2);
     if (! contextp->gotFinish ()) {
-        TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+        bsc_set_rst (TOP, 1 - BSV_RESET_VALUE);
         eval_now (TOP);
     }
     advance_to (TOP, 3);
     if (! contextp->gotFinish ()) {
-        TOP->BSV_RESET_NAME = BSV_RESET_VALUE;
+        bsc_set_rst (TOP, BSV_RESET_VALUE);
         eval_now (TOP);
     }
 
@@ -266,7 +299,7 @@ int main (int argc, char **argv, char **env) {
     // synchronized per-domain by the reset primitives)
     advance_to (TOP, 4);
     if (! contextp->gotFinish ()) {
-        TOP->BSV_RESET_NAME = 1 - BSV_RESET_VALUE;
+        bsc_set_rst (TOP, 1 - BSV_RESET_VALUE);
         eval_now (TOP);
     }
 
@@ -278,13 +311,21 @@ int main (int argc, char **argv, char **env) {
 
 	advance_to (TOP, t);
 	if (contextp->gotFinish ()) break;
-	TOP->CLK = 0;
-	eval_now (TOP);
+	if (BscHasCLK<mkV(TOP)>::value) {
+	    bsc_set_clk (TOP, 0);
+	    eval_now (TOP);
+	} else if (! TOP->eventsPending ()) {
+	    // self-clocked top with no external clock to drive: once its
+	    // own event queue runs dry, nothing can ever happen again
+	    break;
+	}
 
 	advance_to (TOP, t + 5);
 	if (contextp->gotFinish ()) break;
-	TOP->CLK = 1;
-	eval_now (TOP);
+	if (BscHasCLK<mkV(TOP)>::value) {
+	    bsc_set_clk (TOP, 1);
+	    eval_now (TOP);
+	}
 
 	t += 10;
     }

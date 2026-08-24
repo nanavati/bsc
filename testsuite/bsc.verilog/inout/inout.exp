@@ -20,11 +20,12 @@ test_veri_only_bsv_modules_options SimpleConnect2 {Sender Receiver} "-D value=42
 
 # Two more sophisticated modules (one with a Register,
 # the other with an Enable port) connected by an inout.
-# verilator: the display coincident with $finish is dropped (deferred
-# $finish) -> the last output line is missing; legal, so XFAIL the compare.
-test_veri_only_bsv_modules RegEnConnect {RegisteredSender EnabledReceiver}  out0-9.expected verilator
+# (These once XFAILed under verilator -- the display coincident with $finish
+# was lost to Verilator continuing past $finish; the generated Verilog now
+# terminates the block at $finish, so the outputs compare normally.)
+test_veri_only_bsv_modules RegEnConnect {RegisteredSender EnabledReceiver}  out0-9.expected
 # Test both directions
-test_veri_only_bsv_modules RegEnConnect2 {RegisteredSender EnabledReceiver} out0-9.expected verilator
+test_veri_only_bsv_modules RegEnConnect2 {RegisteredSender EnabledReceiver} out0-9.expected
 
 # Thread an inout through many modules.  Test that this threading
 # itself is possible (and synthesizeable), and that the evaluator does
@@ -41,11 +42,10 @@ test_veri_only_bsv_modules_options Connect_wrapped {Sender Receiver} "-D value=3
 test_veri_only_bsv_modules_options Connect_wrapped2 {Sender Receiver} "-D value=3737" out3737.expected
 
 # Inouts may be passed around a higher-order function with a closure
-# verilator drops the display coincident with $finish here too (see above)
-test_veri_only_bsv_modules HigherFunction {RegisteredSender EnabledReceiver} "" verilator
+test_veri_only_bsv_modules HigherFunction {RegisteredSender EnabledReceiver}
 
 # Inouts may be arguments and return values to functions
-test_veri_only_bsv_modules FunctionInout {RegisteredSender EnabledReceiver} "" verilator
+test_veri_only_bsv_modules FunctionInout {RegisteredSender EnabledReceiver}
 
 # ========
 # Inouts and Conditionals
@@ -53,19 +53,17 @@ test_veri_only_bsv_modules FunctionInout {RegisteredSender EnabledReceiver} "" v
 # Evaluate a conditional EXPRESSION to decide whether to connect
 # the "center" inout to "left" or "right"
 # Also tests that inouts may be used as module arguments.
-# verilator drops the display coincident with $finish here too (see above)
-test_veri_only_bsv Cond_expr sysCond.out.expected verilator
+test_veri_only_bsv Cond_expr sysCond.out.expected
 
 # conditional STATEMENT
-test_veri_only_bsv_modules Cond {RegisteredSender EnabledReceiver} sysCond.out.expected verilator
+test_veri_only_bsv_modules Cond {RegisteredSender EnabledReceiver} sysCond.out.expected
 
 # A big, important testcase testing many things:
 #   * That a module may both read and write to the same inout.
 #   * That more than two modules (namely, three) may be connected on an inout "bus"
 #     and (so long as the bus arbitration is OK).
 #   * That wrapping a BVI module does not break things.
-# verilator drops the display coincident with $finish here too (see above)
-test_veri_only_bsv TbBoth "" verilator
+test_veri_only_bsv TbBoth
 
 test_veri_only_bsv_modules InoutUsed {InoutToVal}
 }

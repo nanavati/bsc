@@ -1314,7 +1314,7 @@ module sysListNReg3D(CLK,
 
   // synopsys translate_off
   always@(negedge CLK)
-  begin
+  begin : BSC_TASKS_CLK
     #0;
     if (RST_N != `BSV_RESET_VALUE)
       if (k == 8'd4)
@@ -1892,7 +1892,13 @@ module sysListNReg3D(CLK,
 		 $unsigned(lns_3_3_3));
     if (RST_N != `BSV_RESET_VALUE)
       if (k == 8'd4) $display("i + (j * k) = %0d", $signed(32'd12));
-    if (RST_N != `BSV_RESET_VALUE) if (k == 8'd4) $finish(32'd0);
+    if (RST_N != `BSV_RESET_VALUE)
+      if (k == 8'd4)
+	begin
+	  #0;
+	  $finish(32'd0);
+	  disable BSC_TASKS_CLK;
+	end
     if (RST_N != `BSV_RESET_VALUE)
       $display("Current field",
 	       $unsigned(IF_k_EQ_0_44_THEN_IF_j_45_EQ_0_46_THEN_IF_i_47_ETC___d241));

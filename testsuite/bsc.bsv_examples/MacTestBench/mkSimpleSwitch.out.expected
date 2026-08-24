@@ -628,3 +628,11 @@ Notice: CRC value is correct!!!
 (instance main.top.slice0_dut_wrapped):   Attempt #0: 
 (184410) Finished, no collision
 (184725) Frame received in MAC.
+[FRAME opcode: IGNORE
+           id:    0
+          src: 0076d7aaaadf
+          dst: 0076d7aaaadf
+       format: CONTROL
+         size:     0
+         data: 0000000000000000 ....
+]

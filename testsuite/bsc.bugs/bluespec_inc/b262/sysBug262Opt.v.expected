@@ -85,9 +85,15 @@ module sysBug262Opt(CLK,
 
   // synopsys translate_off
   always@(negedge CLK)
-  begin
+  begin : BSC_TASKS_CLK
     #0;
-    if (RST_N != `BSV_RESET_VALUE) if (done) $finish(32'd0);
+    if (RST_N != `BSV_RESET_VALUE)
+      if (done)
+	begin
+	  #0;
+	  $finish(32'd0);
+	  disable BSC_TASKS_CLK;
+	end
   end
   // synopsys translate_on
 endmodule  // sysBug262Opt

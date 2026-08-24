@@ -6,6 +6,7 @@
 // scheduling behavior and should be visible.
 lint_off -rule WIDTH
 lint_off -rule CASEINCOMPLETE
+lint_off -rule CASEOVERLAP
 lint_off -rule UNSIGNED
 lint_off -rule CMPCONST
 lint_off -rule MULTIDRIVEN

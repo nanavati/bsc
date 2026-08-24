@@ -5,7 +5,7 @@
 // Ports:
 // Name                         I/O  size props
 // CLK                            I     1 clock
-// RST_N                            I     1 reset
+// RST_N                          I     1 reset
 //
 // No combinational paths from inputs to outputs
 //
@@ -93,11 +93,17 @@ module mkWhenCurry(CLK,
 
   // synopsys translate_off
   always@(negedge CLK)
-  begin
+  begin : BSC_TASKS_CLK
     #0;
     if (RST_N != `BSV_RESET_VALUE)
       if (WILL_FIRE_RL_go) $display($signed(switch ? 32'd6 : 32'd7));
-    if (RST_N != `BSV_RESET_VALUE) if (WILL_FIRE_RL_go) $finish(32'd0);
+    if (RST_N != `BSV_RESET_VALUE)
+      if (WILL_FIRE_RL_go)
+	begin
+	  #0;
+	  $finish(32'd0);
+	  disable BSC_TASKS_CLK;
+	end
   end
   // synopsys translate_on
 endmodule  // mkWhenCurry
