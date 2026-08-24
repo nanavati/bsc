@@ -3,17 +3,27 @@ compile_verilog_pass  DMAC.bsv
 compile_verilog_pass  Slave.bsv
 
 if { $vtest == 1 } {
+    # The design's top module is 'amba_tb' (the historical 'sysAmbaDmac'
+    # name matched no module; iverilog links by file list and never
+    # checked, Verilator's --top-module does).
+    # Vendored amba_tb.v relies on implicit net declarations, and
+    # Verilator makes IMPLICIT warnings fatal by default.  Where the
+    # vendored-code lint waiver should live (flow config vs per-file
+    # lint_off vs per-test flag) is an open decision -- the same one
+    # MacTestBench's IMPLICIT/CASEX set waits on -- so the link is
+    # XFAILed under verilator until it is made.
+    if { $verilog_compiler eq "verilator" } {
+        setup_xfail $target_triplet "verilator-vendored-lint"
+    }
     link_verilog_no_main_pass \
 	{ mkDMAC.v mkSlave.v ahb_bus.v ahb_default.v ahb_ram.v ram_1024x32.v amba_tb.v} \
-	sysAmbaDmac
+	amba_tb
 
-    # No-main design: its top drives its own clock, so it needs Verilator
-    # --timing and is expected to fail there (the link above XFAILs, leaving no
-    # executable to run).
-    if { [verilator_no_timing] } {
-	setup_xfail $target_triplet "verilator-no-main"
+    # No executable to run under verilator while the link above XFAILs.
+    if { $verilog_compiler eq "verilator" } {
+	setup_xfail $target_triplet "verilator-vendored-lint"
     }
-    sim_verilog sysAmbaDmac
+    sim_verilog amba_tb
 
-    compare_file_bug sysAmbaDmac.out "" "Rob_Brown"
+    compare_file_bug amba_tb.out "" "Rob_Brown"
 }
