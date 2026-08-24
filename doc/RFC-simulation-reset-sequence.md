@@ -233,6 +233,34 @@ sim_main.cpp), it fires direct async-assert consumers, and
 `BSV_NO_INITIAL_BLOCKS` four-state builds rely on its edge alone to
 define the reset network.
 
+**Unreset clock dividers** are the same principle applied to *phase*
+instead of value.  A `mkClockDivider` with `reset_by noReset` is
+self-correcting hardware — from any power-up value the counter
+converges to the right period within one period — but its *phase*
+rests on the power-up value, and each simulator class picks a
+different one (four-state: X-relational folding loads `lower` at the
+first edge; two-state: counts up from zero; silicon: random).  A
+test whose observable depends on that phase depends on unreset state,
+and the fix is the design's, not the primitive's: give the divider a
+reset (the phase is then defined by the release edge, identical
+everywhere).  An `` `ifdef VERILATOR `` emulation of the four-state
+fold was built and REVERTED under the same DECISION.  One consequence
+to know about: a reset that *asserts inside the time-0 init soup*
+(an `InitialReset`-derived chain) fires the divider's reset load at
+time 0, and the loaded counter's top bit can make CLK_OUT's one
+legitimate assertion-time edge (X -> 1) at time 0 itself — clocking
+whatever the divided clock drives in the same instant as the other
+initial blocks, in LRM-open order.  A downstream *synchronous-only*
+reset synchronizer (`mkSyncResetFromCR`, X-pessimistic sample) can be
+poisoned to X by that race and then never assert at all — exactly the
+hazard its own library warning names.  The async-assert form
+(`mkAsyncResetFromCR`) is immune: whenever the input's assertion edge
+fires, it reloads the hold register, repairing any earlier same-instant
+sample.  Tests deriving a divided-domain reset from a divided clock
+should use the async form (`SpecialSyncReg`'s `SyncRegToSlow` is the
+shipped example: divider reset added, synchronizer switched, all three
+simulators byte-identical).
+
 **Internal synchronized deassertion** changes at destination-clock
 edges by design — and is safe there because it is produced by a flop
 clocked by that same edge: the new value arrives through a nonblocking

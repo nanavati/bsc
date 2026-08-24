@@ -19,11 +19,21 @@ module mkSyncRegSlow (Clock clk_fast, SyncRegSlow_IFC ifc);
  Clock currClk <- exposeCurrentClock;
  Reset currRst <- exposeCurrentReset;
 
- ClockDividerIfc    div();
- mkClockDivider#(4) t_div(div, clocked_by clk_fast, reset_by noReset);
+ // The divider needs a reset in the clk_fast domain to give the divided
+ // clock a defined phase; the module's own reset is synchronized over.
+ // (An unreset divider self-corrects to the right period in hardware,
+ // but its phase would rest on the counter's power-up value.)
+ Reset                  rst_fast();
+ mkAsyncResetFromCR#(2) t_rst_fast(clk_fast, rst_fast);
 
- Reset                 rst_n();
- mkSyncResetFromCR#(3) t_rst_n(div.slowClock, rst_n);
+ ClockDividerIfc    div();
+ mkClockDivider#(4) t_div(div, clocked_by clk_fast, reset_by rst_fast);
+
+ // Async-assert form, per the library's own recommendation: the plain
+ // synchronous form samples its input only at (divided-)clock edges,
+ // and a time-0 edge race can leave it never asserting at all.
+ Reset                  rst_n();
+ mkAsyncResetFromCR#(3) t_rst_n(div.slowClock, rst_n);
 
  Reg#(Bit#(7))         out_data_reg() ;
  mkSyncRegToSlow#(0)   i_out_data_reg(div, rst_n, out_data_reg);
