@@ -103,6 +103,7 @@ VERI_FILES = \
 	TriState.v \
 	UngatedClockMux.v \
 	UngatedClockSelect.v \
+	ZResolveNode.v \
 	main.v \
 	Empty.v \
 

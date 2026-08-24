@@ -83,6 +83,7 @@ endfunction
 
 interface ZBusInternalIFC #(type t);
    method ZBit#(t) zout();
+   method Bool zctl();
 endinterface: ZBusInternalIFC
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -92,32 +93,49 @@ endinterface: ZBusInternalIFC
 module mkZBusInternal#(List#(ZBusBusIFC#(t)) ifc_list)(ZBusInternalIFC#(t))
    provisos (Eq#(t), Bits#(t, st));
 
+   // The tree passes (value, driven) PAIRS between nodes on ordinary
+   // ports; each ZResolve node re-creates the tri-state drive on a net
+   // local to its primitive, so no Z value ever crosses a module
+   // boundary (see ZResolveNode.v for why that is load-bearing).
    ZBit#(t) zout_final;
+   Bool zctl_final;
    if (length(ifc_list) == 2)
       begin
-  	 ResolveZ#(t) i1();
-  	 mkResolveZ the_i1(i1);
+  	 ZResolve#(t) i1();
+  	 mkZResolve the_i1(i1);
 
-  	 zout_final =
+  	 let r =
   	 i1.resolve(zBusIFCGetToBusValue(head(ifc_list)),
-  		    zBusIFCGetToBusValue(head(tail(ifc_list))));
+  		    zBusIFCGetToBusCtl(head(ifc_list)),
+  		    zBusIFCGetToBusValue(head(tail(ifc_list))),
+  		    zBusIFCGetToBusCtl(head(tail(ifc_list))));
+  	 zout_final = r.value;
+  	 zctl_final = r.ctl;
       end
    else
       begin
 
-  	 ResolveZ#(t) i1();
-  	 mkResolveZ the_i1(i1);
+  	 ZResolve#(t) i1();
+  	 mkZResolve the_i1(i1);
 
  	 ZBusInternalIFC#(t) i2();
   	 mkZBusInternal#(tail(ifc_list)) the_i2(i2);
 
-	 zout_final =
+	 let r =
 	 i1.resolve(zBusIFCGetToBusValue(head(ifc_list)),
-		    i2.zout);
+		    zBusIFCGetToBusCtl(head(ifc_list)),
+		    i2.zout,
+		    i2.zctl);
+  	 zout_final = r.value;
+  	 zctl_final = r.ctl;
       end
 
    method zout() ;
       return zout_final;
+   endmethod
+
+   method zctl() ;
+      return zctl_final;
    endmethod
 
 endmodule
@@ -128,6 +146,10 @@ endmodule
 
 function ZBit#(t) zBusIFCGetToBusValue(ZBusBusIFC#(t) ifc);
    return ifc.toBusValue();
+endfunction
+
+function Bool zBusIFCGetToBusCtl(ZBusBusIFC#(t) ifc);
+   return ifc.toBusCtl();
 endfunction
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -345,9 +367,6 @@ module mkZBusBuffer (ZBusDualIFC #(t))
 
    PulseWire driven <- mkPulseWire;
 
-   ConvertToZ#(t)   to_z   <- mkConvertToZ;
-   ConvertFromZ#(t) from_z <- mkConvertFromZ;
-
    rule every (True);
       bus_value_reg_out.wset(unJust(bus_value_reg.wget()));
       bus_valid_reg_out.wset(unJust(bus_valid_reg.wget()));
@@ -358,7 +377,7 @@ module mkZBusBuffer (ZBusDualIFC #(t))
       method Action fromBusSample(ZBit#(t) value, Bool isJust);
 	 action
 	    if (isJust)
-	       bus_value_reg.wset(from_z.convert(value));
+	       bus_value_reg.wset(zBitToBit(value));
 	    else
 	       bus_value_reg.wset(unpack(0));
 	    bus_valid_reg.wset(isJust);
@@ -366,8 +385,8 @@ module mkZBusBuffer (ZBusDualIFC #(t))
       endmethod
 
       method ZBit#(t) toBusValue();
-	 let value = (driven ? unJust(value_reg.wget()) : ?);
-	 return to_z.convert(value, driven);
+	 let value = (driven ? unJust(value_reg.wget()) : unpack(0));
+	 return mkZBit(value);
       endmethod
 
       method Bool toBusCtl();
