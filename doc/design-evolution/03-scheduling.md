@@ -28,8 +28,8 @@ ambient (T3).
 
 DECISION (Ravi): **one order** — the urgency/execution distinction is
 dropped; arbitration is positional; fancier arbitration is written
-down explicitly. *Why:* two orders made schedules unnameable and
-migration untypeable; the expressiveness loss is real but small, and
+down explicitly. *Why:* two orders resisted naming and
+contract-typing; the expressiveness loss is real but small, and
 anything lost is recoverable by stating it. The loss is *measured, not
 asserted* — a divergence census names every affected design before the
 break ships, and the break itself is a named, versioned event with a
@@ -62,9 +62,10 @@ delta), coincident multi-clock guard-snapshot semantics, and the
 guard-evaluation-vs-execution split where dynamic alternatives exist.
 *Why:* independent per-engine patches can each match one oracle while
 disagreeing with each other — three separately-derived finish
-alignments proved it. One clause is already stated and emitted:
+alignments proved it. One clause is defined:
 displays of a timestep flush before $finish commits, and post-finish
-statements never execute — realized by emitting finish-carrying task
+statements never execute — realized structurally by emitting
+finish-carrying task
 blocks as named blocks with a `disable` after each $finish, dead code
 for simulators that stop at $finish and mandated silence for those
 that keep going. The rest of the contract is OPEN (08).
@@ -143,9 +144,10 @@ meeting-notes digest.
 - RESOLUTION: the resources/uses scheduler and the footprint artifact
   are one change.
 - OPEN: the remainder of the finish-instant/observable-event contract
-  (08 — goldens re-record only after it).
-- OPEN: the one-order break's venue and census scope (fork-first vs
-  upstream; 08).
+  (08 — stored oracles cannot be re-pinned until it is defined).
+- OPEN: the one-order break's ecosystem posture — what the design owes
+  the installed base, and whether the model is ever part of the shared
+  language (08).
 - OPEN: the model's stated research risks (coordinate assignment IS
   the scheduling problem; the antichain bet) — if they fail, the arc
   stops at footprints + schedule values + verify mode, which is

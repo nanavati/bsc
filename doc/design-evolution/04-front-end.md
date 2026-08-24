@@ -5,9 +5,8 @@ orphan enforcement, ATF evaluation, identity-not-cache for solved
 facts, visible type application, deriving, the numeric engine, the
 metadata substrates, and pattern checking.
 
-**Status:** v2.0 — 2026-08-24 (Claude). Design only; sequencing and
-status, sequencing, and provenance live in the KB lanes, outside
-this set.
+**Status:** v2.0 — 2026-08-24 (Claude). Design only; sequencing,
+status, and provenance live in the KB lanes, outside this set.
 
 ## 1. The closure doctrine
 
@@ -104,9 +103,10 @@ A known dictionary-economy defect with three candidate designs: a
 wrapper class carries a field-name type argument so context-reduction
 failures can name the failing field, and that argument defeats
 context joining — identical dictionaries are constructed once per
-blasted vector element. The alternatives on record: normalize the
-field name out of the instance head; join after reduction to the
-name-free class; or CSE generated dictionary code (careful never to
+blasted vector element. The alternatives on record: drop the
+per-element index from the field-name argument so contexts join; join
+after reduction to the name-free class; or CSE generated dictionary
+code (careful never to
 CSE non-dictionary code, whose names feed errors and readable
 Verilog). OPEN which lands (08); the evidence-digest design must
 compose with whichever does.
@@ -133,7 +133,10 @@ Solver ownership is split by consumer shape: batch-verdict consumers
 engines behind text seams; the typechecker's conversational algebra —
 where answers feed back into question generation — stays native, with
 at most a pinned external worker on the residual entailment seam
-(classify interactions, not components). Any scheduler-solver change
+(classify interactions, not components). The packaging corollary:
+heavy proof stacks ship with the simulation platform that consumes
+them, never with core bsc — deferring any core-bundling question
+until a core consumer exists. Any scheduler-solver change
 is a flag-day under byte-exactness; the two consumers get separate
 configuration, cache identity, and typed failure taxonomies even
 while sharing engines. A rejected mechanism, kept as rationale: a
@@ -205,5 +208,8 @@ orphan-mislink study. Indexed in the KB; open design decisions in 08.
   born-reduced deriving ride it.
 - OPEN: the solver policy ceiling's ratification (as amended); the
   ownership split's flag-day rule.
-- OPEN: the wrapper-class dictionary-economy fix (three candidates).
-- OPEN: the compat features' upstream route.
+- OPEN: the wrapper-class dictionary-economy fix (three candidates;
+  08).
+- OPEN: the orphan-enforcement residuals — the final no-orphans
+  property shape; audit-mode vs warn-at-use for declared orphans;
+  under what conditions signature omission is an error (08).

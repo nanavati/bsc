@@ -245,8 +245,8 @@ tool can matter more than human viewers.
 **The ecosystem grows without capture.** Compatibility breaks are
 measured, named, and versioned; upstream-facing changes ship with
 their censuses; fork-only capabilities stay fork-scoped with explicit
-upstreaming decisions; external engagements are structured so
-investment does not become de facto takeover. The design is
+upstreaming decisions; stewardship is designed so no
+single contributor becomes a de facto owner. The design is
 upstream-shaped by default; the use-model requirements of 07 are
 declared inputs, not forks of the truth.
 

@@ -47,7 +47,8 @@ meeting-notes digest — all outside this set.
    shell speaks the long-established generated-Verilog port protocol
    with the executor swapped; the boundary is DPI (4-state from birth:
    the value channel carries the planned X-taint mask), VPI reserved
-   for introspection.
+   for introspection (the monomorphic-shell reading behind this is
+   held open in 02 §5 / 08).
 8. **Engine-agnostic module boundary + fusion regions**: compiled,
    interpreted, and verilated-leaf implementations interchange per
    instance behind one slot ABI; the proportionality rule —
@@ -125,9 +126,10 @@ One doctrine, five pieces:
 The **reset-sequence contract**: the observable window starts at each
 domain's first post-deassert edge; the sequence exercises the real
 reset tree with no reliance on initial blocks or X-edges; the
-assert/deassert choreography is architectural, documented, and shared
-verbatim by harness and primitives; determinism is argued per
-transition class. The **hardware-model line** (DECISION, Ravi, 00 §2)
+assert/deassert choreography is architectural, documented, and owned
+by the harness as testbench choreography — primitives stay plain
+hardware models (the hardware-model line, below); determinism is
+argued per transition class. The **hardware-model line** (DECISION, Ravi, 00 §2)
 bounds all of it: reset synchronizers and their kin are real hardware
 — simulator-emulation gaps (a two-state engine cannot see a
 four-state X→asserted edge) are closed by per-test simulator
@@ -138,8 +140,8 @@ emulation over-approximates by construction (a derived signal
 initializing high registers a spurious edge) — which is *why* the
 per-test knob is the design, not a concession.
 
-The **finish clause** of the observable-event contract is stated and
-emitted (03 §2): displays of a timestep flush before $finish commits;
+The **finish clause** of the observable-event contract is defined
+(03 §2): displays of a timestep flush before $finish commits;
 post-finish statements never execute — realized structurally in the
 generated Verilog rather than accommodated per simulator. $random
 unification rides the same contract family: one LRM-specified
@@ -170,15 +172,15 @@ Bluesim remains: the byte-parity reference and designated-world
 evaluator; the Monte-Carlo initialization sampler after the reset
 bootstrap; the semantics oracle the dual-flavor seal chains onto the
 other flavor. Bluesim gains: the reset bootstrap (pattern knob), port
-properties in its interface artifacts, per-module staged codegen (as
-graph nodes), FST dump support, and — candidate, not committed — a
-synchronous kernel stepping API (inline single-stepping without the
+properties in its interface artifacts, and per-module staged codegen
+(as graph nodes); it already carries FST dump support. Candidate, not
+committed: a synchronous kernel stepping API (inline single-stepping without the
 helper thread; motivated by model fuzzing, which is also a consumer
 voice for future hook design). Bluesim does not gain: Kleene X, new
 kernel surface beyond the deliberately-weighed poke extension (06),
-or schedule-model changes ahead of the one-order migration. Kernel
-ABI evolution is coordinated with all stakeholders before any freeze
-(08).
+or schedule-model changes (the one-order model is language-level
+design, never an engine retrofit). Kernel ABI evolution is one
+coordinated decision across all its consumers (08).
 
 ## 6. The coverage program
 

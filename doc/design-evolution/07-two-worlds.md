@@ -43,8 +43,8 @@ use model, stated as requirements on the design:
   declared inputs, tree artifacts, persistent workers, a
   remote-execution-backed cache, frozen specialization manifests
   (01 §1). Compile cost is first-order economics — Bluespec
-  compilation alone has measured at half the critical path of an
-  integration pipeline — so caching correctness and compile-time
+  compilation alone has been measured at ~half the critical path of
+  an integration pipeline — so caching correctness and compile-time
   scaling are requirements, not conveniences.
 - **Byte-stable artifacts as release currency.** Generated Verilog is
   diffed byte-for-byte to detect codegen change; determinism by
@@ -120,8 +120,8 @@ use model, stated as requirements on the design:
 - **Style divergence vs one language.** Implicit-conditions-off and
   constructed rules are configuration and library surface, not
   dialect: the same semantics, different defaults — and the one-order
-  model prices exactly the divergence census that protects users of
-  the other defaults (03 §1).
+  model is priced by exactly the divergence census that protects
+  users of the other defaults (03 §1).
 
 ## 5. Requirement conflicts NOT resolved by design (strategy — 08 §C)
 
@@ -129,17 +129,15 @@ use model, stated as requirements on the design:
    eventual upstream offering (tool suite vs backend). This decides
    whether BIR versioning is an internal or public contract, and
    whether "Bluesim remains" has an expiry for external users.
-2. **The one-order break's ecosystem cost**: the census will price
-   it; accepting the break upstream (vs fork-first) is a judgment
-   call after the numbers.
+2. **The one-order break's ecosystem posture**: the census will
+   price it; whether the model is ever part of the shared language is
+   a judgment call after the numbers.
 3. **Commercial-simulator engineering depth**: encrypted IP is the
    one hard VCS requirement; how much design investment the
    VCS-specific paths deserve is a priority call, not a design fact.
-4. **Upstream review bandwidth**: the design assumes evidence-carrying
-   changes can land upstream; making that true is funding and
-   process, not architecture.
-5. **The compat features' route** and each ecosystem-facing proposal's
-   venue and timing.
+4. The design assumes an upstream that reviews — evidence-carrying
+   changes that can land; sustaining that is process, not
+   architecture, and lives outside this set.
 
 ## 6. Pointers
 

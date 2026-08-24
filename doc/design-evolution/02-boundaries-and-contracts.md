@@ -5,9 +5,9 @@ contracts as values, the port ABI and its witnesses, encodings as ABI,
 import "BVI" unified, foreign functions, instance-specific synthesis,
 the dissolution of genC/genVerilog, and the SystemVerilog interop ABI.
 
-**Status:** v2.0 — 2026-08-24 (Claude). Design only; sequencing and
-status, sequencing, and provenance live in the KB lanes and the
-meeting-notes digest, outside this set. Mechanism homes:
+**Status:** v2.0 — 2026-08-24 (Claude). Design only; sequencing,
+status, and provenance live in the KB lanes and the meeting-notes
+digest, outside this set. Mechanism homes:
 RFC-bsc-artifact-graph.md §§7–10, 13; the post-genwrap design; the
 SV-interop ABI doctrine note.
 
@@ -58,7 +58,9 @@ touch-points — consumes it. Design invariants:
 - **Structure is kept, not flattened**: a split value keeps the shape
   of its type (a struct splits into one element per field, tuples all
   the way down), and the leaf-order invariant that lets any flat view
-  index the tree is checked, not assumed — order, not just count.
+  index the tree is checked, not assumed — order, not just count. The
+  split-structure design carries live rejected alternatives, held
+  open until measurement decides among them (08).
 - **Schedule-scoped facts are partitioned**: structural role facts may
   live in the semantic contract; rule-liveness, arbitration, and
   enable-folding facts belong to one completed schedule and live in
@@ -142,10 +144,12 @@ function once (typed args/results, widths, direction, signedness,
 state domain, ownership, effect class) with per-transport realizations
 recorded in the manifest. The transport landscape is a requirement,
 not a choice: one major commercial simulator offers no usable
-polymorphic DPI (its transport is polymorphic VPI); stock open-source
-simulators require width-mangled monomorphized DPI; an open-packed DPI
-capability (one import serving all packed widths) exists as a pinned
-experimental capability with an upstream path. Monomorphize-with-
+polymorphic DPI (its transport is polymorphic VPI); the stock open-source
+compiled simulator requires width-mangled monomorphized DPI (the
+event-driven one rides VPI); an open-packed DPI transport (one import
+serving all packed widths) is demonstrated feasible and enters the
+landscape only as a pinned experimental capability with an upstream
+path. Monomorphize-with-
 mangled-symbols is therefore the portable floor; open arrays remain
 the cleaner form where supported. "DPI yes/no" is not a manifest
 entry — transport identity, link identity, and collision checks are.
@@ -159,8 +163,8 @@ ever exists, the VPI realization covers it.
 Polymorphic imports and parameterized IP want per-instance synthesis:
 specialization is driven from the type instantiation during
 elaboration — parameter-value inversion at link is unsound (FACT).
-Staging by design: monomorphic first; explicit specialization stubs
-driven by a frozen-manifest protocol; then the full engine
+Three design tiers: monomorphic imports; explicit specialization
+stubs driven by a frozen-manifest protocol; the full engine
 (wrapper-generation during elaboration at discovered types).
 Contract-value hashes are the cache keys (T2); demand-driven
 per-instance artifacts ride the graph's reentrant elaboration
@@ -243,7 +247,8 @@ Indexed in the KB; open design decisions in 08.
 - RESOLUTION: the ForeignABI descriptor with per-tool realizations;
   the interop ABI's one-library rule.
 - OPEN: the codebook adoption gate — port the existing planner exactly
-  vs canonicalize both sides (a pre-silicon flag-day choice).
+  vs canonicalize both sides (a choice foreclosed once any frozen
+  deployment of the encoding exists).
 - OPEN: strict conformance mode as default for foreign execution.
 - OPEN: canonical-form clause ratification; anonymous/structural
   types at boundaries; recursive encoded types (the doctrine's queue).

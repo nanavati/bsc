@@ -4,9 +4,9 @@ How bsc's outputs, caches, tests, and builds converge on one identity
 discipline. Companion to RFC-bsc-artifact-graph.md, which governs on
 mechanism; this document states the destination and the reasons.
 
-**Status:** v2.0 — 2026-08-24 (Claude). Design only; sequencing and
-status, sequencing, and provenance live in the KB lanes
-and the meeting-notes digest, outside this set.
+**Status:** v2.0 — 2026-08-24 (Claude). Design only; sequencing,
+status, and provenance live in the KB lanes and the meeting-notes
+digest, outside this set.
 
 ## 1. The design in one paragraph
 
@@ -127,7 +127,8 @@ never as a green skip; bounded analyses export per-obligation
 completeness so "no warning" is never consumed as "proved". Two hard
 requirements from the external use model (07): test authors never
 write Haskell, and the orchestrator never links the compiler under
-test.
+test. The verdict-node design assumes the graph engine; that premise
+is part of the destination, not just the plan (08).
 
 ## 6. Determinism as a designed property
 
@@ -158,7 +159,7 @@ Open design decisions: 08.
   consumers; it is the acceptance condition for any persistent memo.
 - RESOLUTION: definition-cache "dominance" is a measured hypothesis,
   not an axiom — the cache design stands on identity grounds alone.
-- OPEN: the solver-identity and resource-policy fields of the
-  manifest (04 §3's ceiling) — ratify the field set.
-- OPEN: the zero-unexpected, capability-visible full-suite bar as the
-  landing gate wording.
+- OPEN: the manifest's solver-identity and resource-policy field set
+  (04 §4's ceiling; 08).
+- OPEN: the clean-suite definition — zero unexpected verdicts with
+  capability-visible coverage as the acceptance bar (08).

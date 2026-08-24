@@ -48,7 +48,7 @@ coordinated across all its stakeholders before anything freezes (08).
 Architecture (DECISION): two layers — an error-tolerant parser (new
 code, differential-parse-tested against an identity corpus, promoted
 to normative only on receipts) plus bsc-as-library semantics off
-last-good artifacts. The operative design from the joint scoping:
+last-good artifacts. The operative design:
 
 - **Path-indexed ranges outside CSyntax.** Ranges never go onto the
   core syntax type: the blast radius would be the whole typechecker,
@@ -137,8 +137,8 @@ schema (02 §3), delivered in-artifact or as sidecars.
   the signal's full hierarchical path; the tool-side work is a
   protocol client plus a path→source map from compiler position info
   — and one editor-side client can serve the open viewer and the
-  commercial one (which is scriptable enough to speak the same
-  protocol). The compiler-side piece is shared across all routes.
+  commercial one (whose scripting layer plausibly speaks the same
+  protocol — unverified). The compiler-side piece is shared across all routes.
 - **The position-tracking doctrine** (Ravi): coverage display (05 §6)
   and wave-to-source both want better position propagation through
   the evaluator; state-element positions are already good — the
@@ -188,12 +188,12 @@ modernization records. Indexed in the KB; open design decisions in 08.
 - RESOLUTION: the action-keyed semantic-authority protocol; no
   process-global state in long-running workers.
 - RESOLUTION: one decoder witness for every observability consumer;
-  FST-class containers carry the types; one protocol client serves
-  multiple viewers.
+  FST-class containers carry the types; one protocol client can serve
+  multiple viewers (commercial-viewer hooks unverified).
 - OPEN: the parser implementation choice (combinator vs LALR) under
   the settled modernization decision.
-- OPEN: touch-point tracing's place in the engagement's milestone
-  sequence.
+- OPEN: how typeclass position universes and merged origins render
+  for a touch point — the many-to-many provenance question (§2; 08).
 - OPEN: poke/deposit and the synchronous stepping API — one
   coordinated kernel-ABI decision.
 - OPEN: the docstring marker standard (comments-survive-lexing is
