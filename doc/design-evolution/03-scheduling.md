@@ -41,7 +41,14 @@ be checked (which is exactly what contracts-as-constraint-sets and the
 verify mode of step 3 provide). Its named secondary payoff — interface
 arguments, dropped historically because the compiler couldn't capture
 their scheduling — becomes reachable once footprints ride interfaces as
-contracts: record it as a post-migration beneficiary, not a step.
+contracts: record it as a post-migration beneficiary, not a step. The
+project-inventory arc (10 §4) then operationalizes the same direction
+as **schedule certification T1** — one of the four substrates rooting
+the portfolio's dependency spine, "exemplar-as-spec, weeks-scale" —
+and the portfolio transcript ties it to boundary work: module
+implementation selection *depends on* specify-then-check schedules
+(02 §7). Two upstream fossil issues (657, 658) are named as the first
+schedule-annotation relaxation cases once certification exists.
 
 ## 2. Resolutions from the review
 
@@ -67,8 +74,17 @@ evaluation-vs-execution split where dynamic alternatives exist.
 Independent per-engine patches can each match one oracle while
 disagreeing with each other (FACT: the $finish #0 fix, the vl_finish
 deferral, and Bluesim's complete-the-cycle semantics were three
-separately-derived alignments). NEEDS-RAVI: the finish-instant
-contract is a language-level decision; goldens re-record only after it.
+separately-derived alignments). ADVANCE (2026-08-24, the verilator
+arc): one clause of the contract is now stated and *emitted* — displays
+of a timestep flush before $finish commits, and post-finish statements
+never execute; bsc now emits finish-containing task blocks as named
+blocks with a `disable` immediately after each $finish (dead code for
+simulators that stop at $finish, mandated silence for those that keep
+going), superseding the earlier permit-extra-output accommodation. The
+reset-sequence RFC carries the language-level wording. NEEDS-RAVI: the
+rest of the finish-instant contract remains a language-level decision;
+goldens re-record only after it (a first re-record set has already
+landed branch-local on the two-state arc — 05 §4).
 
 **R3.3 — Dynamic schedules: pin every arm.** SchedAlt never completes
 an order at runtime: every coherent alternative is compiled and

@@ -20,7 +20,9 @@ documents/lanes; this is the decision queue.
 3. **Upstream review bandwidth (07 §4.4):** the coherence stack idle
    since July; trs PRs #108–#158 at zero review comments; the
    Bluespec, Inc. review program and the staffing memo are the levers
-   (Monday's meeting).
+   (Monday's meeting), with the MSA + SoW draft as the ready
+   instrument (07 §5) and the Unison sheet's terms proposed-not-agreed
+   (06 §2).
 4. **The solver policy ceiling (04 §3):** ratify "complete where
    decidable, axiomatic where not, heuristic never," as amended to
    "no uncheckable or non-monotone acceptance," as the permanent
@@ -58,6 +60,22 @@ documents/lanes; this is the decision queue.
    edge the cross-cut names: may an upstream-visible primitive have its
    reference semantics defined by the (internal) 3-state trs, or should
    the completeness bound be pinned in a simulator-independent spec?
+   The X-payload question now has both positions on the transcript
+   record (value-X vs condition-X; the write-up-with-soundness-proof
+   action is the agreed resolution vehicle — 05 §4, 10 §5).
+8a. **Coverage program (05 §6):** the proposal's own open questions —
+   register-mux rendered form; SVA cover vs covergroup emission;
+   guard-conjunct pass placement (cheap now, annoying to retrofit);
+   rule-body-depth interest ranking; pilot-block selection — plus
+   authorizing the audit probe and the pilot.
+8b. **Two-state arc asks (05 §4):** the vendored-code lint-waiver home
+   (blocks two test families); environment-conditional XFAIL policy
+   for container-artifact failures; VCS validation + the
+   SystemC-enabled acceptance run before upstreaming; optionally name
+   the two-state conformance macro.
+8c. **#158 merge gate:** approve the fresh full-corpus diffsweep seal
+   as the gate before the REV-27 flag day merges (recommended
+   in-lane; 05 §2).
 9. **BVI-via-Verilator:** Q4 strict mode (recommendation on record:
    ratify strict); pick and provision the pinned Verilator (the fork
    release from the fixed tip); observability tier 2; landing the
@@ -67,7 +85,11 @@ documents/lanes; this is the decision queue.
     poke/deposit kernel-extension question — TIME-SENSITIVE per the
     cross-cut: poke is a bk_* kernel ABI change and the kernel ships
     with the freeze (07 §1), so this is the one "freeze-indifferent"
-    claim that fails; decide in-or-out before the kernel freezes.
+    claim that fails; decide in-or-out before the kernel freezes. The
+    coordination surface widened (05 §5): the bk_sync stepping API
+    exists on a branch and its author will produce a fuzzing hook-ask
+    list — ping her before freezing anything Bluesim-ABI-shaped, and
+    fold her asks into the same decision.
 11. **SplitPorts:** authorize the compile + byte-identity + 8..128
     timing-sweep gate as a toolchain-session task; rejected
     alternatives (1)/(4)/(5) stay live until then.
@@ -103,8 +125,15 @@ documents/lanes; this is the decision queue.
 18. **Scheduler transpose to B-Lang-org** (#1087) and the ethmac
     keyword fix + verilator regression filings — all staged, one click
     when the policy hold clears.
-19. **The compat features' route:** '0/'1 + deriving-via as a trs stack
-    rung vs upstream PRs first.
+19. **The compat features' route:** '0/'1 + deriving-via LANDED on the
+    fork's main (04 §5); the remaining decision is the upstream route
+    and timing.
+19a. **Parser implementation choice (06 §2):** Megaparsec (the Aug 7
+    decision, engagement-staffed) vs the LALR(1) port the lexer arc
+    judged practical — reconcile before the parser rewrite hardens.
+19b. **Touch-point tracing (06 §2):** absent from the Unison M1–M4 —
+    deliberate sequencing or a dropped thread? Decide before terms are
+    agreed.
 20. **$finish #0 emission upstreaming** — weigh VCS validation first
     (golden churn ~13 re-records; behavioral improvement).
 
@@ -157,9 +186,13 @@ documents/lanes; this is the decision queue.
     unpushed BVI-fallback proposal branch (needs a B-Lang-org push
     grant or git-am); the sibling winning-monorepo branch landing;
     matx-corpus reseal needs a matx-attached session.
-26. **Meeting-record access (10 §7):** share the coverage proposal
-    document and (optionally) the Gemini meeting-notes folder with the
-    agent service identity ai.agents@matx.com — the crawl could read
-    only the summary emails, not the full notes; the coverage proposal
-    was unreachable entirely. Manual capture needed for the Jul 22
-    roadmap meeting and May 13 "Formal Bluespec" (no auto-notes exist).
+26. **Meeting-record access (10 §7):** LARGELY RESOLVED — sessions
+    running under Ravi's own credentials read the full notes,
+    transcripts, and the coverage proposal (the credentialed crawls of
+    2026-08-24); the service-identity restriction stands for
+    unattended sessions. Remaining: manual capture for the Jul 22
+    roadmap meeting (folder-verified to have no notes doc) and May 13
+    "Formal Bluespec"; and the still-unmined transcripts per the
+    digest's handoff block — the LSP, portfolio, and Aug 21 sync
+    transcripts are mined; the PR-landscape session, the Jeff/Ravi
+    series, and the Jul 10 / Jun 26 / Aug 3 details remain.

@@ -205,7 +205,23 @@ manifest → conformance + realization plan → link, and a mutable run key
 must not retarget an artifact after layout. Prove the payoff with an
 implementation-swap test in which the semantic prefix cache-hits.
 
-## 8. The SystemVerilog output horizon (from the longer-horizon set)
+This retirement is now the *stated end state on the transcript record*
+(10 §1): backend-agnostic .ba files with implementation selection at
+link time — "genC/genVerilog demoted to near-irrelevant"; encrypted-IP
+swaps, stubbing, and behavioral memories become link choices;
+"elaborate once, simulate many ways." Five standing customer classes
+for per-instance implementation selection are on the record (10 §4's
+crib): encrypted-IP substitutes, a computed-parameter fix class
+(cousin of upstream #1064), conditional emulation-with-coverage
+builds, an X-mode simulation profile, and Bluesim fallbacks for
+Verilog modules without a C model. And the transcript states the
+precondition this document shares with 03: **module implementation
+selection depends on schedule specification** — "the only way you can
+make sure you have a proper contract across multiple implementations"
+is specify-then-check schedules, tying this retirement to the schedule
+certification rung.
+
+## 8. The SystemVerilog output horizon and the interop ABI doctrine
 
 The longer-horizon project document (10 §4) defines a full SV output
 mode as an umbrella of independent pieces; recorded here because each
@@ -218,6 +234,34 @@ piece is a consumer of this document's machinery:
   codebook-witness discipline of §3 — emitting SV types is emitting the
   encoding contract in a second syntax, so it must be generated from
   the same fingerprinted witness, never a parallel implementation.
+
+This umbrella now has a governing document: the **SV-interop ABI
+doctrine note** (v1, Aug 2026; recovered by the credentialed crawl —
+10 §4). It names the rendering of Bluespec types into SV — packed
+layouts, field/tag names, tag encodings including variable-length
+Huffman-class codes, canonical form, package structure — as a de facto
+data-layout-and-naming ABI to be governed as one. Its clauses are this
+document's theses arriving as policy: **canonical form is clause 1**
+(what equality masks, what generation fills — ratification in
+progress); the **one-library rule** — the SV emitter and the Rust
+emitter must be projections of ONE type-to-rendering library, because
+two hand-maintained descriptions are two ABIs (the name-drift bug
+already shipped once); a written compatibility policy per type-edit
+class; versioned type names for freezes (freeze one name, not N bit
+indices); a golden layout manifest as a CI check; and **ship-in-pairs
+bidirectionality** — pack/unpack (for encoded types the codec IS the
+boundary; prefix matchers are emitted logic, never solver problems),
+render/project (typed port emission pairs with typed views), and
+name/select (accessor packages over bit-index selection), with v1's
+read side pure selection and mutation staying Bluespec-side. Status:
+ratified and enforced internally over bsc emissions (07 §5); the
+intended trajectory is upstreaming the clauses as the language's
+missing interop chapter. The accepted cost is compiler layout freedom
+— upstream layout changes become ABI events, which is itself an
+argument for the upstream-review investment (07 §4.4). The
+tag-encoding clause is §3's codebook-is-ABI result restated as
+governance; the render/project axis is where SplitPorts (§2) and the
+semantic port properties sit.
 - **Intent-bearing constructs**: always_ff/always_comb/logic, and
   especially **unique case** — bsc often knows a case is exhaustive and
   exclusive by construction, and emitting unique case propagates that

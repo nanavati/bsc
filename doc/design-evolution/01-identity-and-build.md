@@ -23,17 +23,35 @@ via tree artifacts, persistent workers, a remote-execution-backed
 share, and frozen specialization manifests (the containment posture;
 the deployed instance is in 07).
 
-FACT (2026-08-21 sync; 10 §1): upstream adopted the **3-phase compile
-split into modular executables** with **contract files** for dependency
-management and cache efficiency, plus Cabal for native build tasks. The
-smaller-tools direction and this program are the same design seen from
-two sides: a phase boundary is worth a process seam exactly where its
-artifact earns caching, parallelism, or a second consumer — the trs
-porcelain rule (05 §1.4) applied to bsc itself. RESOLUTION: the 3-phase
-proposal's contract files and this document's transitive manifests must
-be specified as one artifact family — a contract file is the manifest
-of an inter-phase node — and the circulating 3-phase flow proposal
-should cite the format registry (§2) as its versioning substrate.
+FACT (2026-08-21 sync; 10 §1; transcript-verified): upstream adopted
+the **3-phase compile split into modular executables** — (1)
+elaboration+scheduling (source → .bo/.ba), (2) per-backend codegen
+(.ba → Verilog or C++), (3) per-backend link — with **one executable
+per phase per backend so flags cannot leak across contexts**, flags
+largely leaving the .ba (recompile-check flags excepted), and legacy
+bsc surviving as a wrapper script; plus **contract files** for
+dependency management and cache efficiency, and Cabal for native build
+tasks. Transcript detail of record: the named-phase-executables pivot
+(the analyze/elaborate/link analogy) converted the flag proposal into
+the executable split; a contract file can be a *checking* surface
+carrying expected scheduling — independent convergence with this
+document's contracts-as-values; post-elaboration a module's import set
+*shrinks* (consumers lose dependencies only the source needed — a new
+caching lever); **BI interface files are coming back** with a much
+faster check-only mode (already reimplemented); name mangling was
+rejected flat-out; a Tasty-Golden Cabal-native testsuite was floated.
+The staged-flow mechanics are meanwhile live as upstream PRs
+1092–1094 (stacked on 1059/1060), with the -elab-only flag ruled
+transitional ("just a temporary thing until we make smaller tools" —
+Ravi, 2026-08-24). The smaller-tools direction and this program are
+the same design seen from two sides: a phase boundary is worth a
+process seam exactly where its artifact earns caching, parallelism, or
+a second consumer — the trs porcelain rule (05 §1.4) applied to bsc
+itself. RESOLUTION: the 3-phase proposal's contract files and this
+document's transitive manifests must be specified as one artifact
+family — a contract file is the manifest of an inter-phase node — and
+the circulating 3-phase flow proposal should cite the format registry
+(§2) as its versioning substrate.
 
 ## 2. The manifest convergence (RESOLUTION — adopt as a named workstream)
 
@@ -125,6 +143,22 @@ two-stage/dynamic-dependency key shape are needed specification, not
 disagreement). Warm-vs-lazy stays a policy spectrum ("eagerness returns
 as cache-warming policy, not identity semantics").
 
+FACT (the parked bo-recompilation record, recovered by the Slack
+crawl; 10 §5-adjacent): reproducible .bo alone attacks the wrong layer
+— an outer static build system hands every bsc invocation the
+transitive .bo closure as declared inputs, so a changed leaf re-runs
+the whole ancestor cone regardless of intermediate stability. The
+written paths forward ascend exactly this document's ladder: dynamic
+input pruning (needs bsc to report its reads — a no-op if bsc eagerly
+opens every .bo), direct-deps-only inputs with self-contained .bo (the
+disease GHC's .hi recompilation-avoidance treats), and the
+iface/impl split (the ijar pattern) — i.e., the artifact-graph's own
+rungs, independently derived from the build side. First step is a
+measurement spike (trace real parent compiles vs the declared
+closure); correctness caution of record: silent staleness is worse
+than slow rebuilds. The prior attempt's failure context is unwritten —
+talk to Ravi before restarting it.
+
 ## 5. Tests as graph nodes
 
 The verdict-node discipline (artifact-graph §16 + testsuite-after-shake
@@ -177,8 +211,13 @@ profile fabricates cost. Methodology law (three strikes): every
 load-bearing number needs a raw artifact behind it.
 
 Under the artifact graph these become table stakes: deterministic keys
-are hook #1 of the Bazel containment plan, and the bit-identical
-double-compile is a CI invariant (July §4.5).
+are hook #1 of the containment plan, and the bit-identical
+double-compile is a CI invariant (July §4.5). GHC-version facts from
+the meeting record (10 §§1,5): GHC output-determinism fixes have
+landed upstream since 9.6.7 and come free on the 9.14 series; a 9.14
+GHCi change dramatically improves bluehs (not plain bsc) performance;
+the floated policy is 9.10 minimum with releases built on 9.14, and
+the sync bumped the default to the GHCup-recommended release.
 
 ## 7. What lands where (pointers)
 

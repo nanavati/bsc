@@ -10,9 +10,12 @@ design document, that document cites it. Deployment-side and
 company-internal material from the same meetings lives exclusively in 07,
 per the doc-set rule that 07 is the only home for such specifics.
 
-**Status:** v1.1 — 2026-08-24 (Claude, meeting-notes crawl). Labels as
-elsewhere. Sourcing: Gemini auto-summaries (may contain errors) except
-the compiler tour, which is a full transcript.
+**Status:** v1.2 — 2026-08-24 (Claude, meeting-notes crawl +
+credentialed re-crawl deposits). Labels as elsewhere. Sourcing:
+Gemini auto-summaries (may contain errors) upgraded to full
+transcripts where §7 says so; the compiler tour, the Aug 21 sync, the
+Aug 7 LSP session, and the Aug 10 portfolio meeting are
+transcript-verified.
 
 ## 1. The open-source Bluespec sync timeline (biweekly, with upstream)
 
@@ -48,7 +51,15 @@ the compiler tour, which is a full transcript.
   the artifact-graph program's manifests (01 §2) are one convergence:
   contract files are the manifest program arriving from the
   build-integration side (RESOLUTION: design them as one artifact
-  family, not two).
+  family, not two). TRANSCRIPT ADDENDUM (credentialed crawl): the
+  three phases and the one-executable-per-phase-per-backend rule are
+  precise on the record, with flags leaving the .ba, legacy bsc as a
+  wrapper script, the named-phase-executables pivot that converted the
+  flag proposal into the split, contract files as a *checking* surface
+  (expected scheduling), the import-set-shrinks redaction insight, BI
+  files returning with a fast check-only mode, name mangling rejected
+  flat-out, a Tasty-Golden Cabal-native testsuite floated, and the GHC
+  9.10-minimum / 9.14-releases line (01 §§1,6).
 
 ## 2. The upstream engagement program
 
@@ -69,6 +80,14 @@ the compiler tour, which is a full transcript.
 - Stacked PRs adopted to decompose large branches into upstream-ready
   reviews (Aug 3); the in-flight integration branch gets decomposed
   into candidate upstream PRs.
+- **The upstreaming ledger** (Slack, mid-August): the scheduler
+  transpose is upstream PR 1087; the expandSyn/apSubM pair is 1088
+  (with the separate measurement showing no definitive benefit —
+  04 §6); the staged-flow set is 1092–1094 stacked on 1059/1060, with
+  -elab-only ruled transitional pending the phase split (Ravi,
+  2026-08-24). The preview-branch mechanics and the 21-of-38
+  requalification set are in 07 §5; a Bluespec, Inc. MSA + SoW draft
+  exists as the review-program instrument (07 §5).
 
 ## 3. The LSP arc and the Unison engagement
 
@@ -100,7 +119,13 @@ the compiler tour, which is a full transcript.
   files as the persistent home for auxiliary metadata** (doc strings);
   manage LSP's byte-based position encoding explicitly. Unison to send
   a proposal (rates, scope, weekly status meeting, shared Slack); a
-  Cabalize-build PR planned.
+  Cabalize-build PR planned. TRANSCRIPT ADDENDUM: the full session
+  record now lives in the LSP lane draft — path-indexed ranges outside
+  CSyntax (CSyntax is derived for BSV, so annotations must live
+  outside it), incremental parsing REJECTED at definition granularity,
+  the two-step proving ground, M1–M4 with terms proposed-not-agreed,
+  agents named a major LSP consumer class, and waves-to-source judged
+  adjacent to the LSP proper (06 §2).
 
 ## 4. The longer-horizon project set (Drive, Apr 2026 — Ravi's document)
 
@@ -138,6 +163,19 @@ delivery model:
    port names (pVeriPort in CParser.hs is a string literal today) —
    "generally anything with string literals." Folded into 02 §4's BVI
    family as the long-horizon fifth program.
+
+The document itself has moved: it was ported to the private
+ideas-repo as the living long-horizon file (the Google Doc is frozen;
+07 §5 carries the repo sorting rule). The credentialed crawls
+recovered the rest of the working-document layer: the **coverage
+proposal** (digested in 05 §6), the **SV-interop ABI doctrine note**
+(02 §8), the 45-slide compiler-internals deck (the tour's companion,
+with codebase numbers of record), the project-inventory arc — five
+successive triage documents whose dependency spine and
+"declared-certified-pinned" thesis are quoted in 00 §2 and whose
+deployment content is in 07 §5 — the surfer-integration and
+yosys-abc-asap7 working docs (06 §3, 07 §5), and the parked
+bo-recompilation record (01 §4).
 
 ## 5. Compiler-internals facts first recorded in meetings
 
@@ -279,19 +317,20 @@ Bluespec-general items double as a small-projects inventory:
 The menu's deployment-specific items, and the teaching-strategy
 curriculum, are recorded in 07.
 
-## 7. Access gaps this crawl could not close (NEEDS-RAVI)
+## 7. Access gaps (updated after the credentialed crawls)
 
-1. The **coverage proposal** document: referenced in meeting actions,
-   not findable by the agent service identity (ai.agents@matx.com) in
-   Drive. Share it (or name its location) and it gets folded into 05.
-2. **Full Gemini meeting notes/transcripts** (beyond the compiler tour)
-   are restricted; only the summary emails were readable. Sharing the
-   meeting-notes Drive folder with ai.agents@matx.com would let future
-   crawls read the Details sections, which are materially richer than
-   the summaries.
-3. No auto-notes exist for the **Jul 22 roadmap/ramp meeting** or the
-   **May 13 "Formal Bluespec" meeting** — if they carried decisions
-   worth keeping, they need manual capture.
+1. The **coverage proposal**: RESOLVED — found and digested by a
+   session running under Ravi's own Drive credentials (05 §6).
+2. **Full Gemini notes/transcripts**: RESOLVED for credentialed
+   sessions — the Aug 21 sync, Aug 7 LSP, and Aug 10 portfolio
+   transcripts are mined; the service-identity restriction stands for
+   unattended sessions. Still unmined: the PR-landscape session, the
+   Jeff/Ravi series, and the Jul 10 / Jun 26 / Aug 3 details (the
+   digest's handoff block tracks the queue).
+3. No auto-notes exist for the **Jul 22 roadmap/ramp meeting**
+   (folder-verified by the second crawl) or the **May 13 "Formal
+   Bluespec" meeting** — if they carried decisions worth keeping, they
+   need manual capture.
 
 ## 8. Lane pointers
 

@@ -82,12 +82,26 @@ opponent's wall.
 RESOLUTION — **identity and honesty rungs gate productization**: the
 adopted-in-lane manifest/fail-closed rung (requested-vs-actual engine,
 fallback reasons, digest-verified launchers, conditional determinism
-seal with per-leg stdout digests) plus the five open PR #158 objections
-(MethValue liveness + fail-open interp; alt-guard liveness and the
-circular census; AOT rev-26 callback-ABI reuse; time-passes globality;
-chunked-AOT symbol collision) are treated as a first-class workstream,
-not review noise. "Parity of record" language stands for measurement;
-*readiness* claims wait on the registry/manifest prerequisites (08).
+seal with per-leg stdout digests) is a first-class workstream, not
+review noise. STATUS ADVANCE (2026-08-24): the four #158-gating review
+findings are CLOSED and pushed — the callback ABI bumped to REV 27
+with the callback taxonomy made explicitly fail-closed (tolerant
+lookups deleted; skew pinned loud in both directions); MethValue/
+alternates liveness fixed at both walkers with an always-on stop-free
+audit that panics before allocation, plus an unconditional interp EN
+trap (the env-var gates deleted) and an honest census; bdpiname
+globals given private linkage (chunked-link collision reproduced red
+first); time-passes given a documented process-lifetime contract. The
+fixture battery grew 25→34 checks and gained its first live-EN
+designs, with the design-shaping discovery that a live Port(EN) read
+arises only from scheduler-generated conflict inhibition. The
+recommended merge gate for #158 is a fresh full-corpus diffsweep seal
+(the REV-27 flag day plus the unconditional trap want one), and the
+link-time scaling wall now has its first measured lever: the dominant
+LLVM pass enters only via a default-pipeline demotion tier, so
+pipeline replacement is lever 1. "Parity of record" language stands
+for measurement; *readiness* claims wait on the registry/manifest
+prerequisites (08).
 
 ## 3. BVI execution (as built) and its successor path
 
@@ -106,8 +120,12 @@ Oracle succession is per-fixture: iverilog while IP compiles under it;
 as an engine" unaffected); netlist-under-Verilator and a second pinned
 Verilator as drift detectors; stored goldens terminal. Open in-lane:
 strict-mode ratification (Q4; recommendation on record: ratify strict),
---bvi-model wiring, landing into the stack, pin provisioning,
-observability tiers. Codex's identity objections (load-only class
+--bvi-model wiring, pin provisioning, observability tiers. The
+landing-shape question is now answered structurally by the
+freeze-branch ruling (07 §5): the BVI work rides a branch off the trs
+tip (mainline = freeze + bluehs + perf fixes → trs branch → BVI
+branch); BVI may eventually fold into mainline trs, and mainline trs
+is not expected in mainline bsc soon. Codex's identity objections (load-only class
 pointer is last-build-wins, not immutably pinned; adapter protocol;
 argv contract; init side effects at build; mixed two-state islands)
 fold into the manifest workstream.
@@ -170,6 +188,28 @@ LRM Annex N, Verilator xorshift); Annex-N-everywhere plus a BSV-level
 per-instance randomizer compose and would collapse split goldens;
 seeded-first for any upstream Verilator pitch.
 
+STATUS (the two-state arc's final ledger and the hardware-model line,
+2026-08-24): the arc closed at iverilog's environment floor
+(18,854 pass / 4 container-artifact fails) and 18 named, unmasked
+verilator failures (from ~800), with net expected-fail markers reduced
+and a 15-golden re-record set landed branch-local (pre-upstream; VCS
+validation remains the gate). Two rulings of record reshaped the arc:
+(1) **the hardware-model line** (DECISION, Ravi) — the reset
+synchronizers are real hardware; the two-state startup-pulse
+regeneration inside them was REVERTED, sim-only initialization
+semantics were rejected as "a slippery slope", and the one exposed
+test is dispositioned with a *per-test* simulator knob
+(--x-initial-edge for itself alone — the global form was tried and
+rejected on evidence as over-approximating), with honest XFAIL as the
+fallback mechanism; the harness's own deassert/assert pulse stays, as
+testbench choreography rather than hardware. (2) The
+**disable-at-$finish emission** (03 §R3.2): named task blocks with a
+disable after each $finish make "post-finish statements never execute"
+an emitted property rather than a per-simulator accommodation,
+retiring the earlier permit-extra-output allowance. New Ravi asks from
+the arc ride in 09 (vendored-lint waiver home; environment-conditional
+XFAIL policy; the VCS + SystemC-enabled acceptance run).
+
 ## 5. Bluesim's role, stated plainly
 
 Bluesim remains: the production simulator until trs's proof program
@@ -178,11 +218,75 @@ designated-world evaluator; the Monte-Carlo sampler after the
 bootstrap change; the semantics oracle the dual-flavor seal chains
 onto the Verilog flavor. Bluesim gains: the reset bootstrap (pattern
 knob), port properties in .bo, staged-flow per-module codegen (as
-artifact-graph nodes). Bluesim does not gain: Kleene X, new kernel
-surface beyond the possible poke extension (06), or schedule-model
-changes ahead of the one-order migration.
+artifact-graph nodes), FST dump support (landed — 06 §3), and a
+candidate **synchronous kernel API** (the bk_sync_* family,
+implemented on a branch: inline stepping without the helper thread,
+~340× cheaper per step than the semaphore path, motivated by
+model fuzzing). COORDINATION ITEM (time-sensitive): its author may
+skip upstreaming and instead ask for hooks in trs if the trs series
+breaks the Bluesim ABI anyway — trs "hasn't needed to break the
+Bluesim ABI yet, but... it isn't cast in stone"; ping her for the
+hook-ask list before freezing anything Bluesim-ABI-shaped (09 item
+10). A latent kernel-API header bug (bk_define_clock documents its
+duty-cycle parameters in the reverse of the implementation's order)
+has a ready fix awaiting an upstream PR. Bluesim does not gain:
+Kleene X, new kernel surface beyond the possible poke extension (06),
+or schedule-model changes ahead of the one-order migration.
 
-## 6. Lane pointers
+## 6. The coverage program (proposal in hand)
+
+The coverage proposal (Aug 2026; recovered by the credentialed crawl —
+10 §4) closes this document's recorded gap. Thesis: **bsc instruments
+coverage because it is the last tool that still sees design meaning** —
+default output renders rules as always-executing continuous
+assignments, so standard line/branch/FSM coverage saturates
+meaninglessly; Verilator's own coverage mode instruments the generated
+Verilog and inherits the erasure, so it is explicitly not a path.
+Emission is standard cover constructs into the standard collection
+stack, so DV's merge/exclusion/trending/closure workflow is inherited,
+not rebuilt.
+
+The instrument set: **rule coverage** (CAN_FIRE/WILL_FIRE, config-only
+via an existing flag); **conflict coverage** (CAN_FIRE and not
+WILL_FIRE — lost arbitration, with no RTL-coverage analog; a free
+rider on the same flag); state/enable coverage; **mux-arm coverage
+with writing-rule attribution**; **select-point coverage** harvested
+from the evaluator's residue (anything surviving partial evaluation is
+dynamic by construction; guard conjuncts must be captured *before*
+boolean simplification — a pass-ordering constraint that is cheap now
+and annoying to retrofit); **covergroups generated from the type
+dictionary** (per-constructor bins, payload bins conditioned on tag,
+RDY/EN-gated sampling — guard-correct by construction; illegal enum
+encodings become generated checks instead of manual exclusions,
+turning closure labor into a bug detector); and Rust-model functional
+coverage. Deferred with reasons: Bluesim rule-body line coverage (the
+external-schedule architecture makes it expensive, and the exclusive
+residual — line granularity inside branch-free dataflow — is something
+no branch-coverage regime measures meaningfully).
+
+Identity and noise discipline match this book's theses: points are
+keyed by **structural identity** (rule name + instance path + ordinal
++ expression shape) and aggregated across instances; source position
+is a display attribute only — deliberately splitting workstream A
+(the coverage signal, buildable now) from workstream B (position
+fidelity through unfolding, whose consumer set exceeds coverage:
+go-to-source debug, warnings, mux-report readability; 06 §3's
+position-tracking doctrine). When B lands, A's reports upgrade
+retroactively without invalidating accumulated coverage. Noise
+control: a static always-fire tier excluded from denominators at
+emission, plus an empirical non-discriminating tier; the headline
+metric is "N points, M informative, K covered."
+
+Sequencing per the proposal: a one-afternoon audit probe
+(dynamic-select counts by class + a position-quality histogram), then
+a pilot on one control-heavy block with thresholds written before the
+run. Its open questions are in 09 (mux render form; SVA-cover vs
+covergroup emission; guard-conjunct pass placement; rule-body-depth
+interest; pilot block selection). Cross-refs: the generated
+covergroups ride the same type dictionary as the decoder witness
+(06 §3); illegal-values-as-checks is shared with ValidateBits (§4).
+
+## 7. Lane pointers
 
 "KB: trs full-AOT push" (doctrine, ledger, reviews); "KB: trs top-level
 lifts + G0129"; "KB: BVI-via-Verilator design (trs)"; "KB: bsc
@@ -191,7 +295,7 @@ open packed DPI"; "KB: bsc X-safe ValidateBits design"; "KB: bsc solver
 strategy" (X-analysis consumers); doc/RFC-simulation-reset-sequence.md;
 src/trs docs; fork PRs #108–#158.
 
-## 7. NEEDS-RAVI (rolled up in 09)
+## 8. NEEDS-RAVI (rolled up in 09)
 
 - The finish-instant/event contract (with 03).
 - BVI Q4 strict-mode ratification; pin provisioning; observability
@@ -204,8 +308,17 @@ src/trs docs; fork PRs #108–#158.
   doctrine leans no); ValidateBits Q1/Q3/Q4/Q6 residuals.
 - Sibling-branch landing; BENCH_ARCHIVE_TOKEN; the PR #108–#158 review
   program itself (open with zero review comments).
-- The **coverage story**: a Bluespec coverage-tracking infrastructure
-  is a committed direction (07 §5), but its proposal document was not
-  reachable by this review (10 §7) — share it so the design can be
-  reconciled with the verdict-node and observability programs here and
-  in 01/06.
+- The **coverage program** (§6): the proposal is now in hand
+  (RESOLVED); the remaining asks are its own open questions — the
+  rendered form of register muxes, SVA cover vs covergroup emission
+  (with whoever owns DV methodology), guard-conjunct pass placement,
+  interest ranking on rule-body depth (decides whether the Bluesim
+  line-coverage work is ever priced), and pilot-block selection — plus
+  authorizing the audit probe + pilot.
+- From the two-state arc (§4): the vendored-code lint-waiver home
+  (blocks two test families), the environment-conditional XFAIL policy
+  for container-artifact failures, VCS validation + the
+  SystemC-enabled acceptance run before any upstreaming, and
+  optionally naming the two-state conformance macro explicitly.
+- The #158 merge gate: approve the fresh full-corpus diffsweep seal as
+  the gate (recommended in-lane) before the REV-27 flag day merges.

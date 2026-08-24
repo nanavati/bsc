@@ -61,8 +61,12 @@ contract-vs-binding per schedule digest.
 **N6. trs lifts: top bindings / auto-fire / dynamic scheduling**
 (N1,N4→; L with conditions; 03 §R3.3–R3.5, 05) — binding manifests
 replace salts; exported coordinates replace last-cut reconstruction;
-pinned arm tables; the manifest/fail-closed honesty rung; the five
-open PR #158 objections resolved.
+pinned arm tables; the manifest/fail-closed honesty rung. STATUS
+ADVANCE (2026-08-24): the #158-gating objection set is CLOSED and
+pushed (REV-27 fail-closed callbacks; liveness + always-on audit +
+unconditional trap + honest census; linkage fix; time-passes contract
+— 05 §2); the recommended merge gate is a fresh full-corpus diffsweep
+seal, and the N1-shaped recertification obligation stands.
 
 **N7. Explicit initialization + soft-IP binding + mixed-state BVI
 semantics** (N1,N4→; D/I; 02 §4, 05 §§3–4) — the X policy vector in
@@ -92,9 +96,12 @@ authority/freshness classes.
   on nothing, and now carries upstream's own momentum: the 3-phase
   compile split + contract files decision and the prioritized Cabal
   migration (10 §1) ride P1, with contract files unified with N1's
-  manifests (01 §1); (P2) the reset-sequence/oracle-harness arc and the
-  verilator fix upstreaming — simulation-contract work with its own
-  gates; (P3) CtxRed P0/P1 + born-reduced deriving — front-end identity
+  manifests (01 §1) and the staged-flow mechanics already live as
+  upstream PRs 1092–1094 (-elab-only ruled transitional); (P2) the
+  reset-sequence/oracle-harness arc and the verilator fix upstreaming
+  — simulation-contract work with its own gates, now at its final
+  branch-local ledger with the hardware-model-line ruling and the
+  disable-at-$finish emission landed (05 §4); (P3) CtxRed P0/P1 + born-reduced deriving — front-end identity
   work whose only coupling is N2's vocabulary; VTA lands after P1(CtxRed).
   Scheduling RFC steps 1–3 run parallel after N4 exists in draft form
   (the footprint artifact IS part of N4; the tour's resources/uses

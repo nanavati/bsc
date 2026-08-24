@@ -3,13 +3,19 @@
 A canonical map of the design evolution of bsc and trs — the theses, the
 documents, the resolutions, and the long-term vision.
 
-**Status:** v1.1 — 2026-08-24. Synthesized by Claude at Ravi Nanavati's
+**Status:** v1.2 — 2026-08-24. Synthesized by Claude at Ravi Nanavati's
 direction from a holistic review of the complete cross-agent knowledge
 base (30 KB drafts, snapshot 2026-08-23/24), the two canonical RFCs, the
-per-lane design records, Codex's review corpus, and (v1.1) the meeting-
+per-lane design records, Codex's review corpus, (v1.1) the meeting-
 notes crawl — Gemini summaries for every Bluespec meeting and
 compiler-team 1:1 March–August 2026, the compiler-tour transcript, and
-the Bluespec Drive folder. This document set organizes and resolves; it
+the Bluespec Drive folder — and (v1.2) the credentialed re-crawl
+deposits (full transcripts of the 2026-08-21 sync, the 2026-08-07 LSP
+session, and the 2026-08-10 portfolio meeting; the coverage proposal;
+the SV-interop ABI doctrine note; the project-inventory arc; the
+Slack deep pass) plus the concurrent lane sessions of 2026-08-24
+(trs #158-gating fixes; the verilator two-state arc's final ledger and
+the hardware-model-line ruling). This document set organizes and resolves; it
 does not replace the RFCs it cites. Where a statement here disagrees
 with a cited RFC's current revision, the RFC governs on mechanism and
 this book governs on cross-lane resolution until the RFC is updated.
@@ -47,7 +53,8 @@ its companion documents are that whole:
   engine, pattern checking, and the metadata substrates.
 - **05 — Simulation and verification.** trs architecture doctrine, the
   full-AOT campaign, BVI-via-Verilator, the X program, oracles and
-  seals, Bluesim's role, and the Verilog-harness contract.
+  seals, Bluesim's role, the Verilog-harness contract, and the
+  coverage program.
 - **06 — Developer experience.** bluehs, the LSP, typed simulation
   control, typed waves, and the query surface they share.
 - **07 — Two worlds.** Where upstream Bluespec and MatX pull in
@@ -161,16 +168,25 @@ side-trees, and manifest-keyed caches. The same identity discipline
 serves both: a fork, a pin, or a mode is a *binding choice recorded in
 a manifest*, never an unrecorded divergence.
 
-Two corollaries the cross-cut theme analysis states crisply enough to
-adopt as named principles (they refine T3/T5/T7 rather than adding
-theses): **single source of truth** — any fact with two consumers is
-computed once in one owned place, and every other copy is a generated,
-checkable projection, because independent re-derivation is where silent
-divergence is born; and **fail closed, name every residual** — when a
+Three corollaries stated crisply enough elsewhere to adopt as named
+principles (they refine T1/T3/T5/T7 rather than adding theses):
+**single source of truth** — any fact with two consumers is computed
+once in one owned place, and every other copy is a generated, checkable
+projection, because independent re-derivation is where silent
+divergence is born; **fail closed, name every residual** — when a
 property cannot be established the system stops with a named, ledgered
-reason, and the ledger of loud refusals *is* the roadmap. The
-cross-cut's fuller twelve-theme decomposition maps onto T1–T9 and is
-preserved in the review's working notes.
+reason, and the ledger of loud refusals *is* the roadmap; and **the
+hardware-model line** (DECISION, Ravi 2026-08-24, from the reset arc):
+primitives model real hardware — simulation-only behavior never enters
+their synthesizable semantics; two-state emulation gaps are closed by
+per-test simulator knobs or honest XFAILs, never by teaching library
+primitives extra initialization semantics ("extra init semantics are a
+slippery slope"). The portfolio's own one-sentence statement of T1
+(the Aug 7 crib, 10 §4): *compiler contracts move from
+inferred-and-implicit to declared-certified-pinned — layouts (done:
+the interop ABI), schedules (starting: certification), X (specified:
+semantics).* The cross-cut's fuller twelve-theme decomposition maps
+onto T1–T9 and is preserved in the review's working notes.
 
 ## 3. The vision, as a narrative
 
@@ -267,26 +283,35 @@ the stated destination beyond every current roadmap.
 
 ## 4. The state of the union (FACTs, 2026-08-24)
 
-- **Landed/measured:** scheduler transpose (PR 47; 25× at 16k rules);
-  trs rungs 1–40 (PRs #108–#158; all-AOT invariant; Toooba at Verilator
-  parity; internal corpus byte-exact, zero known parity divergences —
-  07); BVI-via-Verilator v5 as-built; reset-sequence + two-state-z +
-  verilator timing arcs (iverilog fully green; every verilator failure
-  named); ATF rules evaluator (fork PR 68/93 lineage); IType/IExpr
-  substrates
-  (measured, landing pending CI); semantic port properties (PRs
-  #1059/#1060, open upstream; default-flip gated per 02 §2);
-  prim-fixes + codegen stack-overflow fixes; wiretypemap/porttypes
-  scaling; build determinism (GHC findBest patch in validation;
-  Warmup).
+- **Landed/measured:** scheduler transpose (PR 47; 25× at 16k rules;
+  now upstream PR 1087); trs rungs 1–40 (PRs #108–#158; all-AOT
+  invariant; Toooba at Verilator parity; internal corpus byte-exact,
+  zero known parity divergences — 07), with the four #158-gating
+  review findings closed and pushed 2026-08-24 (05 §2); BVI-via-
+  Verilator v5 as-built; reset-sequence + two-state-z + verilator
+  timing arcs at their final ledger (iverilog at the environment
+  floor; verilator failures all named, none masked; the
+  disable-at-$finish emission and the hardware-model-line ruling —
+  05 §4); '0/'1 classic literals + deriving-via landed on the fork's
+  main (upstream route still open — 09 C.19); ATF rules evaluator
+  (fork PR 68/93 lineage); IType/IExpr substrates (measured, landing
+  pending CI); semantic port properties (PRs #1059/#1060, open
+  upstream; default-flip gated per 02 §2); staged-flow upstream PRs
+  1092–1094 (with -elab-only ruled transitional until the phase
+  split); prim-fixes + codegen stack-overflow fixes;
+  wiretypemap/porttypes scaling; build determinism (GHC findBest
+  patch in validation; Warmup).
 - **Designed, awaiting decisions or prerequisites:** VTA (blocked on
   CtxRed P1); CtxRed retirement plan; BVI fallback/soft-IP; SplitPorts
   restructure (never compiled — gate on compile + bytes + capability
   matrix); pattern-match checker stack (design settled; deployment
   DEFERRED — 04 §5, 10 §5); ValidateBits (v3, mostly ratified);
-  HuffmanBits generic deriving (gate (a)/(b) NEEDS-RAVI); solver
+  HuffmanBits generic deriving (gate (a)/(b) NEEDS-RAVI); the
+  coverage program (proposal in hand — 05 §6); the SV-interop ABI
+  doctrine (ratified internally, upstream trajectory — 02 §8); solver
   strategy (policy ceiling NEEDS-RAVI); notes/phase-index refactor;
-  bluehs sim scripting; LSP architecture.
+  bluehs sim scripting; LSP architecture (operative design settled at
+  the Aug 7 session; Unison terms proposed, not agreed — 06 §2).
 - **The two RFCs** carry the structural program; their §12/§15 open
   questions plus Codex's unadopted objections are tracked in 08/09.
 - **Known process debt:** the toolchain continuation draft is to be

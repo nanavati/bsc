@@ -124,12 +124,34 @@ preview, local-build** — with cherry-picking onto release branches to
 stay current despite upstream review latency, stacked PRs to decompose
 large branches, and **manifest-based branching** with a materialized
 preview branch as the testing baseline (a manifest tool exists and is
-being improved). DECISION (Aug 13): non-upstreamed features are managed
-via external scripts, never core-compiler modifications; the
-non-upstreamed lines of work in each release get documented. A compiler
-freeze for tape-out is planned. This is T2/T9 arriving through
-practice: the release manifests are the productized ancestor of 01's
-transitive-manifest program.
+being improved). The preview branch's mechanics are now concrete
+(Slack ledger, 10 §2): upstream head + the accumulated upstream-PR
+subset + optional cherry-picks, assembled by a git-worktree workflow
+(one named serialization instance is the main inter-PR conflict
+source, reconciled by a small patch set); 38 upstream PRs rode the
+previous release and 21 have since changed, so requalification
+infrastructure is being built. DECISION (Aug 13): non-upstreamed
+features are managed via external scripts, never core-compiler
+modifications; the non-upstreamed lines of work in each release get
+documented. A compiler freeze for tape-out is planned, with the
+freeze-branch structure ruled (Aug 22): mainline = the freeze + bluehs
++ performance fixes; a branch off that tip carries core trs; a branch
+off the trs tip carries BVI-via-Verilator — BVI may fold into mainline
+trs, and mainline trs is not expected in mainline bsc soon. Repo
+governance got a sorting rule (the thunk-tank founding record, 10 §5):
+compiler changes go to the public fork (nothing confidential there —
+largely the repo's reason to exist), open-tool changes go to public
+per-project forks, production-integrated code goes to the monorepo;
+the longer-horizon document now lives as a repo file (the Google Doc
+is frozen). This is T2/T9 arriving through practice: the release
+manifests are the productized ancestor of 01's transitive-manifest
+program.
+
+**The compile-cost number of record** (Aug 20 dashboard): over 30
+days, the core Bluespec compile action was 209 hours = **50.3% of the
+merge-queue critical path** (plus ~1.9% from the largest single
+library and ~4.8% from the VCS link step) — the hard economics behind
+the compile-perf priority and the Aug 17 dictionary-lifting urgency.
 
 **Hardware arcs the compiler serves.**
 - *CSRs*: the RDL flow generates **typed Bluespec and SystemVerilog
@@ -199,7 +221,33 @@ transitive-manifest program.
   tension metric; DEF/LEF parsing at scale; grid heat maps; a combined
   memory bank as the validation case), plus bluetcl+JSON bus-type
   extraction for the PD team — the concrete descendant of the Mar 20
-  "fast hardware-quality feedback loop" requirement.
+  "fast hardware-quality feedback loop" requirement. The other
+  descendant is the **oss_synth estimation flow** (the yosys-abc-asap7
+  working doc, 10 §5): license-free complexity metrics (cell count,
+  logic depth) per synthesis boundary via pinned Yosys/ABC with ASAP7
+  liberty mapping, auto-generated per-module targets, composition by
+  aspect — now in first real cross-team use (a datapath estimate
+  quoted in another team's channel; runs on laptops with no vendor
+  licenses), with an open PR stack and honest known-gaps list.
+- *Portfolio instruments* (the inventory arc, 10 §4): capacity math of
+  record (~2.1 effective FTE across the compiler pool), demand
+  receipts from a regenerable tracker sweep (96 upstream issues
+  touched, 36 internal, 8 live in-tree workarounds), shipped rows
+  becoming standing services so ranking allocates residual capacity,
+  and the four-axis attention-denominated scoring with its "decisions,
+  not projects" table — including the **trs ownership clock**
+  (bus-factor-one on a dependency-spine root) and the smoke-bias list
+  of unstaffed demand.
+- *b2v ABI doctrine deployment*: the SV-interop ABI doctrine (02 §8)
+  is ratified and enforced internally over bsc emissions; the "b2v is
+  almost an ABI for Bluespec" observation was made in-room at the
+  Aug 10 portfolio meeting, three days before the doctrine note.
+- *Bluespec, Inc. engagement paper*: an MSA + SoW draft exists
+  (Apr 2026; open-source development support on a collaborative
+  individual-contributor model — PR review/approval, release
+  engineering, regression-testing improvement, named upstream staff;
+  the signature path now runs through Erez) — the concrete instrument
+  behind §4.4's review program decision.
 
 **Organizational context that bounds the design work.** Compiler-team
 scope formally expanded beyond the single compiler (tools &

@@ -167,10 +167,18 @@ replacement approach is proposed next.
   literature before designing; VTA followed it (specified/generalized
   binders, deterministic source order, no explicit-forall
   prerequisite).
-- **Deriving via + '0/'1 classic literals**: implemented in the trs
-  compat port, upstream-PR-shaped; landing route NEEDS-RAVI. The
+- **Deriving via + '0/'1 classic literals**: LANDED on the fork's main
+  (observed by the lexer benchmarking arc, 2026-08; the internal route
+  is settled — the upstream route remains open, 09 C.19). The
   unsized-bit-literal wishlist item of the March internal sync is the
   recorded origin (10 §5).
+- **Stdlib coherence-law enforcement** (DECISION, 2026-08-20): the
+  SMaybe Traversable instance was REMOVED rather than gated — it
+  violated the foldMap/traverse coherence law (Foldable and Traversable
+  disagreed on whether an invalid SMaybe contains an element); "if you
+  are using SMaybe you should decide what to put in the payload"
+  (the gated form exists separately). The law-driven removal is the
+  library-level face of this document's coherence discipline.
 - ValidateBits carries a recorded internal feature ask and is already
   deployed as a production validation pattern (07 §5) — see 05.
 - **Small-project inventory** (ramp menu, 10 §6): first-class ===
@@ -223,6 +231,14 @@ document's §§2–4 programs; recorded here because it grounds them:
   invariant-checking policy to be agreed upstream) but was subsequently
   FALSIFIED — see §4; the purity and invariant-checking commitments
   survive the falsified mechanism.
+- **Measurement correction on the typecheck PRs** (Slack ledger,
+  10 §2): the fork's expandSyn-at-construction + apSubM-sharing pair
+  went upstream as PR 1088, but measured separately the trio showed
+  **no definitive performance benefit** (the earlier numbers were
+  confounded by the absence of upstream 925's O(n²)-dictionaries fix);
+  the third piece (the apSub split) was not included upstream, and
+  re-collection is planned. A live instance of the methodology law:
+  every load-bearing number needs a raw artifact and a clean baseline.
 - **Numeric-engine motivation** (tour): today's two-level system
   (handcrafted simplifying instances, then thumbs-up/down SMT) cannot
   learn (knows a+a=2a, not a+2a=3a) — the operative wish behind §3's
