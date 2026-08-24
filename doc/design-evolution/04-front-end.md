@@ -140,10 +140,13 @@ FV/HashNote/() instances delete both cross-phase taxes.
 RESOLUTIONS: the session-context program of 01 §3 owns all lifetimes
 here; heap identity stays out of durable hashes ("comparison
 fingerprint"); dense-substitution is stated as the weaker bound with a
-benchmark; the typechecker substitution remedy (persistent union-find
-binding forest, resolve-on-read, apSub demoted to local substitutions)
-is the same change-the-bank pattern — gated on the one cost-centre
-profile of the statement-count quadratic reproducer before surgery.
+benchmark. FALSIFIED (Ravi, 2026-08-24): the typechecker substitution
+remedy sketched as a persistent union-find binding forest did not pan
+out — most type variables are dropped quickly and do not form alias
+chains that union-find would help. The statement-count quadratic
+remains real and unremedied; the standing rule (one cost-centre
+profile of the reproducer before any surgery) now gates whatever
+replacement approach is proposed next.
 
 ## 5. Language-surface work (settled shapes)
 
@@ -213,10 +216,12 @@ document's §§2–4 programs; recorded here because it grounds them:
 - **Sequencing confirmation**: strictness annotations plus ground-type
   interning are being sequenced specifically to enable dictionary
   lifting, whose fix is flagged as the release-blocking soundness item
-  — independently matching §2's hard sequencing facts. The union-find
-  binding-forest remedy of §4 is likewise on the meeting record, with
+  — independently matching §2's hard sequencing facts. A union-find
+  typechecker architecture was proposed in the same meeting arc (with
   "purity essential for tooling compatibility" and a systematic
-  invariant-checking policy to be agreed upstream.
+  invariant-checking policy to be agreed upstream) but was subsequently
+  FALSIFIED — see §4; the purity and invariant-checking commitments
+  survive the falsified mechanism.
 - **Numeric-engine motivation** (tour): today's two-level system
   (handcrafted simplifying instances, then thumbs-up/down SMT) cannot
   learn (knows a+a=2a, not a+2a=3a) — the operative wish behind §3's

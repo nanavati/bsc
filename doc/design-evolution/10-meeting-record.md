@@ -188,8 +188,10 @@ Folded into the area documents with citations; consolidated here:
   item (Aug 17) — matching the KB's lift-dictionaries hold (04 §2).
 - **Union-find typechecker architecture** proposed (Aug 6) with "purity
   essential for tooling compatibility" and a systematic invariant-
-  checking policy to be agreed with upstream — the same remedy 04 §4
-  records from the KB.
+  checking policy to be agreed with upstream. SUPERSEDED (Ravi,
+  2026-08-24): the proposal did not pan out — most type variables are
+  dropped quickly and do not form alias chains that union-find would
+  help (04 §4).
 - **Pattern-match exhaustiveness checking deferred** pending testing
   and a rebase onto recent upstream (Aug 13); the implementation "fails
   specific hardware values" and needs a standalone test approach;

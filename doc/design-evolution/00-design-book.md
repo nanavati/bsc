@@ -300,3 +300,24 @@ Read 00 → 08 → the area documents you own. Every area document ends
 with its RESOLUTIONS and its NEEDS-RAVI items; 09 collects the latter.
 The KB remains the review surface: responses to any of this belong in
 the KB lane drafts, per the cross-agent protocol.
+
+**Editorial law** (adopted from the cross-cut doc-set analysis): a
+sentence belongs in this canonical set iff it would still be true and
+useful after every currently-open PR lands or dies; everything else is
+a pointer. Corollary exclusions, with destinations: status/bookkeeping
+ledgers (PR maps, seal counts, rung closures) stay in the KB lane
+drafts and PR bodies — these docs cite them by pointer and date, and
+carry only design *verdicts* extracted from them; the issue inventory
+becomes a machine-readable ownership map beside the book (Codex's
+issue → owning doc → gate → status proposal); KB process material stays
+in the protocol drafts; org/engagement/budget material stays in its own
+documents, with only the derived constraints imported (07); operational
+recipes and environment traps belong in the repo's INSTALL/DEVELOP/
+testsuite docs.
+
+**Recorded structural option** (NEEDS-RAVI, editorial): the same
+analysis recommends splitting 05 into two documents — trs-and-engines
+vs X/reset/multi-valued semantics — on the argument that the X
+program's conflicts are semantic and cross-engine rather than
+trs-internal. The current single-05 shape is kept for reference
+stability; split on your say-so.
