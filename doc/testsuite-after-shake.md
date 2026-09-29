@@ -2,7 +2,8 @@
 
 Should the testsuite follow the compiler onto Shake — the full weighing.
 
-**Status:** Analysis v1.0 — 2026-08-23 (Ravi Nanavati with Claude).
+**Status:** Analysis v1.1 — 2026-08-23, measured economics folded in
+2026-09-29 (Ravi Nanavati with Claude).
 Written as the decision-support expansion of
 `RFC-bsc-artifact-graph.md` §16, which answers this question in
 compressed, normative form (yes — conditional, sequenced, gated). This
@@ -12,6 +13,17 @@ hypothesis priced separately, the precedents on both poles, and the
 conditions under which the verdict flips. On any divergence, the
 RFC's current revision governs; this document argues, the RFC
 records. Not proposed upstream.
+v1.1 replaces the order-of-magnitude judgments with measured numbers
+(2026-09-29 session; full provenance in the KB record "bsc testsuite
+CI economics (measured)"): the cost baseline in §2, the enlarged null
+hypothesis in §3 (the invocation-cache wrapper is orchestrator-neutral),
+the measured asymmetry and cache economics in §6, the census first-cut
+in §7(b), and the revised now-list in §8. Two standing constraints
+adopted from that session: **run everything, always** (no path-based
+test scoping, no AI-scoped selection — pruning happens only by content
+identity, and the periodic uncached sweep is cache *verification*, not
+scoping), and verdicts key on the *input* closure (sim-output
+nondeterminism downstream of a trusted `.ba` is harmless).
 
 ---
 
@@ -63,6 +75,19 @@ Measured in-session (2026-08-23), the facts a decision rests on:
   diffsweep — the first differential population — already lives
   outside DejaGNU: the matrix has begun outgrowing the harness on
   its own.
+- **Cost** (measured 2026-09-29, from the harness's own per-command
+  timing in live CI): a full Ubuntu sweep is **17,328 CPU+SYS
+  seconds ≈ 4.8 core-hours** — verilator leg 9,547 s (55% of it the
+  verilator C++ builds of generated `.v`, even with ccache), main leg
+  7,780 s (codegen compiles 36%, Bluesim gen+link 34%; the measured
+  36-minute wall). The suite is CPU-bound (wall/(cpu+sys) ≤ 1.04 on
+  every heavy category), simulator *runs* are <5% of the work, and
+  the committed timing snapshot is ~6× stale against a current run.
+  One measured surprise: CI's ccache is **cross-run cold** at main's
+  push cadence (every observed "hit" is within-run duplication;
+  GitHub's cache eviction outpaces the weeks between main pushes) —
+  so these costs are effectively *uncached today*, and every caching
+  win priced below is additive to reality, not to a warm baseline.
 
 ## 3. The null hypothesis: what we get without migrating
 
@@ -76,17 +101,45 @@ and only one of them requires migration:
   and carry over unchanged. They capture the correctness-quality wins
   (order-insensitive comparison, naming-drift-immune Verilog
   comparison, machine-readable results) with zero migration risk.
-- **ccache works now** (bsc takes the C++ compiler from `CXX`), and
-  naming determinism raises its hit rate — no harness involvement.
+- **ccache works now** (bsc takes the C++ compiler from `CXX`; the
+  harness deliberately re-enables it) — but measurement demoted this
+  lane: on CI it is structurally cold across runs at main's push
+  cadence, and even warm it cannot touch the two dominant buckets
+  (the verilate step and links are outside ccache; `.v`-keyed build
+  caching is needed to skip them).
+- **The invocation-cache wrapper** (measured design, 2026-09-29) is
+  the null hypothesis's biggest addition: a content-addressed cache
+  behind the `$BSC`/`$BLUETCL`/PATH seams the harness already uses —
+  keys = source + imported-`.bo` closure + flags + per-component
+  compiler-source hashes; replay = outputs *plus byte-exact
+  stdout/stderr and exit code* (~51% of check call sites compare
+  captured compiler text); product-keyed simulator builds on
+  normalized `.v`/`.ba` bytes; verdict-skip on content identity;
+  sims and diffs otherwise always re-run. **Zero `.exp` edits, no
+  Shake, no compiler changes** — and it prices at ~4.3× mean work
+  reduction over the real commit stream, with roughly half of pushes
+  near-free. One compiler-side enabler wanted: a defined `.ba`
+  content digest (today the `.ba` unconditionally embeds the build's
+  git hash and the full flags record, so byte-identity across
+  compiler rebuilds is impossible by construction; `.bo` needs
+  nothing — it is already version-free and hash-chains its import
+  closure).
 - **Unit/property suites** over the cabalized library are a new,
   cabal-native population orthogonal to the corpus.
 
-What the null hypothesis **cannot** capture is exactly the graph-only
-set: artifact-grain cutoff, cross-cell leg sharing, sound verdict
-caching, and the deletion of the execution layer. The honest framing
-for everything in §4: **the migration is justified only by the
-graph-only wins.** An argument for migration that rests on checker
-quality counts value the null hypothesis already banks.
+What the null hypothesis **cannot** capture is the graph-only
+residue, now measurable: the per-pass seam splits (a pre-schedule
+elaboration node; genC/genVerilog split out of the fused codegen
+invocation) that take the wrapper's ~4.3× to the full ~7.4× — the
+fused invocation is the wrapper's ceiling, because a backend-only
+change still re-runs FE+elab+sched inside every codegen call; native
+verdict nodes and cross-cell leg sharing as the matrix grows (~9–13×
+marginal per added cheap leg); per-check scheduling past ~50 cores;
+and the deletion of the execution layer. The honest framing for
+everything in §4: **the migration is justified only by the graph-only
+wins** — and the wrapper raises the bar for what counts as one. An
+argument for migration that rests on checker quality or on plain
+invocation caching counts value the null hypothesis already banks.
 
 ## 4. Pros
 
@@ -241,14 +294,40 @@ gap widens without bound. Against that: C1, C2, and C8 are one-time;
 C3 is routed by the premise; C4, C5, and C7 are design constraints,
 paid in the design document rather than recurring. The one genuinely
 permanent con is C6 — audits and manifest upkeep never end. So the
-steady-state comparison is C6's overhead against P1–P3's savings; at
-~48k checks with the differential population growing, one avoided
-full sweep plausibly pays for a long period of audit overhead
-(order-of-magnitude judgment, to be replaced by census numbers).
+steady-state comparison is C6's overhead against P1–P3's savings —
+now measured rather than judged (2026-09-29; provenance in the KB
+record "bsc testsuite CI economics (measured)"):
+
+- A full sweep costs **4.8 core-hours**; today every push pays 100%.
+- Priced over the last 500 real commits with per-pass keys and early
+  cutoff (`re-run = S_own + f·S_down`): mean per-push re-run **16%
+  on MatX main (~6×) and 13.8% on the development-stream lineage
+  (~7×)** at f=5% of downstream artifacts changing (4.3–4.9× at a
+  pessimistic f=25%). Per component at f=5%: typechecker ~30%,
+  evaluator+scheduler at today's `.ba` seam ~20% (scheduler alone
+  ~11% once a pre-schedule node exists), Verilog backend ~6% split
+  vs ~19% fused (the genC/genVerilog split's measured payoff),
+  C backend ~5%. The scheduler carries an f-floor from its ~71
+  textual schedule goldens plus 262 schedule-dump checks.
+- The staging ladder: `.bo`/`.ba` caching alone is the trap rung
+  (~1.3× — the money is downstream, in simulator builds); the
+  orchestrator-neutral wrapper (§3) is ~4.3×; the compiler seam
+  splits take it to ~7.4×; each added cheap matrix leg is ~9–13×
+  cheaper marginal than a standalone sweep. Parallelism, measured,
+  is *not* where the win is: directory-grain LPT already tracks
+  work/cores to ~20–40 cores, and even infinite cores floor at ~3
+  minutes (the longest single compile) — a ~12× ceiling that
+  caching exceeds on the median push.
+- C6's price in these units: one uncached audit sweep is ~5
+  core-hours — repaid by a handful of cached pushes.
+
 One honest floor: when the compiler change *does* affect emitted
 artifacts, the compile sweep itself still re-runs — cutoff saves the
 legs behind unchanged artifacts, never the cost of discovering which
-artifacts changed.
+artifacts changed. Front-end changes are therefore the
+cache-resistant class (S_own ≈ 26% before any downstream effect),
+and the realized win breathes with the roadmap: typechecker-heavy
+phases see ~3–5×, backend/scheduler phases ~8–15×.
 
 **The precedents split — and one variable explains the split.**
 Bazel is the at-scale existence proof for tests-as-graph-nodes:
@@ -277,7 +356,19 @@ That is why "GHC didn't do this" does not settle the question here.
   is dominantly non-hermetic *and* leg sharing turns out thin, P1–P3
   collapse and the case reduces to P4–P6 comfort wins — not worth
   C1's risk. (The census is cheap and orchestrator-neutral: run it
-  first.)
+  first.) *First measured cut (2026-09-29): hostile looks unlikely on
+  cost weight.* The work is dominated by compiles and simulator
+  builds — hermetic-shaped by construction — while sim runs are <5%;
+  the enumerated never-memoize populations are small and principled
+  (the staleness-machinery tests that exercise `-u` itself, ~24
+  touch/sleep sites; timeout-raced sims; the `Environment`
+  date/epochTime tests, whose splices bsc injects unconditionally;
+  `$random`-divergent sims already handled by per-simulator goldens).
+  Two key-completeness hazards are named for the manifest schema:
+  `BSC_OPTIONS` is read at module init and bypasses argv, and `-cpp`
+  include files are invisible to the dependency scanner. What remains
+  open is the per-check class *assignment* and the manifest schema
+  itself.
 - **(c) The matrix stops growing.** The asymmetry argument (§6) is a
   bet on trajectory; a frozen matrix weakens it to a wash.
 - **(d) C4 proves unresolvable.** If upstream will not accept any
@@ -298,17 +389,29 @@ dual-run equivalence, with the cacheability discipline in force from
 the first migrated check.** The trigger is "the engine landed," not
 a date.
 
-Independent of the trigger, three things are worth doing now because
-they are orchestrator-neutral and de-risk both worlds: the S1
-checker tools and structured-verdict emitter (the semantics layer
-either way), the **cacheability census** (it prices P3 and arms flip
-condition b), and the **stable check-ID scheme** (the S1 emitter and
-the migration both need it — design it once). The mechanism-level
-design document (rule vocabulary, verdict schema, `bsc-test` shape
-under the never-link rule, the `.exp` translation plan, the
-check-declaration format answering C4) is the next artifact after
-this one; it can precede the trigger, since the revised staircase's
-S3 is "a rules file over the existing engine."
+Independent of the trigger, the orchestrator-neutral now-list — each
+item de-risks both worlds — is, in measured-value order:
+
+1. **The invocation-cache wrapper** (§3, §6): ~4.3× mean suite work,
+   half of pushes near-free, no `.exp` edits, ~2–4 person-weeks.
+   Its soundness net is the nightly uncached run — the same audit C6
+   requires forever, built early.
+2. **The `.ba` content digest** (skip the embedded version string,
+   canonicalize the serialized flags; `-remap-path-prefix` already
+   covers paths): the one small compiler change the wrapper wants,
+   and the artifact-identity seam every later rung reuses.
+3. **The S1 checker tools and structured-verdict emitter** (the
+   semantics layer either way) and the **stable check-ID scheme**
+   (the S1 emitter and the migration both need it — design it once).
+4. **The cacheability census completion** (it prices P3 and arms flip
+   condition b): the cost-weighted first cut is done (§7b); the
+   per-check class assignment and manifest schema remain.
+
+The mechanism-level design document (rule vocabulary, verdict schema,
+`bsc-test` shape under the never-link rule, the `.exp` translation
+plan, the check-declaration format answering C4) is the next artifact
+after this one; it can precede the trigger, since the revised
+staircase's S3 is "a rules file over the existing engine."
 
 ## 9. Relation to prior records
 
@@ -323,5 +426,11 @@ S3 is "a rules file over the existing engine."
 - External review (Codex, 2026-08-23, KB lane) — the cacheability
   and gate-ordering objections adopted into RFC v0.21 and priced
   here as C6/C8 and P3's scope condition.
+- "KB: bsc testsuite CI economics (measured)" (2026-09-29) — the
+  measured record behind v1.1's numbers: per-command CI timing, the
+  component re-run matrix, the commit-stream pricing on both
+  lineages, the ccache cold-cache finding with its retraction trail,
+  and the in-tree mechanics audit (chokepoints, determinism,
+  `.bo`/`.ba` serialization, never-memoize populations).
 - The KB lane draft "KB: bsc artifact graph" — the session-entry
   history behind all of the above.
