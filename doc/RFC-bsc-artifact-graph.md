@@ -1626,7 +1626,7 @@ this audit.
 **Measured economics** (2026-09-29 session; provenance, methods, and
 the correction trail in the KB record "bsc testsuite CI economics
 (measured)"; decision-support expansion in
-`testsuite-after-shake.md` v1.1):
+`testsuite-after-shake.md` v1.2):
 
 - *Baseline.* A full Ubuntu sweep costs **17,328 CPU+SYS s ≈ 4.8
   core-hours** (verilator leg 9,547 s, 55% of it verilator C++
