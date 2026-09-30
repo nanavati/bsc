@@ -2,9 +2,9 @@
 
 Should the testsuite follow the compiler onto Shake — the full weighing.
 
-**Status:** Analysis v1.2 — 2026-08-23; measured economics folded in
-2026-09-29; sequencing revised to engine-first 2026-09-30 (Ravi
-Nanavati with Claude).
+**Status:** Analysis v1.3 — 2026-08-23; measured economics folded in
+2026-09-29; sequencing revised to engine-first 2026-09-30; adversarial
+review round folded in 2026-09-30 (Ravi Nanavati with Claude).
 Written as the decision-support expansion of
 `RFC-bsc-artifact-graph.md` §16, which answers this question in
 compressed, normative form (yes — conditional, sequenced, gated). This
@@ -40,6 +40,32 @@ every compile entry point (not only the `-u` driver), and coverage
 through the link stages. The harness-side verdict layer (verdict-skip,
 sim-run skip) is permanent in every ordering; only the wrapper's
 interposition shim was ever disposable.
+v1.3 (2026-09-30) folds in the adversarial review round (ChatGPT; KB
+draft "REVIEW REQUEST — bsc engine-first proposal (adversarial)") and
+the delivery planning it produced. Two review blockers become
+requirements: a **recursive cache-bypass channel** (non-cacheability
+must propagate downward — a performance or staleness test that re-runs
+while its inner bsc invocation hits the cache measures a lookup, not
+the compiler; "zero harness change" is corrected to "zero `.exp` edits
+plus a bypass channel for the never-memoize populations", and uncached
+audits must bypass every cache layer), and **`.ba`
+digest-vs-loadability** (a content digest changes equality, not the
+loader's hard version check — cross-build `.ba` reuse needs an
+envelope/payload rematerialization policy or a repriced conservative
+cross-version miss). Also adopted: the engine gives artifact-grain
+dedup and cutoff to the *un-migrated* harness, so P1–P2's
+"impossible from outside" softens to "impossible without the engine";
+economics labeled modeled-vs-measured with the audit cadence priced
+rather than asserted; the fingerprint unit fixed as three producer
+components in private cabal sublibraries (.bo/.ba, .v, .cxx/.h over
+supporting components; Ravi); the baseline pinned to the **B0
+manifest** (bsc.cabal + cabal.project on release-devel-B0 —
+cabalization with thin executables already landed); and the delivery
+vehicle recorded (ChatGPT's "bsc orchestration and rebuild
+implementation plan", Revision 2, with this round's corrections:
+the library build is `.bo`-only so the `.ba` migration gates backend
+reuse, not the library win; the legacy port-properties option is
+`-semantic-ports-comment`, comment-only).
 
 ---
 
@@ -174,7 +200,13 @@ invocation caching counts value the null hypothesis already banks —
 and after the engine's rung 2, plain invocation caching is banked
 with **no harness change at all**: the engine caches its own
 invocations, subsuming the wrapper's compile leg at reported-closure
-soundness and finer grain (§8's revised sequencing).
+soundness and finer grain (§8's revised sequencing). The review round
+(v1.3) extends this attribution: two DejaGNU cells requesting
+identical nodes from the internal engine get cross-cell dedup and
+artifact cutoff *without migration* — so P1–P2's exclusivity claims
+below read "impossible without the engine", not "impossible outside
+a migrated harness", and the migration's own case rests on verdict
+residence, generated legs, scheduling, and layer deletion.
 
 ## 4. Pros
 
@@ -186,8 +218,9 @@ off every Bluesim leg at byte-identical cxx; the alpha-equivalence
 comparator extends the cutoff past naming drift. Today a one-phase
 compiler change re-executes all ~48k checks; under the graph it
 re-runs the compile sweep plus only the genuinely affected legs.
-This requires the orchestrator to *see* artifacts as nodes —
-structurally impossible from DejaGNU's position outside the graph.
+This requires an engine that *sees* artifacts as nodes — impossible
+without the internal engine; available to the un-migrated harness
+once it consumes that engine (§3, v1.3).
 
 **P2 — Cross-cell leg sharing.** Differential cells share legs:
 trs-vs-Bluesim shares the `.ba`; BVI-via-Verilator vs the oracle
@@ -352,7 +385,14 @@ record "bsc testsuite CI economics (measured)"):
   is *not* where the win is: directory-grain LPT already tracks
   work/cores to ~20–40 cores, and even infinite cores floor at ~3
   minutes (the longest single compile) — a ~12× ceiling that
-  caching exceeds on the median push. (v1.2 re-mapping: under
+  caching exceeds on the median push of the development-stream
+  lineage (MatX main's median re-run is 20%; and the comparison is
+  work-cut against a wall ceiling — the two compose rather than
+  compete). Labeling note (v1.3): the per-push percentages are
+  *modeled* on measured timings (max-bucket pricing slightly
+  under-prices multi-component commits versus the union of their
+  cones; commits proxy pushes); the timings, counts, and
+  determinism facts are measured. (v1.2 re-mapping: under
   engine-first sequencing the wrapper rung's compile-and-product
   caching is delivered by the engine itself — same keys, reported
   rather than inferred, finer than invocation grain — and
@@ -442,28 +482,47 @@ it, and let the testsuite be the engine's second consumer.
    `BSC_OPTIONS` contribution, BDPI `.c` files), reported from inside
    rather than inferred from outside; and the flag-partitioning
    table. The hard part of wrapper and engine alike; everything later
-   consumes it.
+   consumes it. The fingerprint unit is fixed (v1.3): three producer
+   components as private cabal sublibraries — .bo/.ba (coupled
+   production), .v, and .cxx/.h — over supporting components, with
+   per-component fingerprints derived from the cabal component graph
+   and embedded in the shipped compiler; never a git revision or GHC
+   ABI hash.
 2. **The `-u` replacement with a persistent, invocation-wide cache**
-   (RFC §3 with the v0.23 requirements), proven on bsc's own build
-   first — the low-risk deployment that hardens keys where failures
-   are obvious. The testsuite analysis adds three requirements to the
-   driver spec: probes under **every** compile entry point (the
-   suite's compile lines mostly do not use `-u`); **byte-identical
-   diagnostic replay** on hits (~51% of check sites compare captured
-   stdout — a hit may not print differently from the miss that
-   populated it); and coverage **through the link stages** (`bsc
-   -e`'s C++ compile+link and the simulator builds it spawns are the
-   two largest measured buckets — a compile-only cache strands
-   them). With these, the un-migrated suite inherits compile/link
-   caching the day the engine lands, with zero harness change.
+   (RFC §3 with the v0.23–v0.24 requirements), proven on bsc's own
+   build first — the low-risk deployment that hardens keys where
+   failures are obvious, and a build already half-prepared: the **B0
+   manifest** (bsc.cabal + cabal.project on release-devel-B0) ships
+   the cabalized tree with executables as thin clients, so the
+   packaging delta is the sublibrary carve, and the library build is
+   `.bo`-only, so its selective reuse needs no `.ba` format work.
+   The testsuite analysis adds four requirements to the driver spec:
+   probes under **every** compile entry point (the suite's compile
+   lines mostly do not use `-u`); **byte-identical diagnostic
+   replay** on hits, including the *merged* stdout/stderr transcript
+   as captured (~51% of check sites compare captured text; separately
+   stored streams can replay a different interleaving); coverage
+   **through the link stages** (`bsc -e`'s C++ compile+link and the
+   simulator builds it spawns are the two largest measured buckets —
+   a compile-only cache strands them); and a **recursive cache-bypass
+   channel** carrying test intent, honored by every cache layer — a
+   performance or staleness test that re-runs over a silently cached
+   inner invocation measures a lookup, not the compiler. With these,
+   the un-migrated suite inherits compile/link caching the day the
+   engine lands, with no `.exp` edits — the never-memoize populations
+   additionally need the bypass wiring.
 3. **The harness verdict layer**: verdict-skip and sim-run skip on
    input-closure identity, keyed by engine-native identities — the
    residue no compiler-side engine can subsume (the compiler cannot
    know what a check *means*), permanent in every ordering, thin once
    items 1–2 exist, and native verdict nodes after any migration. Its
-   soundness net stays the nightly uncached sweep — the same audit C6
-   requires forever, built early, now mechanized by diffing input
-   manifests against traced file accesses.
+   soundness net stays the periodic uncached sweep — the same audit
+   C6 requires forever, built early, now mechanized by diffing input
+   manifests against traced file accesses, with its **cadence priced
+   against total traffic** rather than asserted (one full audit costs
+   a sweep; at main-only cadence a daily audit would cost more than
+   caching saves — PR/dev traffic sets the rate), and bypassing
+   *every* cache layer, not just verdict lookup.
 4. **The S1 checker tools and structured-verdict emitter** (the
    semantics layer either way) and the **stable check-ID scheme**
    (the S1 emitter and the migration both need it — design it once).
@@ -508,5 +567,15 @@ staircase's S3 is "a rules file over the existing engine."
   `.bo`/`.ba` serialization, never-memoize populations); its
   2026-09-30 addendum records the engine-first sequencing decision
   behind v1.2.
+- "KB: REVIEW REQUEST — bsc engine-first proposal (adversarial)"
+  (2026-09-30) — ChatGPT's adversarial review round (two blockers
+  adopted; economics relabeling; attribution correction; engine
+  scorecard additions) and the response blocks recording the
+  B0-manifest baseline, the resolved legacy option, and the
+  `.bo`-only library path.
+- "bsc orchestration and rebuild implementation plan", Revision 2
+  (ChatGPT; native Google Doc, Markdown copy in Drive, full Revision 1
+  text in the review-request draft) — the delivery vehicle of record
+  for the engine-first sequence, read with this round's corrections.
 - The KB lane draft "KB: bsc artifact graph" — the session-entry
   history behind all of the above.
