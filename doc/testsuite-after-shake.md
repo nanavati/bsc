@@ -2,8 +2,9 @@
 
 Should the testsuite follow the compiler onto Shake — the full weighing.
 
-**Status:** Analysis v1.1 — 2026-08-23, measured economics folded in
-2026-09-29 (Ravi Nanavati with Claude).
+**Status:** Analysis v1.2 — 2026-08-23; measured economics folded in
+2026-09-29; sequencing revised to engine-first 2026-09-30 (Ravi
+Nanavati with Claude).
 Written as the decision-support expansion of
 `RFC-bsc-artifact-graph.md` §16, which answers this question in
 compressed, normative form (yes — conditional, sequenced, gated). This
@@ -24,6 +25,21 @@ test scoping, no AI-scoped selection — pruning happens only by content
 identity, and the periodic uncached sweep is cache *verification*, not
 scoping), and verdicts key on the *input* closure (sim-output
 nondeterminism downstream of a trusted `.ba` is harmless).
+v1.2 (2026-09-30) revises the sequencing, not the analysis: given the
+settled direction that bsc's own orchestration moves to Shake or an
+equivalent (RFC §3/§11), the engine — scoped as the `-u` replacement
+with a persistent, invocation-wide cache — is built first and proven
+on bsc's own build, and the §3 wrapper is reclassified from
+recommended first move to **contingency**. The identity layer (`.ba`
+content digest, the input manifest, flag partitioning) is unchanged
+in content but moves from wrapper infrastructure to the engine's
+first milestone. Three engine requirements surfaced by testsuite
+analysis are recorded here (§3, §8) and normatively in RFC v0.23 §3:
+byte-identical diagnostic replay on cache hits, cache probes under
+every compile entry point (not only the `-u` driver), and coverage
+through the link stages. The harness-side verdict layer (verdict-skip,
+sim-run skip) is permanent in every ordering; only the wrapper's
+interposition shim was ever disposable.
 
 ---
 
@@ -107,8 +123,9 @@ and only one of them requires migration:
   cadence, and even warm it cannot touch the two dominant buckets
   (the verilate step and links are outside ccache; `.v`-keyed build
   caching is needed to skip them).
-- **The invocation-cache wrapper** (measured design, 2026-09-29) is
-  the null hypothesis's biggest addition: a content-addressed cache
+- **The invocation-cache wrapper** (measured design, 2026-09-29;
+  since v1.2 the *contingency*, not the first move — §8) is the null
+  hypothesis's biggest addition: a content-addressed cache
   behind the `$BSC`/`$BLUETCL`/PATH seams the harness already uses —
   keys = source + imported-`.bo` closure + flags + per-component
   compiler-source hashes; replay = outputs *plus byte-exact
@@ -123,7 +140,21 @@ and only one of them requires migration:
   git hash and the full flags record, so byte-identity across
   compiler rebuilds is impossible by construction; `.bo` needs
   nothing — it is already version-free and hash-chains its import
-  closure).
+  closure). Two soundness notes outlive the wrapper (v1.2): the
+  process boundary it caches at is itself a controlled-effect
+  boundary — `(binary, argv, env, files read) → (stdout, exit, files
+  written)`, kernel-enforced and mechanically auditable by tracing
+  file accesses on misses (the fsatrace discipline Shake's own lint
+  mode uses) — which is how *any* cacher polices the tools it shells
+  out to; and its weakest keys (`BSC_OPTIONS`, `-cpp` closures, BDPI
+  `.c` files) are exactly the inputs only the compiler can report,
+  which is why the **input manifest** (RFC v0.23 §3) belongs in bsc
+  regardless of orchestrator — reported closures beat inferred ones.
+  One trap named while pricing alternatives: a graph orchestrator
+  mounted *above* DejaGNU, scheduling whole directories, is a
+  strictly worse cache than invocation grain below it —
+  directory-grain keys over-invalidate away most of the measured
+  win, so "wrap DejaGNU in Shake" is not a stepping stone.
 - **Unit/property suites** over the cabalized library are a new,
   cabal-native population orthogonal to the corpus.
 
@@ -139,7 +170,11 @@ and the deletion of the execution layer. The honest framing for
 everything in §4: **the migration is justified only by the graph-only
 wins** — and the wrapper raises the bar for what counts as one. An
 argument for migration that rests on checker quality or on plain
-invocation caching counts value the null hypothesis already banks.
+invocation caching counts value the null hypothesis already banks —
+and after the engine's rung 2, plain invocation caching is banked
+with **no harness change at all**: the engine caches its own
+invocations, subsuming the wrapper's compile leg at reported-closure
+soundness and finer grain (§8's revised sequencing).
 
 ## 4. Pros
 
@@ -317,7 +352,12 @@ record "bsc testsuite CI economics (measured)"):
   is *not* where the win is: directory-grain LPT already tracks
   work/cores to ~20–40 cores, and even infinite cores floor at ~3
   minutes (the longest single compile) — a ~12× ceiling that
-  caching exceeds on the median push.
+  caching exceeds on the median push. (v1.2 re-mapping: under
+  engine-first sequencing the wrapper rung's compile-and-product
+  caching is delivered by the engine itself — same keys, reported
+  rather than inferred, finer than invocation grain — and
+  verdict-skip becomes the harness's one thin deliverable; the ~4.3×
+  price survives as the value of that pair, whoever implements it.)
 - C6's price in these units: one uncached audit sweep is ~5
   core-hours — repaid by a handful of cached pushes.
 
@@ -389,23 +429,57 @@ dual-run equivalence, with the cacheability discipline in force from
 the first migrated check.** The trigger is "the engine landed," not
 a date.
 
-Independent of the trigger, the orchestrator-neutral now-list — each
-item de-risks both worlds — is, in measured-value order:
+Independent of the trigger, the now-list — revised v1.2 to
+engine-first, superseding v1.1's wrapper-first ordering: with the
+engine direction settled, build *toward* rung 2 rather than around
+it, and let the testsuite be the engine's second consumer.
 
-1. **The invocation-cache wrapper** (§3, §6): ~4.3× mean suite work,
-   half of pushes near-free, no `.exp` edits, ~2–4 person-weeks.
-   Its soundness net is the nightly uncached run — the same audit C6
-   requires forever, built early.
-2. **The `.ba` content digest** (skip the embedded version string,
-   canonicalize the serialized flags; `-remap-path-prefix` already
-   covers paths): the one small compiler change the wrapper wants,
-   and the artifact-identity seam every later rung reuses.
-3. **The S1 checker tools and structured-verdict emitter** (the
+1. **The identity layer, as the engine's first milestone**: the `.ba`
+   content digest (skip the embedded version string, canonicalize the
+   serialized flags; `-remap-path-prefix` already covers paths); the
+   **input manifest** — bsc reporting the true closure it read
+   (sources and imported `.bo`s, the post-`-cpp` file set, the
+   `BSC_OPTIONS` contribution, BDPI `.c` files), reported from inside
+   rather than inferred from outside; and the flag-partitioning
+   table. The hard part of wrapper and engine alike; everything later
+   consumes it.
+2. **The `-u` replacement with a persistent, invocation-wide cache**
+   (RFC §3 with the v0.23 requirements), proven on bsc's own build
+   first — the low-risk deployment that hardens keys where failures
+   are obvious. The testsuite analysis adds three requirements to the
+   driver spec: probes under **every** compile entry point (the
+   suite's compile lines mostly do not use `-u`); **byte-identical
+   diagnostic replay** on hits (~51% of check sites compare captured
+   stdout — a hit may not print differently from the miss that
+   populated it); and coverage **through the link stages** (`bsc
+   -e`'s C++ compile+link and the simulator builds it spawns are the
+   two largest measured buckets — a compile-only cache strands
+   them). With these, the un-migrated suite inherits compile/link
+   caching the day the engine lands, with zero harness change.
+3. **The harness verdict layer**: verdict-skip and sim-run skip on
+   input-closure identity, keyed by engine-native identities — the
+   residue no compiler-side engine can subsume (the compiler cannot
+   know what a check *means*), permanent in every ordering, thin once
+   items 1–2 exist, and native verdict nodes after any migration. Its
+   soundness net stays the nightly uncached sweep — the same audit C6
+   requires forever, built early, now mechanized by diffing input
+   manifests against traced file accesses.
+4. **The S1 checker tools and structured-verdict emitter** (the
    semantics layer either way) and the **stable check-ID scheme**
    (the S1 emitter and the migration both need it — design it once).
-4. **The cacheability census completion** (it prices P3 and arms flip
+5. **The cacheability census completion** (it prices P3 and arms flip
    condition b): the cost-weighted first cut is done (§7b); the
-   per-check class assignment and manifest schema remain.
+   per-check class assignment and manifest schema remain — the
+   verdict manifest now defined as a closure over item 1's input
+   manifests, not a third notion.
+
+**The wrapper is the contingency, not a step.** If the engine's
+landing leaves the measured 4–6× unbanked too long — the interim rent
+is ~5 core-hours of compute and a 36-minute wall per push — the §3
+wrapper is the weeks-scale patch, and items 1 and 3 transfer into it
+unchanged; what retires at engine-landing is only its interposition
+shim. That is a scheduling judgment, not an architecture question,
+and it is the only place v1.1's ordering survives.
 
 The mechanism-level design document (rule vocabulary, verdict schema,
 `bsc-test` shape under the never-link rule, the `.exp` translation
@@ -415,7 +489,7 @@ staircase's S3 is "a rules file over the existing engine."
 
 ## 9. Relation to prior records
 
-- `RFC-bsc-artifact-graph.md` §16 (v0.21) — the normative record
+- `RFC-bsc-artifact-graph.md` §16 (v0.23) — the normative record
   this document expands: the four mechanisms (P1–P4 here), the three
   re-priced cons (C1, C3, C5), the cacheability classes and gate
   ladder (C6, C8, P3's scope), and the sequencing. The RFC governs
@@ -431,6 +505,8 @@ staircase's S3 is "a rules file over the existing engine."
   component re-run matrix, the commit-stream pricing on both
   lineages, the ccache cold-cache finding with its retraction trail,
   and the in-tree mechanics audit (chokepoints, determinism,
-  `.bo`/`.ba` serialization, never-memoize populations).
+  `.bo`/`.ba` serialization, never-memoize populations); its
+  2026-09-30 addendum records the engine-first sequencing decision
+  behind v1.2.
 - The KB lane draft "KB: bsc artifact graph" — the session-entry
   history behind all of the above.
