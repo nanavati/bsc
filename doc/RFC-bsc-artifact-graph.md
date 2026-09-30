@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.22 — strawman distilled from a design discussion
+**Status:** Draft v0.23 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling. v0.20 adds §16: the testsuite follows the engine — the morning's DejaGNU-vs-Cabal question reframed (Ravi) to "after bsc switches to Shake, should the testsuite follow?"; answer yes, conditional and sequenced, with the four multiplicative win mechanisms, the three cons re-priced, and the never-link-the-bsc-under-test rule. v0.21 adds §16's cacheability classes and gate ladder (external review, Codex 2026-08-23): cached PASS only for checks with a declared-complete effect surface — hermetic / environment-scoped / non-cacheable classes with attached manifests, asymmetric failure caching (§6 refined: deterministic failures cache, infrastructure failures never do), the gate ladder as graph dependencies (build → format/engine → functional → oracle → performance), and periodic uncached audits of the share itself. v0.22 (2026-09-29) arms the design with measured numbers (KB record "bsc testsuite CI economics (measured)"): §3's flag partitioning gains its quantified stakes (the harness's per-simulator `-use-dpi` injection makes cross-config sharing 4%/12%/20% of combined suite work by key discipline) and the `.bo`/`.ba` serialization facts (`.bo` is already version-free and hash-chains its import closure; `.ba` embeds the build hash and full flags record unconditionally — a content digest is required before `.ba` bytes can be identity keys); §16 gains the measured economics (a 4.8 core-hour sweep, CPU-bound, effectively uncached today; commit-stream cache win ~4–6× on MatX main and ~5–7× on the dev stream; the wrapper-MVP → seam-split staging ladder; granularity measured as a non-win below ~40 cores), the run-everything constraint (no path- or AI-scoped test selection — pruning only by content identity), verdict-skip on content identity, and the never-memoize populations mapped onto the cacheability classes.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling. v0.20 adds §16: the testsuite follows the engine — the morning's DejaGNU-vs-Cabal question reframed (Ravi) to "after bsc switches to Shake, should the testsuite follow?"; answer yes, conditional and sequenced, with the four multiplicative win mechanisms, the three cons re-priced, and the never-link-the-bsc-under-test rule. v0.21 adds §16's cacheability classes and gate ladder (external review, Codex 2026-08-23): cached PASS only for checks with a declared-complete effect surface — hermetic / environment-scoped / non-cacheable classes with attached manifests, asymmetric failure caching (§6 refined: deterministic failures cache, infrastructure failures never do), the gate ladder as graph dependencies (build → format/engine → functional → oracle → performance), and periodic uncached audits of the share itself. v0.22 (2026-09-29) arms the design with measured numbers (KB record "bsc testsuite CI economics (measured)"): §3's flag partitioning gains its quantified stakes (the harness's per-simulator `-use-dpi` injection makes cross-config sharing 4%/12%/20% of combined suite work by key discipline) and the `.bo`/`.ba` serialization facts (`.bo` is already version-free and hash-chains its import closure; `.ba` embeds the build hash and full flags record unconditionally — a content digest is required before `.ba` bytes can be identity keys); §16 gains the measured economics (a 4.8 core-hour sweep, CPU-bound, effectively uncached today; commit-stream cache win ~4–6× on MatX main and ~5–7× on the dev stream; the wrapper-MVP → seam-split staging ladder; granularity measured as a non-win below ~40 cores), the run-everything constraint (no path- or AI-scoped test selection — pruning only by content identity), verdict-skip on content identity, and the never-memoize populations mapped onto the cacheability classes. v0.23 (2026-09-30) settles strategy-level sequencing (design discussion, Ravi): the engine is built first — §3's `-u` replacement is the first product, proven on bsc's own build, with the testsuite as its second consumer — and testsuite-after-shake.md's invocation-cache wrapper is reclassified as contingency (its v1.2); §3 gains the engine requirements the testsuite analysis surfaced (a persistent, invocation-wide cache probed from every compile entry point; byte-identical diagnostic replay on hits; coverage through the link stages) and promotes the **input manifest** — the compiler reporting the true closure it read (post-`-cpp`, `BSC_OPTIONS`-inclusive, BDPI-aware) — to a first-class artifact, closing reported-versus-inferred for engine keys, the harness verdict layer, external cachers, and the audit sweep alike; §11's rung 2 names its proving ground; §16 records the three-way split of the testsuite win (engine-native / harness verdict layer / graph-only) and the wrapper's contingency trigger.
 
 ---
 
@@ -110,6 +110,30 @@ also cover `BSC_OPTIONS` (read at module init, bypassing argv) and
 `-cpp` include closures (invisible to the dependency scanner); and
 bsc runs **without** `-u` under the driver — one staleness engine,
 never two.
+
+Three requirements are added by the testsuite analysis (2026-09-30) —
+the suite is the engine's second consumer, and its measured economics
+ride on them. The cache is **persistent and invocation-wide**: probes
+under every compile entry point, not only the `-u` driver path (the
+suite's compile lines mostly invoke bsc per file), backed by a store
+whose retention the project controls (the measured CI lesson: an
+evicting cache is structurally cold at main's push cadence). Cache
+hits **replay diagnostics byte-identically**: stdout/stderr and exit
+status are part of the cached value — ~51% of the suite's check sites
+compare captured compiler text, and developers read warnings — so a
+hit may not print differently from the miss that populated it.
+Coverage extends **through the link stages**: `bsc -e`'s C++
+compile+link and the simulator builds it spawns (`bsc_build_vsim_*`)
+are the two largest measured cost buckets, and a compile-only cache
+strands them. And the key-coverage clause above graduates into an
+artifact: the **input manifest** — bsc reporting the true closure it
+read (sources and imported `.bo`s, the post-`-cpp` file set, the
+`BSC_OPTIONS` contribution, BDPI `.c` files) — is a first-class
+engine output, reported from inside rather than inferred from
+outside, serving every consumer at once: the engine's own keys, the
+harness verdict layer (§16), any external cacher, and the audit
+sweep, which diffs the manifest against traced file accesses on
+uncached runs.
 
 The in-process variant (bsc embedding Shake, parallel package compiles
 in one process) is *not* modest: global mutable state (string interning
@@ -879,7 +903,11 @@ Consequences:
    the Shake engine under the same flag, spawning workers per package;
    `needsUpd`/`compile_with_deps` and the rest of the custom staleness
    walker are deleted. Post-cabalization; shake joins bsc's
-   dependencies; the sidecar dissolves.
+   dependencies; the sidecar dissolves. Proving ground: bsc's own
+   library build first, then the testsuite as second consumer (§16) —
+   with §3's v0.23 requirements (entry-point coverage, diagnostic
+   replay, link stages) the un-migrated suite inherits invocation
+   caching at this rung, with zero harness change.
 3. **Make `contract(ba)` total** (§7) — ABin additions + projections;
    coordinate with in-flight format-tag bumps.
 4. **iface/impl split of the `.bo`** (§6) — ships cutoff and the staged
@@ -966,6 +994,11 @@ Consequences:
   presentational, whether the digest is computed at write time and
   stored or derived by readers, and its relation to the §6 schema
   tags that key the cache.
+- The input manifest (§3, v0.23): its schema and emission point (per
+  invocation or per artifact), storage (inside artifacts or
+  alongside), and its relation to §16's verdict manifests — a verdict
+  manifest should be a closure over invocation manifests, not a third
+  notion.
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
@@ -1668,6 +1701,26 @@ orchestrator stops being speculative machinery and becomes a rules
 file over the existing engine; and the migration trigger is no longer
 "measured harness-extension-velocity bottleneck" but simply **"the
 engine landed."**
+
+**Sequencing sharpened (2026-09-30).** The testsuite win splits three
+ways, and only the third waits for migration: (1) *engine-native* —
+with §3's added requirements (entry-point coverage, diagnostic
+replay, link-stage reach), the un-migrated suite inherits
+compile/link caching the day rung 2 lands, at reported-closure
+soundness and finer-than-invocation grain, subsuming the compile leg
+of the v1.1 wrapper; (2) *the harness verdict layer* — verdict-skip
+and sim-run skip on input-closure identity, the compiler-blind
+residue no engine can subsume (the compiler cannot know what a check
+*means*), thin once the identity layer exists, permanent in every
+ordering, native verdict nodes after migration; (3) *graph-only* —
+cross-cell leg sharing, generated matrix legs, per-check scheduling,
+the layer deletion: the migration's own case, argued at the raised
+bar. The invocation-cache wrapper is accordingly reclassified from
+first move to **contingency** with a stated trigger: if the engine's
+landing leaves the measured 4–6× unbanked too long (interim rent ≈ 5
+core-hours plus a 36-minute wall per push), the wrapper is the
+weeks-scale patch — the identity and verdict layers transfer into it
+unchanged, and only its interposition shim retires at engine-landing.
 
 ## References
 
