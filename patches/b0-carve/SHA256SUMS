@@ -1,0 +1,3 @@
+3ddc7f6b1cce63bb64d8c880591fe38a7d9569923d96f92a861ce6dc1fd521f8  0001-bsc.cabal-carve-the-library-into-four-sublibraries.patch
+ff5be7dce5b7851ac34993455f7310ea327df9068860ec97804e7871badae1c0  0002-util-rebuild-bench-P0-benchmark-harness.patch
+168b0cb5b8d654dac4527d1e72d3d31daf279f81c9afad91ddb7db279bb9c5a3  0003-bscdeps-machine-readable-dependency-discovery-plan-P.patch
