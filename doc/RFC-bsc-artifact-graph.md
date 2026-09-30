@@ -2,7 +2,7 @@
 
 Cache-seam decomposition, contracts, and the build.
 
-**Status:** Draft v0.23 — strawman distilled from a design discussion
+**Status:** Draft v0.24 — strawman distilled from a design discussion
 (Ravi Nanavati with Claude), 2026-08-23. Not proposed upstream; the
 sections stand independently and are separable into individual proposals.
 v0.2 added: the ba as witness (connect, not conflate); clocks and resets
@@ -11,7 +11,7 @@ under the semantic/physical split. v0.3 added: import strata. v0.4 added:
 §14 schedule polymorphism and the first draft of §15. v0.6 rewrote §15
 around the correctly identified target — the pre-.bo eager layer
 (LiftDicts / fixupDefs / iSimpDicts / iSimplify) — with auto-boundary
-demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling. v0.20 adds §16: the testsuite follows the engine — the morning's DejaGNU-vs-Cabal question reframed (Ravi) to "after bsc switches to Shake, should the testsuite follow?"; answer yes, conditional and sequenced, with the four multiplicative win mechanisms, the three cons re-priced, and the never-link-the-bsc-under-test rule. v0.21 adds §16's cacheability classes and gate ladder (external review, Codex 2026-08-23): cached PASS only for checks with a declared-complete effect surface — hermetic / environment-scoped / non-cacheable classes with attached manifests, asymmetric failure caching (§6 refined: deterministic failures cache, infrastructure failures never do), the gate ladder as graph dependencies (build → format/engine → functional → oracle → performance), and periodic uncached audits of the share itself. v0.22 (2026-09-29) arms the design with measured numbers (KB record "bsc testsuite CI economics (measured)"): §3's flag partitioning gains its quantified stakes (the harness's per-simulator `-use-dpi` injection makes cross-config sharing 4%/12%/20% of combined suite work by key discipline) and the `.bo`/`.ba` serialization facts (`.bo` is already version-free and hash-chains its import closure; `.ba` embeds the build hash and full flags record unconditionally — a content digest is required before `.ba` bytes can be identity keys); §16 gains the measured economics (a 4.8 core-hour sweep, CPU-bound, effectively uncached today; commit-stream cache win ~4–6× on MatX main and ~5–7× on the dev stream; the wrapper-MVP → seam-split staging ladder; granularity measured as a non-win below ~40 cores), the run-everything constraint (no path- or AI-scoped test selection — pruning only by content identity), verdict-skip on content identity, and the never-memoize populations mapped onto the cacheability classes. v0.23 (2026-09-30) settles strategy-level sequencing (design discussion, Ravi): the engine is built first — §3's `-u` replacement is the first product, proven on bsc's own build, with the testsuite as its second consumer — and testsuite-after-shake.md's invocation-cache wrapper is reclassified as contingency (its v1.2); §3 gains the engine requirements the testsuite analysis surfaced (a persistent, invocation-wide cache probed from every compile entry point; byte-identical diagnostic replay on hits; coverage through the link stages) and promotes the **input manifest** — the compiler reporting the true closure it read (post-`-cpp`, `BSC_OPTIONS`-inclusive, BDPI-aware) — to a first-class artifact, closing reported-versus-inferred for engine keys, the harness verdict layer, external cachers, and the audit sweep alike; §11's rung 2 names its proving ground; §16 records the three-way split of the testsuite win (engine-native / harness verdict layer / graph-only) and the wrapper's contingency trigger.
+demoted to §15.b. v0.7 added: §14.b schedules as values (the Kôika precedent). v0.8 corrects §15: the definition cache DOMINATES the eager layer (only simp what you use) — a strict win, not a trade-off; the ATF cache named as the in-tree precedent. v0.9 adds: the honest losing case + placement principle for the definition cache, and the EHR family as the split's second application (§10). v0.10 adds: §14.c — under a total schedule the EHR dissolves into a register observed at many points (the §7 lattice applied to state); §10's "by construction" claim retracted in its favor. v0.11 adds: §10 realization strategies — the dissolution is semantic-only; at realization the choice bifurcates into structural (flops + derived forwarding) vs macro (external constraint obligations as first-class binding content), with vlink gaining a composed-constraint output. v0.12 adds: §3 packaging — the driver as its own package (`build-depends: bsc, shake`) sequenced after cabalization, which is what makes bsc linkable as a library. v0.13 sharpens §3: the sidecar is a rung, the destination is full `-u` replacement (same flag, custom walker deleted) — the parallelism ladder (package → internalized → stage → node) added, and §11 gains the internalization rung. v0.14 adds: §6 — the node vocabulary as the library's public API (representations + derivations, versioned by the same schema tags that key the cache). v0.15 adds: §6 — interning as the serialization strategy (universalize IType's hash-consing pattern, serialize the reachable table projection, derive the tree-shaped residue; retire the hand-written serializers). v0.16 refines it: interning resolves at population granularity — intern what you save, exempt what you unify (the ground dictionary pool as bsc's own evidence; GHC's IfaceType dedup as the same principle). v0.17 adds the CType architecture: one phase-indexed structure (Trees That Grow) — CType stays the name of the interned instantiation, the inference instantiation gets representable metavariables and optional ids. v0.18 spins the scheduling arc out into RFC-polymorphic-scheduling.md (unifying §§14–14.c with the scheduling-complexity session's type-side arc); §14 gains the pointer. v0.19 marks §14.b's urgency/execution clause superseded by that RFC's v0.2 one-order ruling. v0.20 adds §16: the testsuite follows the engine — the morning's DejaGNU-vs-Cabal question reframed (Ravi) to "after bsc switches to Shake, should the testsuite follow?"; answer yes, conditional and sequenced, with the four multiplicative win mechanisms, the three cons re-priced, and the never-link-the-bsc-under-test rule. v0.21 adds §16's cacheability classes and gate ladder (external review, Codex 2026-08-23): cached PASS only for checks with a declared-complete effect surface — hermetic / environment-scoped / non-cacheable classes with attached manifests, asymmetric failure caching (§6 refined: deterministic failures cache, infrastructure failures never do), the gate ladder as graph dependencies (build → format/engine → functional → oracle → performance), and periodic uncached audits of the share itself. v0.22 (2026-09-29) arms the design with measured numbers (KB record "bsc testsuite CI economics (measured)"): §3's flag partitioning gains its quantified stakes (the harness's per-simulator `-use-dpi` injection makes cross-config sharing 4%/12%/20% of combined suite work by key discipline) and the `.bo`/`.ba` serialization facts (`.bo` is already version-free and hash-chains its import closure; `.ba` embeds the build hash and full flags record unconditionally — a content digest is required before `.ba` bytes can be identity keys); §16 gains the measured economics (a 4.8 core-hour sweep, CPU-bound, effectively uncached today; commit-stream cache win ~4–6× on MatX main and ~5–7× on the dev stream; the wrapper-MVP → seam-split staging ladder; granularity measured as a non-win below ~40 cores), the run-everything constraint (no path- or AI-scoped test selection — pruning only by content identity), verdict-skip on content identity, and the never-memoize populations mapped onto the cacheability classes. v0.23 (2026-09-30) settles strategy-level sequencing (design discussion, Ravi): the engine is built first — §3's `-u` replacement is the first product, proven on bsc's own build, with the testsuite as its second consumer — and testsuite-after-shake.md's invocation-cache wrapper is reclassified as contingency (its v1.2); §3 gains the engine requirements the testsuite analysis surfaced (a persistent, invocation-wide cache probed from every compile entry point; byte-identical diagnostic replay on hits; coverage through the link stages) and promotes the **input manifest** — the compiler reporting the true closure it read (post-`-cpp`, `BSC_OPTIONS`-inclusive, BDPI-aware) — to a first-class artifact, closing reported-versus-inferred for engine keys, the harness verdict layer, external cachers, and the audit sweep alike; §11's rung 2 names its proving ground; §16 records the three-way split of the testsuite win (engine-native / harness verdict layer / graph-only) and the wrapper's contingency trigger. v0.24 (2026-09-30) folds in the adversarial review round (ChatGPT; KB "REVIEW REQUEST — bsc engine-first proposal (adversarial)") and delivery planning: §3 gains a fourth engine requirement — a **recursive cache-bypass channel** (non-cacheability propagates into nested queries; uncached audits bypass every cache layer) — the observable-result-envelope sharpening (hits replay the *merged* stdout/stderr transcript as captured, declared side files/effects, and destination-precondition behavior), and the fingerprint decision: three producer components as private cabal sublibraries (.bo/.ba coupled production, .v, .cxx/.h) over supporting components, per-component fingerprints derived from the cabal component graph and embedded in the shipped compiler, with the baseline pinned to the **B0 manifest** (bsc.cabal + cabal.project on release-devel-B0 — cabalization with thin executables already landed; the legacy port-properties option resolves to `-semantic-ports-comment`, comment-only, so it adds no conditional `.bo` producer); §12's `.ba` digest question gains the loadability dimension (digest ≠ loadable: envelope/payload rematerialization or a conservative cross-version miss; the loader's exact-version check stays until then — and the library build is `.bo`-only, so this gates backend reuse, not the library win) and the input-manifest question gains negative resolutions and pre-hit validation; §16's exclusivity language is corrected (the internal engine gives artifact-grain dedup and cutoff to the un-migrated harness) and the audit cadence becomes a priced parameter; engine-neutrality is narrowed to portable identities plus versioned result envelopes, with Shake adopted for delivery per the implementation plan (ChatGPT, "bsc orchestration and rebuild implementation plan" Revision 2) and its stated reopen conditions.
 
 ---
 
@@ -134,6 +134,35 @@ outside, serving every consumer at once: the engine's own keys, the
 harness verdict layer (§16), any external cacher, and the audit
 sweep, which diffs the manifest against traced file accesses on
 uncached runs.
+
+The adversarial review round (2026-09-30) adds a fourth requirement
+and two sharpenings. The **recursive cache-bypass channel**:
+non-cacheability must propagate *downward* — a performance or
+staleness test that re-runs while its inner bsc invocation silently
+hits the cache measures a lookup instead of the compiler, so the
+harness must be able to mark an invocation "must execute", every
+cache layer (including child build caches) must honor it, and a fully
+uncached audit bypasses every layer, not just verdict lookup. The
+**result envelope**: a hit replays the *merged* stdout/stderr
+transcript as the harness captured it (separately stored streams can
+replay a different interleaving), the declared side files and effects,
+exit status, and destination-precondition behavior — what cannot be
+reproduced safely must execute. And the **fingerprint unit** is fixed:
+three producer components as private cabal sublibraries — coupled
+`.bo`/`.ba` production, `.v` generation, `.cxx`/`.h` generation — over
+supporting components (shared IR, codecs, options, diagnostics), with
+per-component fingerprints (source and generated inputs, the resolved
+per-component recipe, toolchain, and dependency-component
+fingerprints — never a git revision or GHC ABI hash) derived from the
+cabal component graph at build time and embedded in the shipped
+compiler; stage orchestration moves out of the driver executable into
+the components, or the driver's own fingerprint re-globalizes every
+key. Baseline note: the **B0 manifest** (bsc.cabal + cabal.project on
+release-devel-B0) already ships the cabalized tree with executables
+as thin clients, so the packaging delta is the sublibrary carve; and
+the legacy port-properties option is `-semantic-ports-comment`
+(off by default, Verilog-comment-only — no conditional `.bo`
+producer).
 
 The in-process variant (bsc embedding Shake, parallel package compiles
 in one process) is *not* modest: global mutable state (string interning
@@ -993,12 +1022,28 @@ Consequences:
   which of the 138 serialized flag fields are semantic vs
   presentational, whether the digest is computed at write time and
   stored or derived by readers, and its relation to the §6 schema
-  tags that key the cache.
+  tags that key the cache. *Sharpened v0.24*: a digest changes
+  equality, not loadability — cross-build `.ba` reuse additionally
+  needs a validated envelope/payload rematerialization under an
+  explicit compatibility policy, or accepts a conservative
+  cross-version miss with repriced savings; the loader's
+  exact-version rejection stays until that policy is implemented and
+  tested (rejection of incompatible input is itself tested behavior).
+  The library build is `.bo`-only, so this gates backend-artifact
+  reuse, not the library win.
 - The input manifest (§3, v0.23): its schema and emission point (per
   invocation or per artifact), storage (inside artifacts or
   alongside), and its relation to §16's verdict manifests — a verdict
-  manifest should be a closure over invocation manifests, not a third
-  notion.
+  manifest is the invocation manifests *plus* the check-side inputs
+  (check logic, expected files, fixtures, environment), not a third
+  notion. *Sharpened v0.24*: the manifest must record negative
+  resolutions (a newly shadowing file changes resolution while every
+  recorded hash stays valid), and a pre-execution hit needs a
+  validation protocol — prior dependency certificates checked against
+  the current snapshot with read-consistent content identities;
+  foreign-tool boundaries (`-verilog-filter`, CC/CXX children,
+  simulator build scripts) are covered by tool-reported dependencies
+  or tracing, and unresolved effects mean no reuse.
 
 ## 13. Relation to the post-GenWrap design (July 2026)
 
@@ -1721,6 +1766,27 @@ landing leaves the measured 4–6× unbanked too long (interim rent ≈ 5
 core-hours plus a 36-minute wall per push), the wrapper is the
 weeks-scale patch — the identity and verdict layers transfer into it
 unchanged, and only its interposition shim retires at engine-landing.
+
+**Adversarially reviewed (2026-09-30).** ChatGPT's review (KB "REVIEW
+REQUEST — bsc engine-first proposal (adversarial)") sustained the
+direction and returned findings adopted into v0.24: the two blockers
+(the recursive cache-bypass channel; `.ba` digest-vs-loadability),
+the attribution correction — the internal engine gives artifact-grain
+dedup and cutoff to the *un-migrated* harness, so mechanisms 1–2's
+"impossible from outside" reads "impossible without the engine" and
+the migration's incremental case rests on verdict residence,
+generated matrix legs, per-check scheduling, and the layer deletion —
+the modeled-vs-measured labeling of the economics (max-bucket pricing
+under-prices multi-component commits; the 12× median comparison is
+lineage-specific), and audit cadence as a priced parameter across
+total traffic rather than "nightly". Engine-neutrality is narrowed to
+portable domain identities plus versioned result envelopes; Shake is
+adopted for delivery with stated reopen conditions. The delivery
+vehicle is ChatGPT's "bsc orchestration and rebuild implementation
+plan" (Revision 2), read with the review thread's corrections: the
+B0-manifest baseline, the resolved `-semantic-ports-comment` legacy
+option, the `.bo`-only library path, and driver stage-orchestration
+moving into the producer components.
 
 ## References
 
