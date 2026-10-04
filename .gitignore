@@ -11,6 +11,10 @@ inst
 # And the build directory
 build
 dist-newstyle/
+cabal.project.local
+dist-determinism/
+determinism-results/
+__pycache__/
 
 .vagrant/
 vagrant-out/

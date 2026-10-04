@@ -2,6 +2,7 @@
 -- See LICENSE for the full license.
 --
 module ListUtil where
+import Warmup ()
 
 -- Drop repeated (adjacent) elements according to a predicate
 dropRepeatsBy :: (a -> a -> Bool) -> [a] -> [a]

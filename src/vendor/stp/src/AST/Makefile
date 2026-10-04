@@ -14,7 +14,7 @@ libast.a: $(OBJS)
 
 # ASTKind.h and ASTKind.cpp are automatically generated
 ASTKind.h ASTKind.cpp: ASTKind.kinds genkinds.pl
-	./genkinds.pl
+	perl genkinds.pl
 
 .PHONY: clean
 clean:

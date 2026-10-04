@@ -42,6 +42,10 @@ all: install
 .PHONY: install
 install:
 ifeq ($(YICES_STUB),)
+	# Cabal source archives do not preserve executable bits on auxiliary files.
+	chmod +x $(YICES_SRC)/config.guess $(YICES_SRC)/config.sub \
+	    $(YICES_SRC)/install-sh $(YICES_SRC)/gmaketest \
+	    $(YICES_SRC)/autoconf/os $(YICES_SRC)/utils/make_source_version
 	(cd $(YICES_SRC) ; \
 		autoconf ; \
 		$(CONFIGURE_ENV) ./configure --prefix=$(YICES_INST) ; \

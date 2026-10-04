@@ -8,6 +8,7 @@ module ListMap(
         null,
         lookup, lookupWithDefault, lookupWithDefaultBy, lookupBy
         ) where
+import Warmup ()
 
 --import Prelude
 

@@ -17,12 +17,13 @@
 -- 'make smoke' / 'releasecheck' if you have SystemC and want full coverage).
 module Main (main) where
 
+import Warmup ()
 import Control.Monad (unless, when)
 import Data.List (isInfixOf, sort)
-import System.Directory (doesDirectoryExist, doesFileExist, findExecutable)
-import System.Environment (getExecutablePath, getProgName)
+import System.Directory (doesDirectoryExist, findExecutable)
+import System.Environment (getProgName)
 import System.Exit (die, exitWith)
-import System.FilePath (dropExtension, makeRelative, takeDirectory, (</>))
+import System.FilePath (dropExtension, makeRelative)
 import System.Process (rawSystem, readProcess)
 
 main :: IO ()
@@ -87,17 +88,10 @@ utilTargets =
   , "bsc.verilog/noinline/noinline.check"
   ]
 
--- Locate a sibling cabal executable. build-tool-depends guarantees it's been
--- built, but only adds it to PATH at build time, not test-run time -- so fall
--- back to the dist-newstyle layout (build/<comp>/<comp>) relative to this test
--- binary, then finally PATH (for an installed tool).
+-- Cabal adds this suite's build-tool-depends directories to PATH when
+-- running the test, ahead of any installed tools. Let Cabal determine their
+-- locations instead of relying on the internal dist-newstyle layout.
 need :: String -> IO FilePath
-need exe = do
-  self <- getExecutablePath
-  let sibling = takeDirectory (takeDirectory self) </> exe </> exe
-  here <- doesFileExist sibling
-  if here
-    then return sibling
-    else findExecutable exe >>=
-           maybe (die ("cannot find " ++ exe ++ " (looked at " ++ sibling
-                       ++ " and on PATH)")) return
+need exe =
+  findExecutable exe >>=
+    maybe (die ("cannot find required test tool on PATH: " ++ exe)) return

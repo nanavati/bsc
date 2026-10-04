@@ -7,6 +7,7 @@ module RealUtil( log2, log10
                , isPosInfinite, isNegInfinite
                ) where
 
+import Warmup ()
 import GHC.Word
 import GHC.Exts
 import Foreign.C.Types

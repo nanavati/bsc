@@ -33,19 +33,18 @@ jobs:
         shell: bash
         run: |
           sudo .github/workflows/install_dependencies_ubuntu.sh
+          sudo apt-get install -y dejagnu tcsh
       # Don't rely on the VM to pick the GHC version
       # (and don't assume that GHCup is already installed on the runner)
       - name: Install GHC
         uses: haskell/ghcup-setup@v1
         with:
           ghc: ${{ inputs.ghc_version }}
-          cabal: recommended
-      # Until BSC uses cabal to build, pre-install these packages
-      - name: Install Haskell dependencies
+          cabal: 3.16.1.0
+      - name: Update Cabal package index
         shell: bash
         run: |
           cabal update
-          cabal v1-install old-time regex-compat split strict-concurrency syb
       # Restore previous ccache cache of compiled object files. Use a SHA
       # in the key so that a new cache file is generated after every build,
       # and have the restore-key use the most recent.
@@ -63,8 +62,13 @@ jobs:
           ccache --zero-stats --max-size 250M
           export PATH=/usr/lib/ccache:$PATH
 
-          CORES=$(nproc)
-          echo "Cores: ${CORES}"
+          # Older GHC builds stay serial; object determinism starts at 9.14.1.
+          GHCJOBS=$(ghc --numeric-version | awk -F. '{ print ($1 > 9 || ($1 == 9 && ($2 > 14 || ($2 == 14 && $3 >= 1)))) ? 2 : 1 }')
+          echo "Cabal/GHC jobs: ${GHCJOBS}"
+
+          # Build the eight tools and all three Cabal test runners. Keep this
+          # in the project configuration so REPL/HLS use the same build plan.
+          echo "tests: True" > cabal.project.local
 
           # Generate package info
           export BSC_BUILD_PKGINFO=1
@@ -72,9 +76,10 @@ jobs:
           # An STP test hangs on the ARM runners
           if [[ "${{ inputs.os }}" == *-arm ]]; then
               export STP_STUB=1
+              printf "package bsc\n  flags: +stp-stub\n" >> cabal.project.local
             fi
 
-          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+          make GHCJOBS="${GHCJOBS}" GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
           tar czf inst.tar.gz inst
       - name: CCache stats
         env:
@@ -82,43 +87,32 @@ jobs:
         run: ccache --show-stats
       - name: Smoketest
         run: "make check-smoke"
-      # if this step fails, it may mean you need to update
-      # util/haskell-language-server/gen_hie.py to
-      # reflect the locations of any new haskell sources
+      - name: Test Cabal components
+        shell: bash
+        run: |
+          export BLUESPECDIR="$PWD/inst/lib"
+          # The suites share the existing DejaGNU working tree and its clean
+          # target, so run them sequentially.
+          cabal test all -j1 --test-show-details=direct
       - name: Test Haskell Language Server
         if: ${{ inputs.hls_version != '' }}
         run: |
           ghcup install hls ${{ inputs.hls_version }}
-          ubuntu_ver=$(lsb_release -rs | cut -d '.' -f 1)
-          if [ "$ubuntu_ver" -ge "24" ]; then
-              sudo apt-get update
-              sudo apt-get install -y python3-yaml
-            else
-              pip3 install pyyaml
-            fi
-          python3 util/haskell-language-server/gen_hie.py
-          pushd src/comp
-          haskell-language-server-${{ inputs.ghc_version }} bsc.hs
-          popd
-      # Check that .ghci has all the right flags to load the source.
-      # This is important for text editor integration & tools like ghcid
-      # NB stp, yices and htcl must be built first, so do this after Build.
-      - name: Check GHCI :load
+          # Use HLS's Cabal cradle to get package IDs, generated modules and
+          # the executable's source directory from the actual build plan.
+          haskell-language-server-${{ inputs.ghc_version }} src/comp/app/bsc.hs
+      # Loading the executable through Cabal also checks its generated Warmup
+      # module and the compiler library/FFI dependencies used by editor tools.
+      - name: Check Cabal GHCi load
+        shell: bash
         run: |
-          cd src/comp
-          export NOGIT=0
-          export NOUPDATEBUILDVERSION=0
-          ./update-build-version.sh
-          ./update-build-system.sh
-          echo ':load bsc.hs' | ghci 2>&1 | tee ghci.log
-          if grep '\(Failed\|error:\)' ghci.log
-          then
+          printf ':show modules\n:quit\n' |
+            cabal repl bsc:exe:bsc --repl-options=-ignore-dot-ghci 2>&1 | tee ghci.log
+          if grep '\(Failed\|error:\)' ghci.log; then
             echo "GHCi reported errors."
             exit 1
-          else
-            echo "GHCi loaded successfully."
-            exit 0
           fi
+          grep -q 'Main_bsc' ghci.log
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:

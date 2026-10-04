@@ -7,6 +7,7 @@
 -- Haskell main lets cabal build this as an ordinary executable.)
 module Main (main) where
 
+import Warmup ()
 import BlueTcl () -- force the blueshell_Init_Foreign export to be linked in
 import Foreign.C.String (CString, newCString)
 import Foreign.C.Types (CInt (..))

@@ -1,0 +1,15 @@
+packages: .
+
+-- Match the optimized Make build. Only compiler versions with deterministic
+-- object generation use parallel Cabal and GHC workers by default.
+optimization: 2
+if impl(ghc >= 9.14.1)
+  jobs: $ncpus
+  semaphore: True
+  program-options
+    ghc-options: -j -fobject-determinism
+else
+  jobs: 1
+  semaphore: False
+  program-options
+    ghc-options: -j1

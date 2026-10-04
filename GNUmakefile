@@ -9,9 +9,8 @@ help:
 	@echo 'This Makefile will create an installation of the Bluespec Compiler tools,'
 	@echo 'in a directory named "inst".  This directory can be moved anywhere, but'
 	@echo 'the contents should remain in the same relative locations.  Intermediate'
-	@echo 'files are stored in a directory named "build".  The "clean" target will'
-	@echo 'delete the "build" directory; the "full_clean" target will delete both'
-	@echo 'the "build" and "inst" directories.'
+	@echo 'files are stored in "build" (runtimes) and "dist-newstyle" (Cabal).'
+	@echo 'The "clean" target removes build files; "full_clean" also removes "inst".'
 	@echo
 	@echo '    make  release      Build a release dir with the tools and docs'
 	@echo
@@ -44,20 +43,25 @@ rem_build:
 
 .PHONY: install-src
 install-src:
-	$(MAKE)  -C src  PREFIX=$(PREFIX)  install
+	$(MAKE) -j1 -C src  PREFIX=$(PREFIX)  install
 
 .PHONY: install-doc
 install-doc:
-	$(MAKE)  -C doc  PREFIX=$(PREFIX)  install
+	$(MAKE) -j1 -C doc  PREFIX=$(PREFIX)  install
 
 .PHONY: install-release
 install-release:
-	$(MAKE)  -C release  PREFIX=$(PREFIX)  install
+	$(MAKE) -j1 -C release  PREFIX=$(PREFIX)  install
 
 # -------------------------
 
+# Build orchestration is serial; only Cabal schedules Haskell workers.
+# Test-suite targets below retain their own parallel Make scheduling.
 .PHONY: release
-release: install-src install-doc install-release
+release:
+	$(MAKE) -j1 install-src
+	$(MAKE) -j1 install-doc
+	$(MAKE) -j1 install-release
 
 # -------------------------
 
