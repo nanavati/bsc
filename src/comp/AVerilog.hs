@@ -24,18 +24,20 @@ import Util
 import FileNameUtil(hasSuf)
 import PFPrint
 import Error(internalError, ErrorHandle)
-import Flags(Flags, removeReg, removeCross, removeInoutConnect, removeUnusedMods,
-             useDPI, verilogDeclareAllFirst)
+import PhaseConfig
 import Id
 import Pragma(PProp(..))
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
 import Verilog
 import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
 import BackendNamingConventions(isRegInst, isClockCrossingRegInst, isInoutConnect)
-import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getForeignFunctions)
+import VerilogForeignFunctions(getForeignFunctions)
+import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations)
 import qualified GraphWrapper as G
 
 --import Debug.Trace
@@ -53,10 +55,10 @@ import qualified GraphWrapper as G
 -- main module is bit blasted, both the blasted and unblasted modules
 -- will appear in the list.
 
--- Flags are the compiler flags
+-- (PhaseConfig VerilogGenFlags) are the compiler flags
 -- [PProp] are the Pragmas
 -- XXX this function is too big
-aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
+aVerilog :: ErrorHandle -> (PhaseConfig VerilogGenFlags) -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack ffmap =
        return (VProgram (map renameInoutPorts mods) dpi_decls comments)
@@ -241,7 +243,7 @@ aVerilog errh flags pps aspack ffmap =
     -- ----------
     -- create import-DPI statements, if using DPI
 
-        dpi_decls = if (useDPI flags)
+        dpi_decls = if ((verilogGenUseDPI . phaseFlags) flags)
                     then mkDPIDeclarations $ getForeignFunctions ffmap aspack
                     else []
 
@@ -848,7 +850,7 @@ filterSharedInout args =
 -- * "ifc args", which are handled like instantiations
 --  XXX should make the return type a structure.
 -- XXX this function is too big
-genInstances :: ErrorHandle -> Flags -> [VMItem] -> (ADef -> [VMItem]) -> ASPackage ->
+genInstances :: ErrorHandle -> (PhaseConfig VerilogGenFlags) -> [VMItem] -> (ADef -> [VMItem]) -> ASPackage ->
                 ([ADef],    -- filtered (not yet converted) package defs
                  [VMItem],  -- decl groups
                  [VMItem],  -- def groups
@@ -903,7 +905,7 @@ genInstances errh flags ff_blocks vDef aspack =
         not_inout_connect_instances :: [AVInst]
         (inout_connect_instances,
          not_inout_connect_instances) =
-         if (removeInoutConnect flags)
+         if ((verilogGenRemoveInoutConnect . phaseFlags) flags)
          then partition isInoutConnect aspkg_instances
          else ([], aspkg_instances)
 
@@ -942,9 +944,9 @@ genInstances errh flags ff_blocks vDef aspack =
 
         inlined_reg_instances :: [AVInst]
         noninlined_aspkg_instances :: [AVInst]
-        should_inline x = isRegInst x && ((not (isClockCrossingRegInst x)) || (removeCross flags))
+        should_inline x = isRegInst x && ((not (isClockCrossingRegInst x)) || ((verilogGenRemoveCross . phaseFlags) flags))
         (inlined_reg_instances, noninlined_aspkg_instances) =
-            if (removeReg flags)
+            if ((verilogGenRemoveReg . phaseFlags) flags)
             then partition should_inline not_inout_connect_instances
             else ([], not_inout_connect_instances)
 
@@ -988,7 +990,7 @@ genInstances errh flags ff_blocks vDef aspack =
 
         -- if we're removing unused modules,
         -- filter out instances that don't connect any wires
-        inst_infos = if (removeUnusedMods flags) then
+        inst_infos = if ((verilogGenRemoveUnusedMods . phaseFlags) flags) then
                          filter (wiredInstance . snd3) inst_infos0
                      else inst_infos0
 
@@ -1181,7 +1183,7 @@ genInstances errh flags ff_blocks vDef aspack =
 -- (any signals which are pre-declared are returned as the fourth item
 -- of the tuple)
 mkSubmodGroups ::
-    Flags -> [AStateOut] -> SizeAndTypeMap -> [(Id,[String])] -> [VId] ->
+    (PhaseConfig VerilogGenFlags) -> [AStateOut] -> SizeAndTypeMap -> [(Id,[String])] -> [VId] ->
     [(AId, VMItem, InstInfo)] ->
     ([(AId, [VId])], [VMItem], [VMItem], [VId])
 mkSubmodGroups flags sos sztm submod_comments decls_so_far submod_infos =
@@ -1198,7 +1200,7 @@ mkSubmodGroups flags sos sztm submod_comments decls_so_far submod_infos =
         -- If the verilogDeclareAllFirst flag is on, then we are done;
         -- if not, then "submod_def_groups" will be an empty list and
         -- we need to sort the insts etc to allow the intermingling
-        if (verilogDeclareAllFirst flags)
+        if ((verilogGenVerilogDeclareAllFirst . phaseFlags) flags)
         then (submod_inputs, submod_decl_groups, submod_def_groups, [])
         else
             let
@@ -1274,7 +1276,7 @@ fixupSubmodGroups sos sztm submod_infos decls_so_far submod_groups =
 
 
 -- create a group of Verilog statements for a submodule instantiation
-mkInstGroup :: Flags -> [AStateOut] -> SizeAndTypeMap -> [(Id,[String])] ->
+mkInstGroup :: (PhaseConfig VerilogGenFlags) -> [AStateOut] -> SizeAndTypeMap -> [(Id,[String])] ->
                (AId, VMItem, InstInfo) -> (Maybe VMItem, Maybe VMItem)
 mkInstGroup flags sos sztm comments_map (instname, vmi, info) =
     let (_, _, special, ins, outs) = info
@@ -1301,7 +1303,7 @@ mkInstGroup flags sos sztm comments_map (instname, vmi, info) =
                                      (VMGroup False [mergeCommonDecl wire_decls])
         def_group  = Just $ VMComment inst_comment vmi
     in
-        if (verilogDeclareAllFirst flags)
+        if ((verilogGenVerilogDeclareAllFirst . phaseFlags) flags)
         then (decl_group,    def_group)
         else (unified_group, Nothing)
 
@@ -1513,7 +1515,7 @@ makeTopComments item_type ics =
 -- buildPrimModules
 
 -- extracts the instantiated "Prim" definitions from the verilog and builds verilog modules for these
-buildPrimModules :: Flags -> [VMItem] -> [VModule]
+buildPrimModules :: (PhaseConfig VerilogGenFlags) -> [VMItem] -> [VModule]
 buildPrimModules flags defs =
     map vMux (muxes `union` primuxes)
     ++ map vPriMux primuxes

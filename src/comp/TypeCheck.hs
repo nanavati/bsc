@@ -16,7 +16,8 @@ import Id
 import Error(internalError, EMsg, WMsg, ErrMsg(..),
              ErrorHandle, bsError, bsErrorNoExit, bsErrorUnsafe, bsWarning)
 import ContextErrors
-import Flags(Flags, enablePoisonPills, allowIncoherentMatches)
+import PhaseConfig
+import FlagTypes
 import CSyntax
 import PoisonUtils
 import Type
@@ -32,7 +33,7 @@ import CSubst(cSubstN)
 import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
 
-cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage ->
+cTypeCheck :: ErrorHandle -> PhaseConfig TypecheckFlags -> SymTab -> CPackage ->
              IO (CPackage, Bool, S.Set Id, CATFCache)
 cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
     (typecheckedDefns, typeWarns, usedPkgs, haveErrors, atfCache) <- tiDefns errh symtab flags defns
@@ -47,12 +48,12 @@ cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns i
 
 
 -- type check top-level definitions in parallel (since they are independent)
-tiDefns :: ErrorHandle -> SymTab -> Flags -> [CDefn] ->
+tiDefns :: ErrorHandle -> SymTab -> PhaseConfig TypecheckFlags -> [CDefn] ->
            IO ([CDefn], [WMsg], S.Set Id, Bool, CATFCache)
 tiDefns errh s flags ds = do
-  let ai = allowIncoherentMatches flags
+  let ai = typecheckAllowIncoherentMatches (phaseFlags flags)
   let checkDef d = (defErr, warns, usedPkgs, atfCache)
-        where ti_res = runTI flags ai s $ tiOneDef d
+        where ti_res = runTI (phaseFlags flags) ai s $ tiOneDef d
               (warns, usedPkgs, atfCache) = (tiWarnings ti_res, tiUsedPackages ti_res, tiATFCache ti_res)
               defErr = case tiResult ti_res of
                           (Left emsgs)  -> Left emsgs
@@ -72,9 +73,9 @@ tiDefns errh s flags ds = do
   let allUsedPkgs = S.unions pkgss
   let mergedATFCache = foldl mergeCATFCaches M.empty atfCaches
   -- XXX: we give up - some type signatures are bogus
-  when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
+  when ((not (null double_error_msgs)) || (have_errors && not (runEnablePoisonPills (phaseRunFlags flags)))) $
       bsError errh (nub errors) -- the underyling error should be in errors
-  when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
+  when (have_errors && runEnablePoisonPills (phaseRunFlags flags)) $ bsErrorNoExit errh errors
   return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors, mergedATFCache)
 
 nullAssump :: [Assump]

@@ -28,8 +28,8 @@
 > import IntLit
 > import Error(internalError, EMsg, WMsg, ErrMsg(..),
 >              ErrorHandle, bsError, exitOK)
-> import Flags(Flags, DumpFlag(..),
->              stdlibNames, disableAssertions, preprocessOnly, genName)
+> import PhaseConfig
+> import FlagTypes
 > import Util
 > import Parser.BSV.CVParserCommon
 > import Parser.BSV.CVParserImperative
@@ -4637,7 +4637,7 @@ a "module verilog":
 >               -- check for command-line synthesis of import "BVI"
 >               let nameStr = getIdString name
 >               bscFlags <- getParserFlags
->               when (nameStr `elem` (genName bscFlags)) $
+>               when (nameStr `elem` (parseGenName (phaseFlags bscFlags))) $
 >                    failWithErr (pos, EForeignModSynth nameStr)
 >
 >               let filestring = stringLiteralAt pos filename
@@ -5697,7 +5697,7 @@ SEQUENCES
 >  do
 >   pos <- getPos
 >   pKeyword SV_KW_sequence <?> "sequence"
->   ignoreAssertions <- disableAssertions <$> getParserFlags
+>   ignoreAssertions <- (parseDisableAssertions . phaseFlags) <$> getParserFlags
 >   when (not ignoreAssertions) (parseWarn (pos, WExperimental "SV assertions"))
 >   when (not (allowSequence flags))
 >        (failWithErr (pos, EForbiddenSequenceDecl (pvpString (stmtContext flags)) ""))
@@ -5712,7 +5712,7 @@ SEQUENCES
 >   pSemi
 >   pEndClause SV_KW_endsequence (Just name)
 >   pFlags <- getParserFlags
->   let res = if (disableAssertions pFlags)
+>   let res = if (parseDisableAssertions (phaseFlags pFlags))
 >              then [ISDecl pos (Right name) Nothing []]
 >              else [ISSequence pos (name, args, context, vars, body)]
 >   return res
@@ -5724,7 +5724,7 @@ PROPERTIES
 >  do
 >   pos <- getPos
 >   pKeyword SV_KW_property <?> "property declaration"
->   ignoreAssertions <- disableAssertions <$> getParserFlags
+>   ignoreAssertions <- (parseDisableAssertions . phaseFlags) <$> getParserFlags
 >   when (not ignoreAssertions) (parseWarn (pos, WExperimental "SV assertions"))
 >   when (not (allowProperty flags))
 >        (failWithErr (pos, EForbiddenPropertyDecl (pvpString (stmtContext flags)) ""))
@@ -5739,7 +5739,7 @@ PROPERTIES
 >   pSemi
 >   pEndClause SV_KW_endproperty (Just name)
 >   pFlags <- getParserFlags
->   let res = if (disableAssertions pFlags)
+>   let res = if (parseDisableAssertions (phaseFlags pFlags))
 >              then [ISDecl pos (Right name) Nothing []]
 >              else [ISProperty pos (name, args, context, vars, body)]
 >   return res
@@ -5767,7 +5767,7 @@ ASSERTIONS
 >    always <- option (True) (pInitialStmt <|> pAlwaysStmt)
 >    st <- pAssertStmt mid atts flags <?> "assertion statement"
 >    pFlags <- getParserFlags
->    let res = if (disableAssertions pFlags)
+>    let res = if (parseDisableAssertions (phaseFlags pFlags))
 >              then []
 >              else [ISAssertStmt pos (always, st)]
 >    return res
@@ -5798,7 +5798,7 @@ ASSERTIONS
 >    pKeyword SV_KW_assert
 >    when (not (allowAssert flags))
 >        (failWithErr (pos, EForbiddenAssert (pvpString (stmtContext flags))))
->    ignoreAssertions <- disableAssertions <$> getParserFlags
+>    ignoreAssertions <- (parseDisableAssertions . phaseFlags) <$> getParserFlags
 >    when (not ignoreAssertions) (parseWarn (pos, WExperimental "SV assertions"))
 >    assertEmptyAttributes EAttribsAssert atts
 >    pKeyword SV_KW_property
@@ -5815,7 +5815,7 @@ ASSERTIONS
 >    pKeyword SV_KW_assume
 >    when (not (allowAssume flags))
 >        (failWithErr (pos, EForbiddenAssume (pvpString (stmtContext flags))))
->    ignoreAssertions <- disableAssertions <$>  getParserFlags
+>    ignoreAssertions <- (parseDisableAssertions . phaseFlags) <$>  getParserFlags
 >    when (not ignoreAssertions) (parseWarn (pos, WExperimental "SV assertions"))
 >    assertEmptyAttributes EAttribsAssume atts
 >    pKeyword SV_KW_property
@@ -5830,7 +5830,7 @@ ASSERTIONS
 >     pKeyword SV_KW_cover
 >     when (not (allowCover flags))
 >        (failWithErr (pos, EForbiddenCover (pvpString (stmtContext flags))))
->     ignoreAssertions <- disableAssertions <$> getParserFlags
+>     ignoreAssertions <- (parseDisableAssertions . phaseFlags) <$> getParserFlags
 >     when (not ignoreAssertions)
 >              (parseWarn (pos, WExperimental "SV assertions"))
 >     assertEmptyAttributes EAttribsCover atts
@@ -5847,7 +5847,7 @@ ASSERTIONS
 >     pKeyword SV_KW_expect
 >     when (not (allowExpect flags))
 >        (failWithErr (pos, EForbiddenExpect (pvpString (stmtContext flags))))
->     ignoreAssertions <- disableAssertions <$> getParserFlags
+>     ignoreAssertions <- (parseDisableAssertions . phaseFlags) <$> getParserFlags
 >     when (not ignoreAssertions)
 >              (parseWarn (pos, WExperimental "SV assertions"))
 >     assertEmptyAttributes EAttribsExpect atts
@@ -5899,7 +5899,7 @@ get current "Position"
 
 parse tokens into CSyntax
 
-> bsvParseTokens :: ErrorHandle -> Flags ->
+> bsvParseTokens :: ErrorHandle -> PhaseConfig ParseFlags ->
 >                   String -> String -> [SV_Token] ->
 >                   IO (CPackage, [WMsg])
 > bsvParseTokens errh flags filename defaultPkgName tokens =
@@ -5913,20 +5913,21 @@ parse tokens into CSyntax
 
 tokenize and parse string into CSyntax
 
-> bsvParseString :: ErrorHandle -> Flags ->
+> bsvParseString :: ErrorHandle -> PhaseConfig ParseFlags ->
 >                   String -> String -> String ->
 >                   IO (CPackage, TimeInfo, [WMsg])
 > bsvParseString errh flags filename defaultPkgName source =
 >     do
 >       let initpos =
->               updatePosStdlib (initialPosition filename) (stdlibNames flags)
+>               updatePosStdlib (initialPosition filename) (parseStdlibNames (phaseFlags flags))
 >       t <- getNow
 >       start flags DFvpp
 >       vppOut@(ppsource, includes)  <- preprocess errh flags initpos source
 >       let dumpnames = (Just (baseName (dropSuf filename)), Nothing, Nothing)
 >       t <- dump errh flags t DFvpp dumpnames (VPPOut vppOut)
->       when ( preprocessOnly flags ) $ do putStrLn ppsource
->                                          exitOK errh
+>       when (parsePreprocessOnly (phaseFlags flags)) $ do
+>           putStrLn ppsource
+>           exitOK errh
 >
 >       start flags DFbsvlex
 >       let tokens = scan initpos ppsource
@@ -5944,7 +5945,7 @@ parsing is done after we return
 wrapper function to allow parsing from TCL for a specific type
 XXX should fixup positions here
 
-> pStringWrapper :: ErrorHandle -> Flags ->
+> pStringWrapper :: ErrorHandle -> PhaseConfig ParseFlags ->
 >                   (SV_Parser a) -> [String]  -> IO (Either [EMsg] a)
 > pStringWrapper errh flags pf srcs = do
 >   let initPos = initialPosition "Commandline"

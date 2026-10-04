@@ -7,6 +7,7 @@ PREFIX?=$(TOP)/inst
 INSTALLDIR=$(PREFIX)/lib/Bluesim
 
 COMPDIR=$(TOP)/src/comp
+VERSIONDIR=$(TOP)/build/bluesim-version
 
 .PHONY: all
 all: install
@@ -135,7 +136,8 @@ $(LIB_KERNEL): version $(KERNEL_OBJS)
 
 .PHONY: version
 version:
-	./gen_version_h $(COMPDIR)/BuildVersion.hs > version.h
+	NOGIT=$(or $(NOGIT),0) NOUPDATEBUILDVERSION=$(or $(NOUPDATEBUILDVERSION),0) $(COMPDIR)/update-build-version.sh "$(VERSIONDIR)"
+	./gen_version_h "$(VERSIONDIR)/BuildVersion.hs" > version.h
 
 # Static check of the header files before releasing them.
 # Don't include headers which require systemC.
@@ -160,6 +162,7 @@ install: $(LIBS) test-headers
 clean:
 	$(RM) test_hdr.cxx version.h
 	$(RM) *.o *.p *.d $(LIBS)
+	$(RM) -r "$(VERSIONDIR)"
 
 .PHONY: full_clean
 full_clean: clean

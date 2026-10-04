@@ -13,6 +13,7 @@ module IWireSet(
 
 -- Clock and reset tracking sets
 
+import Warmup ()
 import Wires
 import ISyntax
 import Util(toMaybe)

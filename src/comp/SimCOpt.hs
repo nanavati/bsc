@@ -1,13 +1,13 @@
 module SimCOpt ( simCOpt ) where
 
-import Flags
+import PhaseConfig
 import SimCCBlock
 import ASyntax
 import ASyntaxUtil
 import Id( Id, getIdBaseString, setIdBaseString
          , getIdQualString, setIdQualString
          , unQualId, isFire )
-import ABinUtil(InstModMap)
+import ArtifactHierarchy(InstModMap)
 import ErrorUtil(internalError)
 import Util(mapSnd)
 import SimPrimitiveModules(isPrimitiveModule)
@@ -22,7 +22,7 @@ import PPrint
 
 -- import Debug.Trace
 
-simCOpt :: Flags -> InstModMap ->
+simCOpt :: (PhaseConfig BluesimGenFlags) -> InstModMap ->
            ([SimCCBlock], [SimCCSched], [SimCCClockGroup], SimCCGateInfo) ->
            ([SimCCBlock], [SimCCSched], [SimCCClockGroup], SimCCGateInfo)
 simCOpt flags instmodmap (blocks, scheds, clk_groups, gate_info) =
@@ -91,7 +91,7 @@ getFnRefs is_sched fn = concatMap (helper (sf_name fn, is_sched)) (sf_body fn)
 -- optimizations and reduces memory traffic, VCD size, etc. by not
 -- storing unneeded temporaries.  This will also remove entirely any
 -- defs which are defined but not used anywhere.
-moveDefsOntoStack :: Flags -> InstModMap -> ([SimCCBlock],[SimCCSched]) ->
+moveDefsOntoStack :: (PhaseConfig BluesimGenFlags) -> InstModMap -> ([SimCCBlock],[SimCCSched]) ->
                      ([SimCCBlock],[SimCCSched])
 moveDefsOntoStack flags instmodmap (blocks,scheds) =
   let -- find all defs used in the blocks
@@ -163,12 +163,12 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
               -- don't move AV task defs
               exprOkToMove = S.notMember (sbid,aid) atask_set
               -- only move CF or WF if -keep-fires is not set
-              cfwfOkToMove = not ((isFire aid) && (keepFires flags))
+              cfwfOkToMove = not ((isFire aid) && ((bluesimGenKeepFires . phaseFlags) flags))
               -- only move ports if -keep-fires is not set
               isPort = (sbid,aid) `S.member` port_set
-              portOkToMove = not (isPort && (keepFires flags))
+              portOkToMove = not (isPort && ((bluesimGenKeepFires . phaseFlags) flags))
               -- do not move ports if this is the top module of a SystemC model
-              isTopSysC = (genSysC flags) && (top_sbid == (Just sbid))
+              isTopSysC = ((bluesimGenGenSysC . phaseFlags) flags) && (top_sbid == (Just sbid))
               syscOkToMove = not (isPort && isTopSysC)
           in and [ sizeOkToMove
                  , exprOkToMove

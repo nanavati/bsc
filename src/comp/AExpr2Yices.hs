@@ -20,7 +20,6 @@ import qualified Yices as Y
 import Data.Word(Word32)
 
 import ErrorUtil(internalError)
-import Flags
 import Id(getIdBaseString, dummy_id)
 import Prim
 import IntLit
@@ -43,16 +42,15 @@ traceConv = "-trace-smt-conv" `elem` progArgs
 
 -- -------------------------
 
-initYState :: String -> Flags -> Bool ->
+initYState :: String -> Bool ->
               [ADef] -> [AVInst] -> [RuleTriple] -> IO YState
-initYState str flags doHardFail ds avis rs = do
+initYState str doHardFail ds avis rs = do
   -- this can throw an error
   ver <- Y.checkVersion
   when traceTest $ putStrLn $ "Using yices version: " ++ ver
   --
   ctx <- Y.mkContext
   return (YState { context = ctx,
-                   --flags = flags,
                    hardFail = doHardFail,
 
                    defMap = M.fromList [(i,d) | d@(ADef i _ _ _) <- ds],
@@ -313,7 +311,6 @@ cvtStatus res = case (res) of
 data YState =
     YState {
                context       :: Y.Context,
-               --flags         :: Flags,
                hardFail      :: Bool,
 
                defMap        :: M.Map AId ADef,

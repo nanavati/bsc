@@ -1,10 +1,10 @@
 module SimPackageOpt ( simPackageOpt ) where
 
-import Flags
+import PhaseConfig
 import SimPackage
 import ASyntax
 import ASyntaxUtil
-import AOpt(aExpandDynSel, aInsertCaseDef)
+import ACaseUtils(aExpandDynSel, aInsertCaseDef)
 import Prim
 import IntLit
 import IntegerUtil(aaaa)
@@ -23,13 +23,13 @@ import Util(map_insertManyWith)
 
 -- -------------------------
 
-simPackageOpt :: ErrorHandle -> Flags -> SimSystem -> IO SimSystem
+simPackageOpt :: ErrorHandle -> (PhaseConfig BluesimGenFlags) -> SimSystem -> IO SimSystem
 simPackageOpt errh flags ss = do
   let pkgs0 = M.toList (ssys_packages ss)
   pkgs1 <- mapSndM (pkgOpt errh flags) pkgs0
   return $ ss { ssys_packages = M.fromList pkgs1 }
 
-pkgOpt :: ErrorHandle -> Flags -> SimPackage -> IO SimPackage
+pkgOpt :: ErrorHandle -> (PhaseConfig BluesimGenFlags) -> SimPackage -> IO SimPackage
 pkgOpt errh flags pkg0 = do
   -- Replace dynamic array selection with case expressions.
   -- This needs to be done before aInsertCase, which can merge adjacent
@@ -299,11 +299,11 @@ insertCase pkg =
 
 -- This is monadic because it can report an error
 --
-convertASAny :: ErrorHandle -> Flags -> SimPackage -> IO SimPackage
+convertASAny :: ErrorHandle -> (PhaseConfig BluesimGenFlags) -> SimPackage -> IO SimPackage
 convertASAny errh flags apkg = do
   let
       tgt :: String
-      tgt = unSpecTo flags
+      tgt = (bluesimGenUnSpecTo . phaseFlags) flags
 
       mkVal :: Integer -> IO AExpr
       mkVal n = do

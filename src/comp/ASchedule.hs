@@ -32,12 +32,13 @@ import qualified GraphWrapper as GW
 import qualified GraphUtil as GU
 import GraphPaths
 import ASyntax
+import StaticSchedule
 import ASyntaxUtil
 import Backend
 import Pragma
 import Util
 import Eval
-import Version(bscVersionStr)
+import CompilerVersion(formatBscVersion)
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..),
              ErrorHandle, bsError, bsErrorNoExit, bsWarning,
              showErrorList, showWarningList, getErrMsgTag)
@@ -48,7 +49,8 @@ import SCC(scc,tsort)
 import Id(Id, emptyId, getIdString, getIdBaseString, getIdPosition,
           isRdyId, addToBase, mk_homeless_id, mkIdWillFire, addSuffix)
 import Position
-import Flags(Flags(..))
+import PhaseConfig
+import FlagTypes (DumpFlag(..), ResourceFlag(..))
 import VModInfo(vSched, vFields, VSchedInfo, VMethodConflictInfo, VFieldInfo(..))
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import IOUtil(progArgs)
@@ -420,7 +422,7 @@ convIO = lift . lift
 
 -- if scheduling cannot be implemented by Bluesim, then the backend is
 -- tainted to be Verilog only, so we return the package with the new backend
-aSchedule :: ErrorHandle -> Flags ->
+aSchedule :: ErrorHandle -> ScheduleConfig ->
              String -> PathUrgencyPairs -> [PProp] -> APackage ->
              IO (Either AScheduleErrInfo (AScheduleInfo, APackage))
 aSchedule errh flags prefix urgency_pairs pps amod = do
@@ -462,7 +464,7 @@ aSchedule errh flags prefix urgency_pairs pps amod = do
               _ -> internalError "aSchedule: missing info"
 
 
-aSchedule' :: ErrorHandle -> Flags ->
+aSchedule' :: ErrorHandle -> ScheduleConfig ->
               String -> PathUrgencyPairs -> [PProp] -> APackage ->
               SM (APackage)
 aSchedule' errh flags prefix urgency_pairs pps amod = do
@@ -496,7 +498,7 @@ type Step1Output =
      [ADef]
     )
 
-aSchedule_step1 :: ErrorHandle -> Flags -> String -> a -> APackage
+aSchedule_step1 :: ErrorHandle -> ScheduleConfig -> String -> a -> APackage
                 -> SM Step1Output
 aSchedule_step1 errh flags prefix pps amod = do
   -- ====================
@@ -662,7 +664,7 @@ aSchedule_step1 errh flags prefix pps amod = do
   -- initial state for rule disjoint testing
   let str = "aschedule_" ++ ppString nm
   disjointState0
-      <- convIO $ initDisjointTestState str errh flags defs state ruletriple
+      <- convIO $ initDisjointTestState str errh (schedSatBackend (phaseFlags flags)) defs state ruletriple
 
   -- dump ncSetCF when flagged
   when trace_ncsets $
@@ -1160,7 +1162,7 @@ type Step2Output =
      Maybe Backend,
      [ADef]
     )
-aSchedule_step2 :: ErrorHandle -> Flags -> String -> a
+aSchedule_step2 :: ErrorHandle -> ScheduleConfig -> String -> a
                 -> [(ARuleId, ARuleId, [PathNode])] -> APackage
                 -> Step1Output -> SM Step2Output
 aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
@@ -1443,7 +1445,7 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
 --       many values as a huge tuple between them. This was done simply because
 --       it was the easiest refactoring technique to apply.
 
-aSchedule_step3 :: ErrorHandle -> Flags -> String -> [PProp] -> APackage
+aSchedule_step3 :: ErrorHandle -> ScheduleConfig -> String -> [PProp] -> APackage
                 -> Step2Output -> SM APackage
 aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
                                            , cfConflictMap0
@@ -1841,7 +1843,7 @@ pString_r rule =
     in  drop_rule_pfx (getIdString rule)
 
 warnAndRecordArbitraryEarliness ::
-                 Flags -> AId -> [ARuleId] ->
+                 ScheduleConfig -> AId -> [ARuleId] ->
                  RuleDisjointTest -> RuleUsesMap ->
                  ConflictMap -> ConflictMap -> SchedOrdMap -> M.Map AId ARule ->
                  ErrorMonad ([(CSNode,CSNode,CSEdge)],
@@ -1988,7 +1990,7 @@ warnAndRecordArbitraryEarliness
 
 
 warnAndRecordArbitraryUrgency ::
-                 Flags -> AId -> UrgencyMap -> [(AId,[AId])] ->
+                 ScheduleConfig -> AId -> UrgencyMap -> [(AId,[AId])] ->
                  ConflictMap -> ConflictMap ->
                  S.Set ARuleId -> SchedOrdMap -> M.Map AId ARule -> {- CSMap -> -}
                  ErrorMonad [(CSNode,CSNode,CSEdge)]
@@ -2167,7 +2169,7 @@ reduceUrgencyWarnings cs =
 -- In situations 2 and 3, we do bias rules to be after methods in the
 -- execution order, when either location would work.
 
-mkEarlinessEdgesMethods :: Flags -> [ARuleId] -> [ARuleId] ->
+mkEarlinessEdgesMethods :: ScheduleConfig -> [ARuleId] -> [ARuleId] ->
                            [(ARuleId, ARuleId, [Conflicts])]
 mkEarlinessEdgesMethods flags ifcRuleNames userRuleNames =
     if (relaxMethodEarliness flags)
@@ -2335,7 +2337,7 @@ checkCombinedGraphForCycles errh moduleId csmap csgraph =
 
 -- returns an a flattened ordering of the nodes,
 -- as well as an urgency order and an earlines order
-flattenCombinedGraph :: Flags -> AId -> [AId] -> [AId] -> SchedOrdMap ->
+flattenCombinedGraph :: ScheduleConfig -> AId -> [AId] -> [AId] -> SchedOrdMap ->
                         CSMap -> [(CSNode,[CSNode])] ->
                         SM ([CSNode], [AId], [AId])
 flattenCombinedGraph flags moduleId userRuleNames ifcRuleNames
@@ -2524,18 +2526,6 @@ extractMEPairsSP sps =
         mkAllPairs (SPSchedule _) = []
         mkAllPairs (SPMutuallyExclusive ids) = mkMEPairs ids
         mkAllPairs (SPConflictFree ids) = []
-    in
-        nub (map ordPair (concatMap mkAllPairs sps))
-
-extractCFPairsSP :: [ASchedulePragma] -> [(ARuleId,ARuleId)]
-extractCFPairsSP sps =
-    let
-        mkAllPairs (SPUrgency _) = []
-        mkAllPairs (SPExecutionOrder _) = []
-        mkAllPairs (SPPreempt _ _) = []
-        mkAllPairs (SPSchedule _) = []
-        mkAllPairs (SPMutuallyExclusive ids) = []
-        mkAllPairs (SPConflictFree ids) = mkPairs ids
     in
         nub (map ordPair (concatMap mkAllPairs sps))
 
@@ -2815,7 +2805,7 @@ getStateInfo ss = (NoConflictSet $ S.unions cfss,
 -- Note that in revision 2894, Lennart rewrote the basic algorithm into
 -- two loops (and outer and an inner) to speed up computation.
 
-schedInfo :: Flags -> AId -> ConflictMap -> ConflictMap -> ConflictMap ->
+schedInfo :: ScheduleConfig -> AId -> ConflictMap -> ConflictMap -> ConflictMap ->
              [ARuleId] -> [ARuleId] -> SchedOrdMap ->
              RuleBetweenMap -> RuleMethodUseMap -> [(CSNode, [CSNode])] ->
              M.Map AId VSchedInfo -> M.Map AId [MethodId] ->
@@ -3022,7 +3012,7 @@ schedInfo flags moduleId cfmap scmap pcmap
 -- and test if any of those are in the ingoing rules to m2.
 
 findRuleBetweenAndBeforeMethods
-    :: Flags -> [ARuleId] -> [ARuleId] ->
+    :: ScheduleConfig -> [ARuleId] -> [ARuleId] ->
        RuleBetweenMap -> RuleMethodUseMap -> SchedOrdMap ->
        [(CSNode, [CSNode])] ->
        M.Map AId VSchedInfo -> M.Map AId [MethodId] ->
@@ -3049,7 +3039,7 @@ findRuleBetweenAndBeforeMethods flags ifcRuleNames userRuleNames
 
 
 makeRuleMethodReachableMaps
-    :: Flags -> [ARuleId] -> [ARuleId] ->
+    :: ScheduleConfig -> [ARuleId] -> [ARuleId] ->
        RuleBetweenMap -> RuleMethodUseMap -> SchedOrdMap -> [(CSNode, [CSNode])] ->
        (M.Map CSNode [(AId, [CSNode])], M.Map AId [CSNode])
 makeRuleMethodReachableMaps flags ifcRuleNames userRuleNames
@@ -3834,7 +3824,7 @@ mkRuleRelationDB rule_names rule_disjoint cf_map sc_map
 
   in rrdbFromList infos
 
-doQueries :: ErrorHandle -> Flags -> [ARuleId] -> RuleRelationDB -> IO ()
+doQueries :: ErrorHandle -> ScheduleConfig -> [ARuleId] -> RuleRelationDB -> IO ()
 doQueries errh flags rule_names relationDB =
     mapM_ print_sched_infos (schedQueries flags)
     where -- print info for a pair of rules
@@ -3906,7 +3896,7 @@ doQueries errh flags rule_names relationDB =
 --   RuleDisjointTest :: ARuleId -> ARuleId -> Bool
 --   RuleUsesMap      :: M.Map RuleId RuleUses
 
-mkConflictMap :: Flags -> DisjointTestState ->
+mkConflictMap :: ScheduleConfig -> DisjointTestState ->
                  RuleMethodUseMap -> NoConflictSet -> RuleDisjointTest ->
                  SM (ConflictMap, S.Set (ARuleId, ARuleId), DisjointTestState)
 mkConflictMap flags dtstate rule_meth_map ncset ignore_conflicts =
@@ -4264,7 +4254,7 @@ makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
 --
 -- If any conflict remains, an error is reported
 
-verifySafeRuleActions :: Flags -> [ADef] -> RulePCConflictUseMap ->
+verifySafeRuleActions :: ScheduleConfig -> [ADef] -> RulePCConflictUseMap ->
                          DisjointTestState -> SM DisjointTestState
 verifySafeRuleActions flags userDefs rulePCConflictUseMap dtstate = do
       let
@@ -4316,7 +4306,7 @@ verifySafeRuleActions flags userDefs rulePCConflictUseMap dtstate = do
 
       -- Prepare the error messages
       let show_all = showRangeConflict flags
-          ppe = pPrintExpandFlags flags userDefs PDReadable bContext
+          ppe = pPrintExpandFlags (schedExpandATSlimit (phaseFlags flags)) userDefs PDReadable bContext
           mkCondInfo c
               | isTrue c  = (False, Nothing)
               | show_all  = (False, Just $ ppe c)
@@ -4438,7 +4428,7 @@ makeRuleBetweenMap avis =
 -- between them are not parallel composable.
 
 verifyStaticScheduleOneRule ::
-    ErrorHandle -> Flags -> Maybe Backend ->
+    ErrorHandle -> ScheduleConfig -> Maybe Backend ->
     RuleBetweenMap -> RulePCConflictUseMap ->
     SM (Maybe Backend)
 verifyStaticScheduleOneRule errh flags gen_backend
@@ -4514,7 +4504,7 @@ verifyStaticScheduleOneRule errh flags gen_backend
 -- to minimize Bluesim/Verilog differences
 
 verifyStaticScheduleTwoRules ::
-    ErrorHandle -> Flags -> Maybe Backend -> AId ->
+    ErrorHandle -> ScheduleConfig -> Maybe Backend -> AId ->
     RuleBetweenMap -> RuleMethodUseMap ->
     [ARuleId] -> ExclusiveRulesDB -> RuleDisjointTest ->
     S.Set (ARuleId, ARuleId) ->
@@ -4919,7 +4909,7 @@ mkPathExplanation seq_map path_nodes =
 -- generate DOT graphs
 
 -- generic dumping function
-dumpDOTGraph :: ErrorHandle -> Flags ->
+dumpDOTGraph :: ErrorHandle -> ScheduleConfig ->
                 String -> String -> String -> DOTGraph -> IO ()
 dumpDOTGraph errh flags prefix modName suffix graph = do
     let contents = printDOTGraph graph
@@ -4934,18 +4924,18 @@ dumpDOTGraph errh flags prefix modName suffix graph = do
 
 -- ----------
 
-dumpConflictMapDOT :: ErrorHandle -> Flags -> String -> AId ->
+dumpConflictMapDOT :: ErrorHandle -> ScheduleConfig -> String -> AId ->
                       [AId] -> [AId] -> ConflictMap -> IO ()
 dumpConflictMapDOT errh flags prefix modId
                    ifcRuleNames userRuleNames cmap = do
-    timeStr <- mkTimestampComment flags
+    timeStr <- mkTimestampComment (schedTimeStamps (phaseFlags flags))
     let modName = getIdBaseString modId
         graph = conflictMapToDOT flags timeStr modName
                                  ifcRuleNames userRuleNames cmap
     dumpDOTGraph errh flags prefix modName "conflict" graph
 
 
-conflictMapToDOT :: Flags -> String -> String -> [AId] -> [AId] ->
+conflictMapToDOT :: ScheduleConfig -> String -> String -> [AId] -> [AId] ->
                     ConflictMap -> DOTGraph
 conflictMapToDOT flags timeStr modName ifcRuleNames userRuleNames cmap =
     let
@@ -4976,7 +4966,7 @@ conflictMapToDOT flags timeStr modName ifcRuleNames userRuleNames cmap =
             doubleQuote
                 ("Conflict graph for module " ++
                  "\\\"" ++ modName ++ "\\\"\\n" ++
-                 "Generated by " ++ bscVersionStr (showVersion flags) ++ "\\n" ++
+                 "Generated by " ++ formatBscVersion (phaseCompilerVersion flags) (showVersion flags) ++ "\\n" ++
                  timeStr)
         graph_attrs = [GraphAttr (GLabel graph_label)]
         stmts = node_stmts ++ edge_stmts ++ graph_attrs
@@ -4985,18 +4975,18 @@ conflictMapToDOT flags timeStr modName ifcRuleNames userRuleNames cmap =
 
 -- ----------
 
-dumpExecGraphDOT :: ErrorHandle -> Flags -> String -> AId ->
+dumpExecGraphDOT :: ErrorHandle -> ScheduleConfig -> String -> AId ->
                     [AId] -> [AId] -> [(AId,[AId])] -> IO ()
 dumpExecGraphDOT errh flags prefix modId
                  ifcRuleNames userRuleNames scgraph = do
-    timeStr <- mkTimestampComment flags
+    timeStr <- mkTimestampComment (schedTimeStamps (phaseFlags flags))
     let modName = getIdBaseString modId
         graph = execGraphToDOT flags timeStr modName
                                ifcRuleNames userRuleNames scgraph
     dumpDOTGraph errh flags prefix modName "exec" graph
 
 
-execGraphToDOT :: Flags -> String -> String -> [AId] -> [AId] ->
+execGraphToDOT :: ScheduleConfig -> String -> String -> [AId] -> [AId] ->
                   [(AId,[AId])] -> DOTGraph
 execGraphToDOT flags timeStr modName ifcRuleNames userRuleNames scgraph =
     let
@@ -5019,7 +5009,7 @@ execGraphToDOT flags timeStr modName ifcRuleNames userRuleNames scgraph =
             doubleQuote
                 ("Execution order graph for module " ++
                  "\\\"" ++ modName ++ "\\\"\\n" ++
-                 "Generated by " ++ bscVersionStr (showVersion flags) ++ "\\n" ++
+                 "Generated by " ++ formatBscVersion (phaseCompilerVersion flags) (showVersion flags) ++ "\\n" ++
                  timeStr)
         graph_attrs = [GraphAttr (GLabel graph_label)]
         stmts = node_stmts ++ edge_stmts ++ graph_attrs
@@ -5028,18 +5018,18 @@ execGraphToDOT flags timeStr modName ifcRuleNames userRuleNames scgraph =
 
 -- ----------
 
-dumpUrgencyGraphDOT :: ErrorHandle -> Flags -> String -> AId ->
+dumpUrgencyGraphDOT :: ErrorHandle -> ScheduleConfig -> String -> AId ->
                        [AId] -> [AId] -> UrgencyMap -> IO ()
 dumpUrgencyGraphDOT errh flags prefix modId
                     ifcRuleNames userRuleNames umap = do
-    timeStr <- mkTimestampComment flags
+    timeStr <- mkTimestampComment (schedTimeStamps (phaseFlags flags))
     let modName = getIdBaseString modId
         graph = urgencyGraphToDOT flags timeStr modName
                                   ifcRuleNames userRuleNames umap
     dumpDOTGraph errh flags prefix modName "urgency" graph
 
 
-urgencyGraphToDOT :: Flags -> String -> String -> [AId] -> [AId] ->
+urgencyGraphToDOT :: ScheduleConfig -> String -> String -> [AId] -> [AId] ->
                      UrgencyMap -> DOTGraph
 urgencyGraphToDOT flags timeStr modName ifcRuleNames userRuleNames umap =
     let
@@ -5062,7 +5052,7 @@ urgencyGraphToDOT flags timeStr modName ifcRuleNames userRuleNames umap =
             doubleQuote
                 ("Urgency order graph for module " ++
                  "\\\"" ++ modName ++ "\\\"\\n" ++
-                 "Generated by " ++ bscVersionStr (showVersion flags) ++ "\\n" ++
+                 "Generated by " ++ formatBscVersion (phaseCompilerVersion flags) (showVersion flags) ++ "\\n" ++
                  timeStr)
         graph_attrs = [GraphAttr (GLabel graph_label)]
         stmts = node_stmts ++ edge_stmts ++ graph_attrs
@@ -5071,18 +5061,18 @@ urgencyGraphToDOT flags timeStr modName ifcRuleNames userRuleNames umap =
 
 -- ----------
 
-dumpCombinedGraphDOT :: ErrorHandle -> Flags -> String -> AId ->
+dumpCombinedGraphDOT :: ErrorHandle -> ScheduleConfig -> String -> AId ->
                         [AId] -> [AId] -> [(CSNode,[CSNode])] -> IO ()
 dumpCombinedGraphDOT errh flags prefix modId
                      ifcRuleNames userRuleNames seq_graph = do
-    timeStr <- mkTimestampComment flags
+    timeStr <- mkTimestampComment (schedTimeStamps (phaseFlags flags))
     let modName = getIdBaseString modId
         graph = combinedGraphToDOT flags timeStr modName
                                    ifcRuleNames userRuleNames seq_graph
     dumpDOTGraph errh flags prefix modName "combined" graph
 
 
-combinedGraphToDOT :: Flags -> String -> String -> [AId] -> [AId] ->
+combinedGraphToDOT :: ScheduleConfig -> String -> String -> [AId] -> [AId] ->
                       [(CSNode,[CSNode])] ->
                       DOTGraph
 combinedGraphToDOT flags timeStr modName ifcRuleNames userRuleNames seq_graph =
@@ -5119,7 +5109,7 @@ combinedGraphToDOT flags timeStr modName ifcRuleNames userRuleNames seq_graph =
             doubleQuote
                 ("Combined scheduling graph for module " ++
                  "\\\"" ++ modName ++ "\\\"\\n" ++
-                 "Generated by " ++ bscVersionStr (showVersion flags) ++ "\\n" ++
+                 "Generated by " ++ formatBscVersion (phaseCompilerVersion flags) (showVersion flags) ++ "\\n" ++
                  timeStr)
         graph_attrs = [GraphAttr (GLabel graph_label)]
 
@@ -5129,18 +5119,18 @@ combinedGraphToDOT flags timeStr modName ifcRuleNames userRuleNames seq_graph =
 
 -- ----------
 
-dumpCombinedGraphFullDOT :: ErrorHandle -> Flags -> String -> AId ->
+dumpCombinedGraphFullDOT :: ErrorHandle -> ScheduleConfig -> String -> AId ->
                             [AId] -> [AId] -> CSMap -> IO ()
 dumpCombinedGraphFullDOT errh flags prefix modId
                          ifcRuleNames userRuleNames seq_map = do
-    timeStr <- mkTimestampComment flags
+    timeStr <- mkTimestampComment (schedTimeStamps (phaseFlags flags))
     let modName = getIdBaseString modId
         graph = combinedGraphFullToDOT flags timeStr modName
                                        ifcRuleNames userRuleNames seq_map
     dumpDOTGraph errh flags prefix modName "combined_full" graph
 
 
-combinedGraphFullToDOT :: Flags -> String -> String -> [AId] -> [AId] ->
+combinedGraphFullToDOT :: ScheduleConfig -> String -> String -> [AId] -> [AId] ->
                           CSMap -> DOTGraph
 combinedGraphFullToDOT flags timeStr modName ifcRuleNames userRuleNames seq_map =
     let
@@ -5189,7 +5179,7 @@ combinedGraphFullToDOT flags timeStr modName ifcRuleNames userRuleNames seq_map 
                 ("Full combined scheduling graph for module " ++
                  "\\\"" ++ modName ++ "\\\"\\n" ++
                  "Edges inserted by the compiler are higlighted in blue and bold\\n" ++
-                 "Generated by " ++ bscVersionStr (showVersion flags) ++ "\\n" ++
+                 "Generated by " ++ formatBscVersion (phaseCompilerVersion flags) (showVersion flags) ++ "\\n" ++
                  timeStr)
         graph_attrs = [GraphAttr (GLabel graph_label)]
 
@@ -5273,3 +5263,20 @@ getNextRule r rd_map (r0:r1:rest) | r == r0 =
 
 getNextRule r rd_map (_:rest) = getNextRule r rd_map rest
 getNextRule r rd_map [] = Nothing
+
+-- Local projections keep this phase independent of invocation-wide options.
+
+type ScheduleConfig = PhaseConfig SchedFlags
+backend cfg = schedBackend (phaseFlags cfg)
+biasMethodScheduling cfg = schedBiasMethodScheduling (phaseFlags cfg)
+infoDir cfg = runInfoDir (phaseRunOptions cfg)
+relaxMethodEarliness cfg = schedRelaxMethodEarliness (phaseFlags cfg)
+resource cfg = schedResource (phaseFlags cfg)
+schedConds cfg = schedSchedConds (phaseFlags cfg)
+schedDOT cfg = runSchedDOT (phaseRunOptions cfg)
+schedQueries cfg = schedSchedQueries (phaseFlags cfg)
+showRangeConflict cfg = schedShowRangeConflict (phaseFlags cfg)
+showVersion cfg = schedShowVersion (phaseFlags cfg)
+strictMethodSched cfg = schedStrictMethodSched (phaseFlags cfg)
+warnActionShadowing cfg = schedWarnActionShadowing (phaseFlags cfg)
+warnMethodUrgency cfg = schedWarnMethodUrgency (phaseFlags cfg)

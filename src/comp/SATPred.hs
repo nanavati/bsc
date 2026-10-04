@@ -4,7 +4,7 @@ module SATPred(
   solvePred
   ) where
 
-import Flags
+import FlagTypes (SATFlag(..))
 import Pred
 
 import qualified Pred2STP as STP
@@ -22,9 +22,9 @@ data SATPredState =
 
 -- -------------------------
 
-initSATPredState :: Flags -> IO SATPredState
+initSATPredState :: SATFlag -> IO SATPredState
 initSATPredState flags = do
-    case (satBackend flags) of
+    case flags of
       SAT_STP -> do
         stp_state <- STP.initSState
         return (SATPredS_STP stp_state)

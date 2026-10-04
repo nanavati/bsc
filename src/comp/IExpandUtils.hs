@@ -83,7 +83,8 @@ import Eval
 import PPrint
 -- import PVPrint
 import PFPrint
-import Flags
+import PhaseConfig
+import FlagTypes
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, MsgContext,
              bsError, bsWarning, bsErrorWithContext, bsWarningWithContext,
              bsErrorWithContextNoExit, exitFail, closeOpenHandles)
@@ -107,7 +108,7 @@ import Util
 import Verilog(vKeywords, vIsValidIdent)
 import Changed
 
-import IConv(iConvT)
+import ITypeNormalize(fullTypeNormalizer)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -127,7 +128,7 @@ trace_hcell cell expr | cell `elem` dump_hcells = traceM ("hcell " ++ show cell 
 -}
 
 -----------------------------------------------------------------------------
--- Trace Flags
+-- Trace flags
 
 -- The comments for these flags are in IExpand
 
@@ -151,8 +152,6 @@ doTraceLoc :: Bool
 doTraceLoc = elem "-trace-state-loc" progArgs
 doTraceATFCache :: Bool
 doTraceATFCache = elem "-trace-atf-cache" progArgs
-doTraceATFCacheMiss :: Bool
-doTraceATFCacheMiss = doTraceATFCache || elem "-trace-atf-cache-miss" progArgs
 
 -----------------------------------------------------------------------------
 
@@ -499,7 +498,7 @@ data GStateRO = GStateRO {
         checkMaxStep :: !Bool,
         maxStep :: !Integer,
         stepWarnInterval :: !Integer,
-        flags :: !Flags
+        flags :: !(PhaseConfig ElabFlags)
         }
 
 -- full evaluator state
@@ -545,7 +544,7 @@ data GState = GState {
         portTypeMap    :: PortTypeMap, -- map of state var -> port -> type
 
         rules          :: HRules,    -- accumulated rules
-        newRuleSuffix  :: Integer,   -- store for creating unique names when ruleNameCheck is off
+        newRuleSuffix  :: Integer,   -- store for creating unique names when (elabRuleNameCheck . phaseFlags) is off
 
         -- scope for scheduling attribute names
         schedNameScope  :: SchedNameScope,
@@ -604,7 +603,7 @@ data GState = GState {
         atfCache :: !IATFCache
         }
 
-initGState :: ErrorHandle -> Flags ->
+initGState :: ErrorHandle -> PhaseConfig ElabFlags ->
               SymTab -> M.Map Id HExpr ->
               IATFCache ->
               Id -> Bool -> [PProp] ->
@@ -612,14 +611,14 @@ initGState :: ErrorHandle -> Flags ->
 initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
     let gsro = GStateRO { errHandle = errh,
                           symtab = symt,
-                          checkMaxStep = redStepsMaxIntervals flags /= 0,
-                          maxStep = redSteps flags,
-                          stepWarnInterval = redStepsWarnInterval flags,
+                          checkMaxStep = elabRedStepsMaxIntervals (phaseFlags flags) /= 0,
+                          maxStep = elabRedStepsWarnInterval (phaseFlags flags) * elabRedStepsMaxIntervals (phaseFlags flags),
+                          stepWarnInterval = elabRedStepsWarnInterval (phaseFlags flags),
                           flags = flags,
                           defenv = alldefs
                         }
         gs = GState { stepNo = 0,
-                      nextWarnStep = redStepsWarnInterval flags,
+                      nextWarnStep = elabRedStepsWarnInterval (phaseFlags flags),
                       stateNo = 0,
                       stateNameMap = M.empty,
                       stateLocMap = M.empty,
@@ -660,7 +659,7 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       cexprCache = M.empty,
                       savedRules = [],
                       badEvaluation = False,
-                      aggressive_cond = aggImpConds flags,
+                      aggressive_cond = elabAggImpConds (phaseFlags flags),
                       atfCache = atf_cache
  }
     in  gs
@@ -681,7 +680,7 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_atfCache :: IATFCache,
                            goutput :: a }
 
-runG :: ErrorHandle -> Flags ->
+runG :: ErrorHandle -> PhaseConfig ElabFlags ->
         SymTab -> M.Map Id HExpr ->
         IATFCache ->
         Id -> Bool -> [PProp] -> G a ->
@@ -777,7 +776,7 @@ eNoNF e =
 --    in  errG (pos, ENoNF (ppString ty) (show e))
 
 -- depends on the invariant that
--- max steps is a multiple of stepWarnInterval (enforced by Flags)
+-- max steps is a multiple of stepWarnInterval (enforced by the driver)
 -- and that stepWarnInterval > 0
 step :: Id -> G ()
 step i = do s <- get
@@ -829,7 +828,7 @@ addRules rs = do
   suf <- getNewRuleSuffix
   -- this is like iRUnion, but with different attribute checking
   let cur_rules@(IRules sps1 rs1) = (rules s)
-      (suf', rs') = uniquifyRules flags suf cur_rules rs
+      (suf', rs') = uniquifyRules (elabRuleNameCheck (phaseFlags flags)) suf cur_rules rs
   updNewRuleSuffix suf'
 
   -- check the names in attributes of the new rules
@@ -858,7 +857,7 @@ addRules rs = do
   let new_rules =
           -- As the size of rs1 grows, it's more efficient to add to the front
           -- XXX We should consider a better data structure
-          if (ruleNameCheck flags)
+          if (elabRuleNameCheck (phaseFlags flags))
           then (IRules (sps1 ++ sps2) (rs1 ++ rs2))
           else (IRules (sps2 ++ sps1) (rs2 ++ rs1))
   put (s { rules = new_rules } )
@@ -1686,7 +1685,7 @@ makeInputRstn id_rst mclk = do
   flags <- getFlags
   pps <- getPragmas
 
-  let id_wire = makeArgResetPortId (resetName flags) pps id_rst
+  let id_wire = makeArgResetPortId (elabResetName (phaseFlags flags)) pps id_rst
   topRstnClock <- case mclk of
                     Nothing -> return noClock
                     Just n  -> do -- until we support recursive instantiation,
@@ -1709,7 +1708,7 @@ makeOutputRstn mod_pos id_rst port_id rstn = do
   flags <- getFlags
   pps <- getPragmas
 
-  let id_wire = makeIfcResetPortId (resetName flags) pps (unQualId id_rst) port_id
+  let id_wire = makeIfcResetPortId (elabResetName (phaseFlags flags)) pps (unQualId id_rst) port_id
 
   -- is the value an input reset
   top_in_resets <- getInputResets
@@ -2209,17 +2208,17 @@ traceProgress str = liftIO $ do
 showTopProgress :: String -> G ()
 showTopProgress str = do
   flags <- getFlags
-  when (showElabProgress flags) $ traceProgress str
+  when (runShowElabProgress (phaseRunOptions flags)) $ traceProgress str
 
 showModProgress :: IStateLoc -> String -> G ()
 showModProgress ns str = do
   flags <- getFlags
-  let showHidden = tclShowHidden flags
+  let showHidden = runTclShowHidden (phaseRunOptions flags)
       hide = if showHidden
              then False
              else (hasHide ns) || (hasHideAll ns)
       ign  = (hasIgnore ns)
-  when ((showElabProgress flags) && (not (hide || ign))) $
+  when ((runShowElabProgress (phaseRunOptions flags)) && (not (hide || ign))) $
       let mod = case (stateLocToHierName ns showHidden) of
                   Nothing -> ""
                   Just m -> "(" ++ m ++ ") "
@@ -2228,11 +2227,11 @@ showModProgress ns str = do
 showRuleProgress :: IStateLoc -> Bool -> String -> String -> G ()
 showRuleProgress ns rhide name str = do
   flags <- getFlags
-  let showHidden = tclShowHidden flags
+  let showHidden = runTclShowHidden (phaseRunOptions flags)
       hide = if showHidden
              then False
              else rhide || (hasHideAll ns)
-  when ((showElabProgress flags) && (not hide)) $
+  when ((runShowElabProgress (phaseRunOptions flags)) && (not hide)) $
       let mod = case (stateLocToHierName ns showHidden) of
                   Nothing -> ""
                   Just m -> "(" ++ m ++ ") "
@@ -2247,7 +2246,7 @@ getElabProgressContext = do
       addPos pos = " at " ++ prPosition pos
   flags <- getFlags
   s <- get
-  let showHidden = tclShowHidden flags
+  let showHidden = runTclShowHidden (phaseRunOptions flags)
       scope = schedNameScope s
   case scope of
     (SchedNameFrame ns _ _ ep : _) -> do
@@ -2568,50 +2567,12 @@ updHeap tag (p, HeapData ref) e = do
    let e' = e { hc_name = best_name }
    deepseq best_name $ liftIO (writeIORef ref e')
 
--- Type normalization function used in evaluation.
--- Fully traverse and reduce all type function applications where possible.
-fullTypeNormalizer :: Flags -> SymTab -> IATFCache -> IType -> Changed IType
-fullTypeNormalizer _ _ _ (ITCon _ _ _) = Unchanged
-fullTypeNormalizer _ _ _ (ITNum _)     = Unchanged
-fullTypeNormalizer _ _ _ (ITStr _)     = Unchanged
-fullTypeNormalizer _ _ _ (ITVar _)     = Unchanged
-fullTypeNormalizer flags symt cache (ITForAll i k t) = changed1 (ITForAll i k) t'
-  where t' = fullTypeNormalizer flags symt cache t
-fullTypeNormalizer flags symt cache t@(ITAp _ _)
-    | (f@(ITCon atfId _ (TIatf { atf_param_idxs = pIdxs })), as) <- splitITAp t
-    , length as == length pIdxs  -- Only attempt to reduce type functions that are fully applied.
-    , as' <- map (changedOrId $ fullTypeNormalizer flags symt cache) as
-    , all canNorm as'
-    = Changed $ case M.lookup (atfId, as') cache of
-        Just result ->
-          tracep doTraceATFCache
-            ("fullTypeNormalizer - ATF cache hit: " ++ ppReadable (atfId, as') ++
-             " -> " ++ ppReadable result)
-            result
-        Nothing -> normTFun $ foldl ITAp f as'
-  where -- The cache is keyed on concrete types; ITVar and ITForAll can't be looked up
-        canNorm (ITVar _)        = False
-        canNorm (ITForAll _ _ _) = False
-        canNorm (ITAp f a)       = canNorm f && canNorm a
-        canNorm _                = True
-        normTFun t =
-          let t' = tracep doTraceATFCacheMiss
-                     ("fullTypeNormalizer - ATF cache miss: " ++ ppReadable t)
-                     (iConvT flags symt $ iToCT t)
-          in case splitITAp t' of
-               ((ITCon _ _ (TIatf {})), _) -> internalError $
-                    "fullTypeNormalizer - unsimplified: " ++ ppReadable (t,t')
-               _ -> t'
-fullTypeNormalizer flags symt cache (ITAp f a) = changed2 normITAp f a f' a'
-  where f' = fullTypeNormalizer flags symt cache f
-        a' = fullTypeNormalizer flags symt cache a
-
 getTypeNormalizerC :: G (IType -> Changed IType)
 getTypeNormalizerC = do
   flags <- getFlags
   symt <- getSymTab
   cache <- getATFCache
-  return $ fullTypeNormalizer flags symt cache
+  return $ fullTypeNormalizer (elabTypeSolverFlags (phaseFlags flags)) symt cache
 
 getTypeNormalizer :: G (IType -> IType)
 getTypeNormalizer = fmap changedOrId getTypeNormalizerC
@@ -2655,7 +2616,7 @@ getDefEnv = do s <- get
                return (defenv (ro s))
 
 {-# INLINE getFlags #-}
-getFlags :: G Flags
+getFlags :: G (PhaseConfig ElabFlags)
 getFlags = do s <- get
               return (flags (ro s))
 
@@ -2957,13 +2918,13 @@ insertCExprCache ce it e = do
 -- * prepending "RL_" to the names
 -- * and adding the IdPRule property.
 -- Scheduling attributes are updated to account for changes in the names.
-cleanupFinalRules :: Flags -> IRules a -> IRules a
+cleanupFinalRules :: PhaseConfig ElabFlags -> IRules a -> IRules a
 cleanupFinalRules flags (IRules sps rs) = IRules sps' (reverse rs')
   where (_, id_rename_map, rs') = foldl foldFn (S.empty, M.empty, []) rs
         -- rename Ids in the attributes, but keep their original positions
         -- (we want the Ids to point to the user-written names in the source)
         sps' = substSchedPragmaIds id_rename_map sps
-        uniqueFn seen = if (ruleNameCheck flags)
+        uniqueFn seen = if (elabRuleNameCheck (phaseFlags flags))
                         then makeUniqueRuleString seen
                         else id
         -- fold over the list, keep tracking of names that have been seen

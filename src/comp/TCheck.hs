@@ -16,7 +16,8 @@ import Util(fst3)
 import IntLit
 import IntegerUtil(mask)
 import Classic(isBSV)
-import Flags(Flags, letGen)
+import PhaseConfig
+import FlagTypes
 import PFPrint
 import Id
 import FStringCompat
@@ -2946,7 +2947,7 @@ tiImpls recursive as ibs = do
     let
         -- The generic vars are the local vars (tv of the ts and the rs)
         -- which are not fixed; empty when generalization is disabled
-        gs = if letGen flags
+        gs = if typecheckLetGen flags
              then (lvs_final `union` tv rs_final) \\ fs_final
              else []
         -- The inferred type scheme quantified over "gs"
@@ -3214,7 +3215,7 @@ isWriteType = ifcFieldIdToTConId (id_write noPosition)
 
 -- check if an interface has a ._write method
 -- or is in PrimWriteable
-writeableIfc :: Flags -> SymTab -> CType -> Bool
+writeableIfc :: TypecheckFlags -> SymTab -> CType -> Bool
 writeableIfc flags r t
     | Just _ <- isWriteType r t = True
     -- incoherent matches are resolved *after* reducePred

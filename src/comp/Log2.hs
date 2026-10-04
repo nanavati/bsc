@@ -6,6 +6,7 @@ module Log2(log2,log10) where
 -- GHC 9.0 has an entirely new ghc-bignum package.
 -- See https://iohk.io/en/blog/posts/2020/07/28/improving-haskells-big-numbers-support/
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 900)
+import Warmup ()
 import GHC.Num.Integer (Integer(IS, IP, IN))
 import GHC.Num.BigNat
 #else

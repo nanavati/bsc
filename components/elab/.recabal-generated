@@ -1,0 +1,23 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+ACFTemplate.hs
+ACleanup.hs
+AConv.hs
+ARankMethCalls.hs
+ATaskSplice.hs
+BExpr.hs
+BoolOpt.hs
+IDropRules.hs
+IExpand.hs
+IExpandUtils.hs
+IInline.hs
+IInlineFmt.hs
+IInlineUtil.hs
+ILift.hs
+IPrims.hs
+ISplitIf.hs
+ITransform.hs
+IWireSet.hs
+Intervals.hs
+SetupHooks.hs
+bsc-elab.cabal

@@ -10,13 +10,15 @@ import Util(integerToBits, makePairs, log2, itos)
 import PPrint
 import IntLit
 import ErrorUtil
-import Flags(Flags, synthesize)
+import PhaseConfig
 import Position(noPosition)
 import FStringCompat(mkFString)
 import Id
 import Prim
 import Pragma(DefProp, defPropsHasNoCSE)
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil(tsortADefs, aType, isConst, aSize, )
 import AExpand(aSRemoveUnused)
 import AOpt(aOptBoolExpr)
@@ -33,9 +35,9 @@ synthPref = "_dw"
 
 -- ---------------
 
-aSynthesize :: Flags -> ASPackage -> ASPackage
+aSynthesize :: (PhaseConfig VerilogGenFlags) -> ASPackage -> ASPackage
 aSynthesize flags p@(ASPackage { aspkg_values = ds }) =
-    if not (synthesize flags) then
+    if not ((verilogGenSynthesize . phaseFlags) flags) then
         p
     else
         -- XXX use some fast removal of unused defs & renamings.

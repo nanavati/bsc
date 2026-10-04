@@ -37,6 +37,40 @@ jobs:
           ../.github/workflows/check_confdir.py
           ../.github/workflows/check_symlinks.py
 
+  # Use GHC 9.14.1 object determinism. Compare a serial reference,
+  # 16 jobs and three 64-job builds in one checkout, then check edit/revert.
+  build-check-determinism:
+    name: "Check: Cabal build determinism"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Install dependencies
+        run: sudo .github/workflows/install_dependencies_ubuntu.sh
+      - name: Install GHC and Cabal
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: 9.14.1
+          cabal: 3.16.1.0
+      - name: Check build determinism
+        shell: bash
+        run: |
+          cabal update
+          # Keep each GHC heap bounded and use small allocation areas for
+          # the many workers sharing Cabal's jobserver. Apply the same RTS
+          # settings at every count so only build parallelism changes.
+          printf 'program-options\n  ghc-options: +RTS -M5G -A8m -RTS\n' > cabal.project.local
+          python3 util/cabal/check-determinism.py --jobs 1 16 64 64 64
+      - name: Archive determinism logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cabal-determinism-ghc-9.14.1
+          path: determinism-results
+          if-no-files-found: warn
+
   # ------------------------------
   # Builds for release, using a reliable and stable version of GHC
 

@@ -21,7 +21,6 @@ import qualified STP as S
 import Data.Maybe(fromMaybe)
 
 import ErrorUtil(internalError)
-import Flags
 import Id(getIdBaseString, dummy_id)
 import Prim
 import IntLit
@@ -45,13 +44,12 @@ traceConv = "-trace-smt-conv" `elem` progArgs
 
 -- -------------------------
 
-initSState :: String -> Flags -> Bool ->
+initSState :: String -> Bool ->
               [ADef] -> [AVInst] -> [RuleTriple] -> IO SState
-initSState str flags doHardFail ds avis rs = do
+initSState str doHardFail ds avis rs = do
   ctx <- S.mkContext
   falseE <- S.mkFalse ctx
   return (SState { context = ctx,
-                   --flags = flags,
                    hardFail = doHardFail,
 
                    defMap = M.fromList [(i,d) | d@(ADef i _ _ _) <- ds],
@@ -292,7 +290,6 @@ checkNotEqM e1 e2 = withTraceTest $ do
 data SState =
     SState {
                context       :: S.Context,
-               --flags         :: Flags,
                hardFail      :: Bool,
 
                defMap        :: M.Map AId ADef,

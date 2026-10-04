@@ -27,6 +27,7 @@ module TIMonad(
         ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
+import Warmup ()
 import Prelude hiding ((<>))
 #endif
 
@@ -37,7 +38,8 @@ import Position
 import CSyntax(CExpr(..))
 import CType
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
-import Flags(Flags, maxTIStackDepth)
+import PhaseConfig
+import FlagTypes
 import Subst
 import Pred
 import Scheme
@@ -67,7 +69,7 @@ dontTrim = elem "-trace-skip-trim" progArgs
 
 -- typechecking state that persists across errors
 data TStatePersistent = TStatePersistent {
-   tsFlags :: Flags,
+   tsFlags :: TypecheckFlags,
    tsSymTab :: SymTab, -- symbol table
    tsNextTyVar :: !Int, -- index of the next generated tyvar
    tsRecoveredErrors :: [EMsg],
@@ -146,7 +148,7 @@ apSubTI x = do
               subst <- getSubst
               return (apSub subst x)
 
-initPersistentState :: Flags -> Bool -> SymTab -> TStatePersistent
+initPersistentState :: TypecheckFlags -> Bool -> SymTab -> TStatePersistent
 initPersistentState flags ai s = TStatePersistent {
     tsFlags = flags,
     tsSymTab = s,
@@ -173,7 +175,7 @@ data TIResult a = TIResult {
     tiATFCache     :: CATFCache
   }
 
-runTI :: Flags -> Bool -> SymTab -> TI a -> TIResult a
+runTI :: TypecheckFlags -> Bool -> SymTab -> TI a -> TIResult a
 runTI flags ai s m = TIResult {
     tiResult       = mkFinalResult result rec_errors,
     tiWarnings     = tsWarns pState,
@@ -183,7 +185,7 @@ runTI flags ai s m = TIResult {
   where (result, pState) = runTIState flags ai s m
         rec_errors = tsRecoveredErrors pState
 
-runTIState :: Flags -> Bool -> SymTab -> TI a ->
+runTIState :: TypecheckFlags -> Bool -> SymTab -> TI a ->
               (Either EMsgs (a, TStateRecover), TStatePersistent)
 runTIState flags ai s m = runState error_run (initPersistentState flags ai s)
   where error_run = runExceptT (runStateT m initRecoverState)
@@ -299,10 +301,10 @@ maskAllowIncoherent m = do
   lift $ put $ s_p' { tsAllowIncoherent = old_ai }
   return result
 
-getFlags :: TI Flags
+getFlags :: TI TypecheckFlags
 getFlags = lift (gets tsFlags)
 
-setFlags :: Flags -> TI ()
+setFlags :: TypecheckFlags -> TI ()
 setFlags new_flags = do
   let updFn s = s { tsFlags = new_flags }
   lift (modify updFn)
@@ -701,7 +703,7 @@ incrementSatStack x = do
   superstack <- gets tsSatStack
   let oldstack = sizedStackPeek superstack
   flags <- getFlags
-  case (sizedStackPush (maxTIStackDepth flags) oldstack x) of
+  case (sizedStackPush (typecheckMaxTIStackDepth flags) oldstack x) of
     Nothing -> (err(noPosition,ETypeStackOverflow))
     Just newstack ->
         modify (\ts -> ts { tsSatStack =
@@ -723,7 +725,7 @@ pushSatStackContext :: TI ()
 pushSatStackContext = do
   superstack <- gets tsSatStack
   flags <- getFlags
-  case (sizedStackPush (maxTIStackDepth flags) superstack (mkSizedStack [])) of
+  case (sizedStackPush (typecheckMaxTIStackDepth flags) superstack (mkSizedStack [])) of
     Nothing -> err (noPosition, ETypeSuperStackOverflow)
     Just newstack ->
         modify (\ts -> ts { tsSatStack = newstack })

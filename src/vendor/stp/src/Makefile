@@ -97,8 +97,13 @@ absrefine_counterexample/libabstractionrefinement.a \
 to-sat/libtosat.a sat/libminisat.a simplifier/libsimplifier.a \
 extlib-constbv/libconstantbv.a extlib-abc/libabc.a \
 cpp_interface/libcppinterface.a \
-parser/libparser.a main/libmain.a:
+parser/libparser.a main/libmain.a: FORCE
 	$(MAKE) -C $(@D) $(MAKEGOALS)
+
+# The subdirectory Makefiles own source/header dependencies.  Always ask them
+# to check, even when their archive or object already exists.
+.PHONY: FORCE
+FORCE:
 
 ####
 

@@ -1,5 +1,6 @@
 module CPPLineDirectives (cppLine_to_svLine) where
 -- need "-package regex-compat
+import Warmup ()
 import Text.Regex
 import ErrorUtil(internalError)
 

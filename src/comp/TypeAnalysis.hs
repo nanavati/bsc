@@ -14,7 +14,8 @@ import Data.Char(isUpper)
 
 import Util(doRight, itos)
 import Error(internalError, EMsg, ErrMsg(..))
-import Flags
+import PhaseConfig
+import FlagTypes
 import Classic
 import PFPrint
 import Position(getPosition,noPosition)
@@ -116,10 +117,10 @@ addGenVars as ks =
 
 -- ---------------
 
-analyzeType :: Flags -> SymTab -> CType -> Either [EMsg] TypeAnalysis
+analyzeType :: TypeSolverFlags -> SymTab -> CType -> Either [EMsg] TypeAnalysis
 analyzeType flags symtab unqual_ty = analyzeType' flags symtab unqual_ty False
 
-analyzeType' :: Flags -> SymTab -> CType -> Bool -> Either [EMsg] TypeAnalysis
+analyzeType' :: TypeSolverFlags -> SymTab -> CType -> Bool -> Either [EMsg] TypeAnalysis
 analyzeType' flags symtab unqual_ty primpair_is_interface = doRight analyze (kindCheck unqual_ty)
   where
     w = getBitWidth flags symtab
@@ -346,12 +347,12 @@ getFieldInfo symtab ty field =
 
 -- The type must have already had "convCType" applied to it, for the
 -- predicate reduction to work
-getBitWidth :: Flags -> SymTab -> CType -> Maybe Integer
+getBitWidth :: TypeSolverFlags -> SymTab -> CType -> Maybe Integer
 getBitWidth flags symtab t =
     case (findSClass symtab (CTypeclass idBits)) of
         Nothing -> Nothing -- Prelude hasn't been loaded :)
         -- Bits is a coherent typeclass
-        Just c -> case (TI.tiResult $ TI.runTI flags False symtab (getBitWidthM c)) of
+        Just c -> case (TI.tiResult $ TI.runTI (internalTypecheckFlags flags) False symtab (getBitWidthM c)) of
                       Right r -> r
                       Left _  -> Nothing
   where

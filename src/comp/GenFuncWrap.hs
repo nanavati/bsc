@@ -6,7 +6,8 @@ import Data.Maybe(isJust)
 import Data.List(unzip4, partition)
 import FStringCompat
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes
 import PPrint
 import Id
 import PreIds(idFromWrapNoInline, idActionValue)
@@ -48,7 +49,7 @@ type FuncInfo = (Id, Id, Id, [Id], CQType)
 --  * FuncInfo about the noinline functions, to be used by a later
 --    call to addFuncWrap
 --
-genFuncWrap :: ErrorHandle -> Flags -> Bool -> CPackage -> SymTab ->
+genFuncWrap :: ErrorHandle -> TypeSolverFlags -> Bool -> CPackage -> SymTab ->
                IO (CPackage, SymTab, [FuncInfo])
 genFuncWrap errh flags False p s = return (p, s, [])
 genFuncWrap errh flags True (CPackage pkgId exps imps impsigs fixs ds includes) symt = do
@@ -92,7 +93,7 @@ genFuncWrap errh flags True (CPackage pkgId exps imps impsigs fixs ds includes) 
 
 -- ---------------
 
-ctxReduce :: ErrorHandle -> Flags -> SymTab -> CDef -> IO CDef
+ctxReduce :: ErrorHandle -> TypeSolverFlags -> SymTab -> CDef -> IO CDef
 ctxReduce errh flags symt d =
     case (cCtxReduceDef flags symt (CValueSign d)) of
         Left msgs -> bsError errh msgs

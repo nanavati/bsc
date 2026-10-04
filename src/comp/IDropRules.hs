@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module IDropRules (iDropRules) where
 
+import Warmup ()
 import qualified Data.Set as S
 import qualified Data.Map.Lazy as M
 import Data.List(partition, find)
@@ -9,7 +10,7 @@ import Control.Monad(when)
 import IntLit
 import Position
 import Id
-import Flags(Flags, removeFalseRules, removeEmptyRules, warnUndetPred)
+import PhaseConfig
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsWarning)
 import ISyntax
@@ -36,14 +37,14 @@ import PPrint
 -- because the backend can't deal with methods
 -- that have empty action bodies
 --
-iDropRules :: ErrorHandle -> Flags -> IModule a -> IO (IModule a)
+iDropRules :: ErrorHandle -> PhaseConfig ElabFlags -> IModule a -> IO (IModule a)
 iDropRules errh flags imod0 = do
   imod1 <- dropFalseRules errh flags imod0
   imod2 <- dropEmptyRules errh flags imod1
   warnUndetPreds errh flags imod2
   return imod2
 
-dropFalseRules :: ErrorHandle -> Flags -> IModule a -> IO (IModule a)
+dropFalseRules :: ErrorHandle -> PhaseConfig ElabFlags -> IModule a -> IO (IModule a)
 dropFalseRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
                                           imod_local_defs = ds }) = do
     -- identify false rules
@@ -54,7 +55,7 @@ dropFalseRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
             partition isSplitRule falseRules
 
     -- warn about the non-split False rules
-    let removeFalseRule = removeFalseRules flags
+    let removeFalseRule = elabRemoveFalseRules (phaseFlags flags)
     let warnFalseRule (IRule {
                irule_name = rid , irule_pragmas = pragmas } ) =
            if (RPnoWarn `elem` pragmas)
@@ -82,7 +83,7 @@ dropFalseRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
                   }
 
 
-dropEmptyRules :: ErrorHandle -> Flags -> IModule a -> IO (IModule a)
+dropEmptyRules :: ErrorHandle -> PhaseConfig ElabFlags -> IModule a -> IO (IModule a)
 dropEmptyRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
                                           imod_local_defs = ds }) = do
     -- identify empty rules which do not preempt other rules (in sps)
@@ -96,7 +97,7 @@ dropEmptyRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
           partition isSplitRule emptyNonPreemptRules
 
     -- warn about the empty rules
-    let removeEmptyRule = removeEmptyRules flags
+    let removeEmptyRule = elabRemoveEmptyRules (phaseFlags flags)
     let warnEmptyRule ( IRule {
               irule_name = rid , irule_pragmas = pragmas } )=
            if (RPnoWarn `elem` pragmas)
@@ -165,8 +166,8 @@ removeIDefMethodPredsByRuleId dropped_rule_ids ds =
         filter (not . dropDef) ds
 
 
-warnUndetPreds :: ErrorHandle -> Flags -> IModule a -> IO ()
-warnUndetPreds errh flags imod | not (warnUndetPred flags) = return ()
+warnUndetPreds :: ErrorHandle -> PhaseConfig ElabFlags -> IModule a -> IO ()
+warnUndetPreds errh flags imod | not (elabWarnUndetPred (phaseFlags flags)) = return ()
 warnUndetPreds errh flags imod@(IModule { imod_rules = (IRules _ rs),
                                           imod_interface = ms,
                                           imod_local_defs = ds }) = do

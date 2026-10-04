@@ -6,7 +6,8 @@ import Prim
 import ErrorUtil(internalError)
 import PPrint
 import PreIds(idPrimExpIf, idActionValue_, idAVValue_)
-import qualified Flags(Flags, expandIf)
+import PhaseConfig
+import FlagTypes
 import Position
 import ISyntaxUtil
 import Id(Id, mkSplitId, getIdString)
@@ -32,7 +33,7 @@ import Data.List(genericLength)
 --   (Otherwise, every If should be annotated)
 --   After splitif is called, then there should be no wrappers.
 
-iSplitIf :: Flags.Flags -> IModule a -> IModule a
+iSplitIf :: PhaseConfig ElabFlags -> IModule a -> IModule a
 iSplitIf flags imod@(IModule { imod_rules = rules,
                                imod_interface = methods })
   = --trace ("iSplitIf happens!") $
@@ -54,7 +55,7 @@ iSplitIf flags imod@(IModule { imod_rules = rules,
 -- --------------------------
 
 -- expand `if' in rules to multiple rules
-do_iExpandIfRules :: Flags.Flags -> SPIdSplitMap -> IRules a ->
+do_iExpandIfRules :: PhaseConfig ElabFlags -> SPIdSplitMap -> IRules a ->
                      (SPIdSplitMap, IRules a)
 do_iExpandIfRules flags method_split_map (IRules sps rs)
   = --trace ("ie before : " ++ (ppReadable rs)) $
@@ -186,7 +187,7 @@ push :: forall a . Bool -> IExpr a -> IExpr a
 -- this function pushes SplitDeep and NosplitDeep down the tree
 -- the "state" of whether we are in splitting mode or not is stored
 -- and recursed down the tree in the argument do_split.  The initial
--- state of do_split is probably Flags.expandIf
+-- state of do_split is probably elabExpandIf
 push do_split e
   = let continue :: IExpr a -> IExpr a
         -- keeps pushing split or nosplit depending on the argument
@@ -343,7 +344,7 @@ make_branch_cond (BranchCaseDefault e_idx es_arms sz_idx) =
     let mkNEq e_arm = ieNot $ iePrimEQ (ITNum sz_idx) e_idx e_arm
     in  foldl ieAnd iTrue (map mkNEq es_arms)
 
-iExpandIfRule :: forall itype . Flags.Flags -> IRule itype ->
+iExpandIfRule :: forall itype . (PhaseConfig ElabFlags) -> IRule itype ->
                  (SPIdSplitMap, [IRule itype])
 iExpandIfRule flags
     r@(IRule { irule_name = i
@@ -354,7 +355,7 @@ iExpandIfRule flags
              })
   = let
         paths :: [Path_through_actions itype]
-        paths = run (push (Flags.expandIf flags) action)
+        paths = run (push (elabExpandIf (phaseFlags flags)) action)
 
         splitorig :: Maybe Id
         splitorig = maybe (Just i) Just orig
@@ -431,7 +432,7 @@ check_rule whatp r = check_if_wrappers whatp $ irule_body r
 
 -- methods
 
-iSplitIface :: Flags.Flags -> IEFace itype -> (SPIdSplitMap, IEFace itype)
+iSplitIface :: PhaseConfig ElabFlags -> IEFace itype -> (SPIdSplitMap, IEFace itype)
 iSplitIface flags ieface@(IEFace i xargs (Just (e,t)) Nothing wp fi)
     = if (t == itAction) then
             let irule = IRule i [] (getIdString i) wp iTrue e Nothing []

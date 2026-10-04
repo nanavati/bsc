@@ -1,6 +1,8 @@
 module InlineWires(aInlineWires) where
 
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
 import Data.List(partition)
 import PFPrint
@@ -9,7 +11,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import BackendNamingConventions
 import Error(internalError, EMsg, WMsg)
-import Flags(Flags, removeCross)
+import PhaseConfig
 
 -- import Debug.Trace
 
@@ -54,7 +56,7 @@ import Flags(Flags, removeCross)
 --      all expressions in the ASPackage (with aSubst).
 --
 
-aInlineWires :: Flags -> ASPackage -> (ASPackage, [WMsg], [EMsg])
+aInlineWires :: (PhaseConfig VerilogGenFlags) -> ASPackage -> (ASPackage, [WMsg], [EMsg])
 aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
                               aspkg_state_outputs = svars,
                               aspkg_values = defs,
@@ -75,7 +77,7 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         (rw0s, nonrwire_vs) = partition isRWire0 vs'
         (bw0s, nonrwire_vs') = partition isBypassWire0 nonrwire_vs
         should_inline_bw x = isBypassWire x &&
-                          ((not (isClockCrossingBypassWire x)) || (removeCross flags))
+                          ((not (isClockCrossingBypassWire x)) || ((verilogGenRemoveCross . phaseFlags) flags))
         (bws, nonwire_vs) = partition should_inline_bw nonrwire_vs'
         -- for each RWire instance, make a tuple of:
         --  * the instance name

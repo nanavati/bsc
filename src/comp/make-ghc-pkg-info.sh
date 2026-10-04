@@ -1,7 +1,35 @@
 #! /usr/bin/env bash
 set -euo pipefail
 
-PACKAGES=$@
+# Cabal exec selects GHC's package databases through an environment file.
+# ghc-pkg does not read that file, so give it the same explicit database stack.
+GHC_PKG_ARGS=()
+SELECTED_PACKAGE_IDS=()
+if [ -n "${GHC_ENVIRONMENT:-}" ] && [ -f "$GHC_ENVIRONMENT" ]; then
+    package_env_dir=$(cd -- "$(dirname -- "$GHC_ENVIRONMENT")" && pwd)
+    while IFS= read -r entry || [ -n "$entry" ]; do
+        case "$entry" in
+            clear-package-db) GHC_PKG_ARGS=() ;;
+            global-package-db) GHC_PKG_ARGS+=(--global) ;;
+            user-package-db) GHC_PKG_ARGS+=(--user) ;;
+            package-db\ *)
+                package_db=${entry#package-db }
+                case "$package_db" in
+                    /*) ;;
+                    *) package_db=$package_env_dir/$package_db ;;
+                esac
+                GHC_PKG_ARGS+=("--package-db=$package_db")
+                ;;
+            package-id\ *) SELECTED_PACKAGE_IDS+=("${entry#package-id }") ;;
+        esac
+    done < "$GHC_ENVIRONMENT"
+fi
+
+ghc_pkg() {
+    # The alternate expansion also works with nounset and empty arrays on
+    # the older Bash shipped with macOS.
+    ghc-pkg ${GHC_PKG_ARGS[@]+"${GHC_PKG_ARGS[@]}"} "$@"
+}
 
 # ===========================================================================
 
@@ -50,7 +78,9 @@ aunset () {
 
 # ===========================================================================
 
+ainit arr_selected
 ainit arr_id
+ainit arr_name
 ainit arr_ver
 ainit arr_lic
 ainit arr_copyr
@@ -60,16 +90,17 @@ ainit arr_deps
 #
 DELIM='-------------------------'
 
-# Regex for removing the hash from names like
-#   syb-0.7.2.4-FBa2dfZrzzu7owkvhCx23j
-#
-STRIP_HASH_REGEX='^([-[:lower:]]+[[:digit:]]+.[[:digit:]][.[:digit:]]*)-[[:alnum:]][[:alnum:]][[:alnum:]][[:alnum:]]+$'
-
-# Function to add a package to the database and follow its dependencies
+# Function to add a package to the database and follow its dependencies.
+# The argument is an installed package id, as listed in 'depends'.  Every
+# field is looked up by id rather than by name-version, because the id is
+# not always derived from the name: on macOS, cabal-install drops the
+# vowels from the package name when it forms a store id (old-locale is
+# ld-lcl-1.0.0.7-1ff3ddac), so the name has to come from the 'name' field.
 #
 add_pkg() {
-    local PKG_ID
+    local PKG_ID=$1
     local PKG_NAME
+    local PKG_KEY
     local PKG_VER
     local PKG_LIC
     local PKG_COPYR
@@ -77,23 +108,15 @@ add_pkg() {
 
     #echo "Looking up $1"
 
-    PKG_ID=`ghc-pkg field $1 id --simple-output`
+    PKG_NAME=`ghc_pkg field --ipid ${PKG_ID} name --simple-output`
+    PKG_KEY=`echo "${PKG_NAME}" | tr .- _`
 
-    if [[ ${PKG_ID} =~ ${STRIP_HASH_REGEX} ]] ; then
-	#echo "stripping ${PKG_ID} => ${BASH_REMATCH[1]}"
-	PKG_NAME=${BASH_REMATCH[1]}
-    else
-	PKG_NAME=${PKG_ID}
-    fi
-
-    PKG_NAME=`echo "${PKG_NAME}" | tr .- _`
-
-    aget arr_id "${PKG_NAME}" i_id
+    aget arr_id "${PKG_KEY}" i_id
     if [ -z ${i_id+x} ] ; then
-	PKG_VER=`ghc-pkg field $1 version --simple-output`
-	PKG_LIC=`ghc-pkg field $1 license --simple-output`
-	PKG_COPYR=`ghc-pkg field $1 copyright --simple-output`
-	PKG_DEPS=`ghc-pkg field $1 depends --simple-output`
+	PKG_VER=`ghc_pkg field --ipid ${PKG_ID} version --simple-output`
+	PKG_LIC=`ghc_pkg field --ipid ${PKG_ID} license --simple-output`
+	PKG_COPYR=`ghc_pkg field --ipid ${PKG_ID} copyright --simple-output`
+	PKG_DEPS=`ghc_pkg field --ipid ${PKG_ID} depends --simple-output`
 
 	if [ "${PKG_LIC}" != "BSD-3-Clause" ] ; then
 	    if [ "${PKG_LIC}" != "BSD-2-Clause" ] ; then
@@ -102,28 +125,44 @@ add_pkg() {
 	    fi
 	fi
 
-	aset arr_id ${PKG_NAME} "${PKG_ID}"
-	aset arr_ver ${PKG_NAME} "${PKG_VER}"
-	aset arr_lic ${PKG_NAME} "${PKG_LIC}"
-	aset arr_copyr ${PKG_NAME} "${PKG_COPYR}"
-	aset arr_deps ${PKG_NAME} "${PKG_DEPS}"
+	aset arr_id ${PKG_KEY} "${PKG_ID}"
+	aset arr_name ${PKG_KEY} "${PKG_NAME}"
+	aset arr_ver ${PKG_KEY} "${PKG_VER}"
+	aset arr_lic ${PKG_KEY} "${PKG_LIC}"
+	aset arr_copyr ${PKG_KEY} "${PKG_COPYR}"
+	aset arr_deps ${PKG_KEY} "${PKG_DEPS}"
 
 	for dep in ${PKG_DEPS}
 	do
 	    #echo "Following dep: $dep"
-	    if [[ ${dep} =~ ${STRIP_HASH_REGEX} ]] ; then
-		#echo "stripping ${dep} => ${BASH_REMATCH[1]}"
-		dep=${BASH_REMATCH[1]}
-	    fi
 	    add_pkg "${dep}"
 	done
     fi
 }
 
-# Add the packages from the command line (and their dependencies)
-for i in ${PACKAGES}
+# Prefer the exact units selected by Cabal, rather than every version with
+# that name which happens to be installed in its shared store.
+for id in ${SELECTED_PACKAGE_IDS[@]+"${SELECTED_PACKAGE_IDS[@]}"}
 do
-    add_pkg "$i"
+    name=$(ghc_pkg field --ipid "$id" name --simple-output)
+    key=$(echo "$name" | tr .- _)
+    aset arr_selected "$key" "$id"
+done
+
+# Add requested package names and walk dependencies by their exact unit ids.
+for package in "$@"
+do
+    key=$(echo "$package" | tr .- _)
+    aget arr_selected "$key" selected_id
+    if [ -n "${selected_id:-}" ]; then
+        ids=$selected_id
+    else
+        ids=$(ghc_pkg field "$package" id --simple-output)
+    fi
+    for id in $ids
+    do
+        add_pkg "$id"
+    done
 done
 
 # Generate the output, starting with a delimiter
@@ -134,26 +173,10 @@ keys=$(akeys arr_id)
 sorted_keys=`echo ${keys} | tr ' ' '\012' | sort | tr '\012' ' '`
 for i in ${sorted_keys}
 do
-    aget arr_id $i i_id
+    aget arr_name $i pkg
     aget arr_ver $i i_ver
     aget arr_lic $i i_lic
     aget arr_copyr $i i_copyr
-
-    # Because the package name was mangled to make the assoc array key
-    # re-construct it from the ID
-
-    if [[ ${i_id} =~ ${STRIP_HASH_REGEX} ]] ; then
-	pkg=${BASH_REMATCH[1]}
-    else
-	pkg=${i_id}
-    fi
-
-    # And then strip the version number
-
-    STRIP_VER_REGEX="^([-[:lower:]]+)-${i_ver}"
-    if [[ $pkg =~ ${STRIP_VER_REGEX} ]] ; then
-	pkg=${BASH_REMATCH[1]}
-    fi
 
     echo
     echo "package: $pkg"

@@ -10,7 +10,9 @@
 module BlueTcl where
 
 
+import Warmup ()
 import HTcl
+import Exceptions(withInternalErrorHandler)
 
 import Control.Monad(foldM, when, mzero)
 import Control.Monad.Trans(lift)
@@ -45,6 +47,10 @@ import Version
 import BuildVersion
 import Classic
 import Flags(Flags(..), verbose)
+import PhaseConfigDriver(parseConfig, typeSolverFlags, reduceConfig)
+import LegacyBA(LegacyABin(..))
+import LegacyBARead(readLegacyBAFile)
+import LegacyOptionsDriver(restoreLegacyOptions)
 import FlagsDecode(defaultFlags, decodeFlags, adjustFinalFlags, updateFlags,
                    showFlagsLst, showFlagsAllLst, getFlagValueString)
 import Error(internalError, EMsg, ErrMsg(..), showErrorList,
@@ -66,6 +72,7 @@ import Pred(Qual(..), expandSyn)
 import ISyntax
 import ISyntaxUtil(itBool, itClock, itReset)
 import ASyntax
+import StaticSchedule
 import ASyntaxUtil
 import Pragma
 import AScheduleInfo
@@ -102,7 +109,7 @@ foreign export ccall "blueshell_Init_Foreign" blueshell_Init :: TclInterp -> IO 
 
 --  1st call to haskell world (run time system has already been setup)
 blueshell_Init :: TclInterp -> IO Int
-blueshell_Init interp =
+blueshell_Init interp = withInternalErrorHandler $
   let handler :: CE.IOException -> IO Int
       handler e = htcl_AddObjErrorInfo interp (ioeGetErrorString e)
                     >>= return . fromEnum
@@ -137,29 +144,45 @@ returnIO = return
 namespace :: String
 namespace = "::Bluetcl"
 
+-- Keep internal-error reporting inside HTcl's exception conversion, including
+-- lazy values forced while translating the command result into a Tcl object.
+compilerRawFnToTclCmd :: TclObjCvt a => HTclCheckedCmdFn a -> TclObjCmdProc
+compilerRawFnToTclCmd action _ interp objc objv =
+    CE.catch
+        (withInternalErrorHandler $ do
+            args <- htclArgsToTcl interp objc objv
+            result <- action interp args
+            htclSetReturnVal interp result
+            return 0)
+        (htclErrorCatcher interp)
+
+compilerMakeCmdDesc :: TclObjCvt a => HTclCmdGrammar -> HTclCmdFn a -> HTclCmdDesc
+compilerMakeCmdDesc grmr action =
+    HTclCmdDesc grmr (compilerRawFnToTclCmd (htclCheckCmd grmr action))
+
 -- List of all tcl commands provided by this module
 tclCommands :: [HTclCmdDesc]
 tclCommands =
-    [ htclMakeCmdDesc showArgGrammar  showArgCmd
-    , HTclCmdDesc helpGrammar (htclRawFnToTclCmd helpCmd)
-    , htclMakeCmdDesc versionGrammar  versionNum
-    , htclMakeCmdDesc syntaxGrammar   syntaxCmd
-    , htclMakeCmdDesc flagsGrammar    tclFlags
-    , htclMakeCmdDesc packageGrammar  tclPackage
-    , htclMakeCmdDesc defsGrammar     tclDefs
-    , htclMakeCmdDesc parseGrammar    tclParse
-    , htclMakeCmdDesc typeGrammar     tclType
-    , htclMakeCmdDesc moduleGrammar   tclModule
-    , htclMakeCmdDesc scheduleGrammar tclSchedule
-    , htclMakeCmdDesc submodGrammar   tclSubmodule
-    , htclMakeCmdDesc ruleGrammar     tclRule
-    , htclMakeCmdDesc debugGrammar    tclDebug
-    , htclMakeCmdDesc bpackGrammar    tclBPack
-    , htclMakeCmdDesc bmodGrammar     tclBMod
-    , htclMakeCmdDesc btypeGrammar    tclBType
-    , htclMakeCmdDesc simGrammar      tclSim
-    , htclMakeCmdDesc dependGrammar   tclDepend
-    , htclMakeCmdDesc binstGrammar    tclBrowseInst
+    [ compilerMakeCmdDesc showArgGrammar  showArgCmd
+    , HTclCmdDesc helpGrammar (compilerRawFnToTclCmd helpCmd)
+    , compilerMakeCmdDesc versionGrammar  versionNum
+    , compilerMakeCmdDesc syntaxGrammar   syntaxCmd
+    , compilerMakeCmdDesc flagsGrammar    tclFlags
+    , compilerMakeCmdDesc packageGrammar  tclPackage
+    , compilerMakeCmdDesc defsGrammar     tclDefs
+    , compilerMakeCmdDesc parseGrammar    tclParse
+    , compilerMakeCmdDesc typeGrammar     tclType
+    , compilerMakeCmdDesc moduleGrammar   tclModule
+    , compilerMakeCmdDesc scheduleGrammar tclSchedule
+    , compilerMakeCmdDesc submodGrammar   tclSubmodule
+    , compilerMakeCmdDesc ruleGrammar     tclRule
+    , compilerMakeCmdDesc debugGrammar    tclDebug
+    , compilerMakeCmdDesc bpackGrammar    tclBPack
+    , compilerMakeCmdDesc bmodGrammar     tclBMod
+    , compilerMakeCmdDesc btypeGrammar    tclBType
+    , compilerMakeCmdDesc simGrammar      tclSim
+    , compilerMakeCmdDesc dependGrammar   tclDepend
+    , compilerMakeCmdDesc binstGrammar    tclBrowseInst
     ]
 -- NOTE   If you want the command exported out of the Bluetcl namespace add
 -- export statement to /src/lib/tcllib/bluespec/bluespec.tcl
@@ -173,6 +196,7 @@ data TclP = TclP { tp_flags    :: Flags
                  , tp_symtab   :: !SymTab
                  , tp_cpack    :: !CPackage
                  , tp_mods     :: !(Maybe ModInfo)
+                 , tp_modFlags :: !(M.Map String Flags)
                  , tp_packView :: !(ExpandInfoBag BPackView)
                  , tp_modView  :: !(ExpandInfoBag BModView)
                  , tp_typeView :: !( [(CType, TypeAnalysis)]
@@ -196,6 +220,7 @@ initState =
             , tp_symtab   = emptySymtab
             , tp_cpack    = (CPackage pid (Right []) [] [] [] [] [])
             , tp_mods     = Nothing
+            , tp_modFlags = M.empty
             , tp_packView = initExpandInfoBag
             , tp_modView  = initExpandInfoBag
             , tp_typeView = ([], initExpandInfoBag)
@@ -632,7 +657,7 @@ tclPackage ("load":args) = do
   -- load the packages and every package that they depend on
   let loadFn (binmap, hashmap, ps_read) p = do
           (binmap', hashmap', _, new_ps)
-              <- readBin globalErrHandle (tp_flags g) Nothing binmap hashmap p
+              <- readBin globalErrHandle (reduceConfig (tp_flags g)) Nothing binmap hashmap p
           return (binmap', hashmap', new_ps ++ ps_read)
   let binmap0 = tp_binmap g
       hashmap0 = tp_hashmap g
@@ -890,7 +915,7 @@ parseGrammar = (tclcmd "parse" namespace helpStr "") .+.
 tclParse :: [String] -> IO [String]
 tclParse ["type",s] = do
   flags <- getGFlags
-  res <- parseTypeExpr globalErrHandle flags s
+  res <- parseTypeExpr globalErrHandle (parseConfig flags) s
   case res of
     Right x -> return $ [(show x),show (pfPrint PDReadable  0 x)]
     Left x  -> return $ ["Error: " ++ (show x)]
@@ -924,12 +949,12 @@ tclType ["full",ty] = do
   let st    = tp_symtab g
       flags = tp_flags g
   -- read in the type
-  et <- parseTypeExpr globalErrHandle flags ty
+  et <- parseTypeExpr globalErrHandle (parseConfig flags) ty
   -- do the analysis
   case et of
     Left err -> do reportErrorsToTcl [] err
                    return $ TLst [] -- reachable only if no errors
-    Right t  -> case (analyzeType flags st t) of
+    Right t  -> case (analyzeType (typeSolverFlags flags) st t) of
                   Left errs -> do reportErrorsToTcl [] errs
                                   return $ TLst [] -- reachable only if no errors
                   Right ta -> -- convert a non-error result to HTclObj and return it
@@ -940,7 +965,7 @@ tclType ["constr",con] = do
   let symtab = tp_symtab g
       flags  = tp_flags g
   --
-  typeid <- parseQualConstructor globalErrHandle flags con
+  typeid <- parseQualConstructor globalErrHandle (parseConfig flags) con
   let econs = either Left (lookupAndShowTypeInfo symtab) typeid
   case econs of
     Left err -> do reportErrorsToTcl [] err
@@ -953,12 +978,12 @@ tclType ["bitify",con] = do
   let st    = tp_symtab g
       flags = tp_flags g
   -- read in the type
-  et <- parseTypeExpr globalErrHandle flags con
+  et <- parseTypeExpr globalErrHandle (parseConfig flags) con
   -- do the analysis
   case et of
     Left err -> do reportErrorsToTcl [] err
                    return $ TLst [] -- reachable only if no errors
-    Right t  -> case (analyzeType flags st t) of
+    Right t  -> case (analyzeType (typeSolverFlags flags) st t) of
                   Left errs -> do reportErrorsToTcl [] errs
                                   return $ TLst [] -- reachable only if no errors
                   Right ta -> return $ typeAnalysisToBitify ta
@@ -1037,16 +1062,30 @@ tclModule ["load",topname] = do
   when (topname `elem` prim_names) $
        ioError $ userError ("Cannot load " ++ quote topname ++
                             ": it is a primitive module")
-  -- getABIHierarchy calls GenABin.readABinFile to read a .ba file
+  -- Keep invocation metadata at the tool boundary while the hierarchy loader
+  -- and backends consume only the compiler representation.
+  moduleFlags <- newIORef M.empty
+  let readArtifact errh filename bytes = do
+        let (envelope, hash) = readLegacyBAFile errh filename bytes
+            abi = legacyABin envelope
+            remember name options =
+              modifyIORef moduleFlags (M.insert (getIdString name)
+                                       (restoreLegacyOptions flags options))
+        case (abi, legacyOptions envelope) of
+          (ABinMod info _, Just options) -> remember (apkg_name (abmi_apkg info)) options
+          (ABinModSchedErr info _, Just options) -> remember (apkg_name (abmsei_apkg info)) options
+          _ -> return ()
+        return (abi, hash)
   (topmodId, hierMap, instModMap, ffuncMap, _, foreign_mods, abmis_by_name)
       <- convExceptTToIO globalErrHandle $
-         getABIHierarchy globalErrHandle
+         getABIHierarchy readArtifact globalErrHandle
                          (verbose flags) (ifcPath flags) (Just gen_backend)
                          prim_names topname []
   let modnames = map fst abmis_by_name
   let res = (topmodId, hierMap, instModMap, ffuncMap, foreign_mods,
              [(n,mi) | (n,(mi,_)) <- abmis_by_name])
-  modifyIORef globalVar (\gv -> gv { tp_mods = Just res })
+  savedFlags <- readIORef moduleFlags
+  modifyIORef globalVar (\gv -> gv { tp_mods = Just res, tp_modFlags = savedFlags })
 
   -- now load the package in which the module was defined
   -- (so that its interface types are available)
@@ -1068,7 +1107,7 @@ tclModule ["list"] = do
 
 ------
 tclModule ["clear"] = do
-  modifyIORef globalVar (\gv -> gv { tp_mods = Nothing })
+  modifyIORef globalVar (\gv -> gv { tp_mods = Nothing, tp_modFlags = M.empty })
   return $ TLst []
 ------
 tclModule ["submods",modname] = do
@@ -1196,29 +1235,29 @@ tclModule ["flags",modname] = do
   if (isPrimitiveModule modname)
    then return $ TLst []
    else do
-     minfo <- findModule modname
+     minfo <- findModuleFlags modname
      case minfo of
        Nothing   -> return $ TLst []
-       Just abmi -> return $ TLst (map TStr (concat $ showFlagsLst (abemi_flags abmi)))
+       Just savedFlags -> return $ TLst (map TStr (concat $ showFlagsLst savedFlags))
 
 tclModule ["flags", modname, "all"] = do
   if (isPrimitiveModule modname)
    then return $ TLst []
    else do
-     minfo <- findModule modname
+     minfo <- findModuleFlags modname
      case minfo of
        Nothing   -> return $ TLst []
-       Just abmi -> return $ TLst (map TStr (concat $ showFlagsAllLst (abemi_flags abmi)))
+       Just savedFlags -> return $ TLst (map TStr (concat $ showFlagsAllLst savedFlags))
 
 tclModule ("flags":modname:ss) = do
   if (isPrimitiveModule modname)
    then return $ TLst []
    else do
-     minfo <- findModule modname
+     minfo <- findModuleFlags modname
      case minfo of
        Nothing   -> return $ TLst []
-       Just abmi -> do
-                     strs <- mapM (getFlagValueString (abemi_flags abmi)) ss >>= return . concat
+       Just savedFlags -> do
+                     strs <- mapM (getFlagValueString savedFlags) ss >>= return . concat
                      return $ TLst (map TStr strs)
 
 
@@ -1239,6 +1278,18 @@ findModule modname =
          Nothing -> if (modname `elem` fmods)
                     then return Nothing
                     else lookupError "Module" modname
+
+-- Options are retained only by the inspection driver, outside the shared IR.
+findModuleFlags :: String -> IO (Maybe Flags)
+findModuleFlags modname = do
+    minfo <- findModule modname
+    case minfo of
+      Nothing -> return Nothing
+      Just _ -> do
+        g <- readIORef globalVar
+        case M.lookup modname (tp_modFlags g) of
+          Just options -> return (Just options)
+          Nothing -> internalError ("BlueTcl: missing options for " ++ modname)
 
 findModuleHier :: String -> IO (Maybe ([(String,String)], [(String,String)]))
 findModuleHier modname = do
@@ -1805,9 +1856,9 @@ instance ExpandInfoHelper BPackView  where
       g <- readIORef globalVar
       let flags = tp_flags g
           symtab = tp_symtab g
-      et <- parseTypeExpr globalErrHandle flags s
+      et <- parseTypeExpr globalErrHandle (parseConfig flags) s
       let es :: Either [EMsg] TypeAnalysis
-          es = either Left (analyzeType flags symtab) et
+          es = either Left (analyzeType (typeSolverFlags flags) symtab) et
       return $ case es of
                 Left err -> TStr $ showErrorList err
                 Right ty -> typeAnalysisToDetail ty
@@ -2523,7 +2574,7 @@ getTypeAnalysis t = do
     g <- readIORef globalVar
     let flags = tp_flags g
         symtab = tp_symtab g
-    case (analyzeType flags symtab t) of
+    case (analyzeType (typeSolverFlags flags) symtab t) of
         Left _  -> return $ Nothing
         Right a -> return $ Just a
 
@@ -2532,7 +2583,7 @@ getTypeAnalysis' t primpair_is_interface = do
     g <- readIORef globalVar
     let flags = tp_flags g
         symtab = tp_symtab g
-    case (analyzeType' flags symtab t primpair_is_interface) of
+    case (analyzeType' (typeSolverFlags flags) symtab t primpair_is_interface) of
         Left _  -> return $ Nothing
         Right a -> return $ Just a
 
@@ -2558,11 +2609,11 @@ tclBType ["add",s] = do
       flags = tp_flags g
       symtab = tp_symtab g
   -- parse the type
-  et <- parseTypeExpr globalErrHandle flags s
+  et <- parseTypeExpr globalErrHandle (parseConfig flags) s
   let eta :: Either [EMsg] (CType, TypeAnalysis)
       eta = case (et) of
               Left errs -> Left errs
-              Right t -> case (analyzeType flags symtab t) of
+              Right t -> case (analyzeType (typeSolverFlags flags) symtab t) of
                            Left errs -> Left errs
                            Right a -> Right (t,a)
   case (eta) of

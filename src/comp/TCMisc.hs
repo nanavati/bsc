@@ -27,7 +27,7 @@ import CType
 import FStringCompat(mkFString)
 import Id
 import Error(internalError, EMsg, ErrMsg(..))
-import Flags(Flags, useProvisoSAT)
+import PhaseConfig
 import Type
 import TypeOps(isPrimTFunName)
 import Subst
@@ -653,11 +653,11 @@ reducePred eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos)) = do
     rpTrace ("reducePred " ++ ppReadable (dvs, pr', is', r)) $ return ()
     popSatStackContext
     flags <- getFlags
-    if (useProvisoSAT flags) && (isNothing r) && (isPreClass c)
+    if (typecheckUseProvisoSAT flags) && (isNothing r) && (isPreClass c)
       then do --traceM("attempting to solve numeric proviso")
               let ps = [ p | (EPred _ p) <- eps ]
               let res = unsafePerformIO $ do
-                          s <- initSATPredState flags
+                          s <- initSATPredState (typecheckSatBackend flags)
                           (r, _) <- solvePred s ps pr'
                           return r
               case res of
@@ -922,11 +922,11 @@ rmQualLit (CQGen i p e) = do
 -- only for expanding synonyms when you are NOT on a type-checking monad
 -- will substitute in fresh variables for all type variables in the input type
 -- to avoid variable capture
-expandSynN :: Flags -> SymTab -> Type -> Type
+expandSynN :: TypeSolverFlags -> SymTab -> Type -> Type
 expandSynN flags s t =
    -- should only need to match instances for coherent typeclasses
    -- XXX user code corner-case?
-   case tiResult $ runTI flags False s $
+   case tiResult $ runTI (internalTypecheckFlags flags) False s $
                 do addBoundTVs (tv t) -- to prevent generated variable capture
                    normT t
    of  Left msg -> internalError ("expandSynN " ++ ppReadable msg)
@@ -1665,7 +1665,7 @@ propagateFunDeps ps0 =
     -- SAT solving of numeric provisos isn't needed for propagating fundeps,
     -- so turn it off, since it appears to be expensive here
     flags <- getFlags
-    setFlags (flags { useProvisoSAT = False })
+    setFlags (flags { typecheckUseProvisoSAT = False })
 
     (ps_unsat, _) <- satisfy eps ps
 

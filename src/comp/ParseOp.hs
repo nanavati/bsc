@@ -1,4 +1,5 @@
 module ParseOp(parseOps,parseOp) where
+import Warmup ()
 import Util(mapSndM, findSame)
 import PFPrint
 import Id

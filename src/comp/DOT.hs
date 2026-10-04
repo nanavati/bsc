@@ -14,6 +14,7 @@ module DOT ( DOTGraph(..),
              printDOTGraph
            ) where
 
+import Warmup ()
 import Data.List
 
 import Util

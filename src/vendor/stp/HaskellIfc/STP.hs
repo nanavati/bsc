@@ -100,7 +100,6 @@ import qualified Foreign.Concurrent as F
 
 import Control.Concurrent.MVar.Strict
 
-import ErrorUtil(internalError)
 import System.Posix.Env(getEnvDefault)
 --import Util(traceM)
 
@@ -735,3 +734,7 @@ deleteExprs = mapM_ deleteExpr
 
 setFlag :: Ptr SContext -> Char -> IO ()
 setFlag c f = vc_setFlag c (castCharToCChar f)
+
+-- Binding misuse is reported without depending on the compiler.
+internalError :: String -> a
+internalError msg = errorWithoutStackTrace ("Internal error in the STP binding: " ++ msg)

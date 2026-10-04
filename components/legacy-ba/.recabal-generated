@@ -1,0 +1,10 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+BinASyntax.hs
+BinSchedule.hs
+LegacyArtifactOptions.hs
+LegacyBA.hs
+LegacyBARead.hs
+LegacyBAWrite.hs
+SetupHooks.hs
+bsc-legacy-ba.cabal

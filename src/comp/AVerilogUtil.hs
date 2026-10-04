@@ -37,7 +37,7 @@ import Data.Maybe
 
 import FStringCompat(FString, getFString)
 import ErrorUtil
-import Flags(Flags, readableMux, unSpecTo, v95, systemVerilogTasks, useDPI)
+import PhaseConfig
 import PPrint
 import IntLit
 import Id
@@ -79,14 +79,14 @@ data VConvtOpts = VConvtOpts {
                               }
 
 
-flagsToVco :: Flags -> VConvtOpts
+flagsToVco :: (PhaseConfig VerilogGenFlags) -> VConvtOpts
 flagsToVco flags = VConvtOpts {
-                               vco_unspec = unSpecTo flags,
-                               vco_v95    = v95 flags,
+                               vco_unspec = (verilogGenUnSpecTo . phaseFlags) flags,
+                               vco_v95    = (verilogGenV95 . phaseFlags) flags,
                                vco_v95_tasks = ["$signed", "$unsigned"],
-                               vco_readableMux = readableMux flags,
-                               vco_sv_tasks = systemVerilogTasks flags,
-                               vco_use_dpi = useDPI flags
+                               vco_readableMux = (verilogGenReadableMux . phaseFlags) flags,
+                               vco_sv_tasks = (verilogGenSystemVerilogTasks . phaseFlags) flags,
+                               vco_use_dpi = (verilogGenUseDPI . phaseFlags) flags
                               }
 
 -- This has been abolished from the compiler everywhere but the Verilog backend
@@ -911,7 +911,7 @@ wiredInstance item = internalError ("wiredInstance - not instance: " ++ ppReadab
 --    * a list of method input port signals, and
 --    * a list of method output port signals
 -- XXX this function is too big
-vState :: Flags -> M.Map AId AId -> AVInst -> (AId, VMItem, InstInfo)
+vState :: (PhaseConfig VerilogGenFlags) -> M.Map AId AId -> AVInst -> (AId, VMItem, InstInfo)
 vState  flags rewire_map avinst =
     let vco = flagsToVco flags
         v_inst_name = avi_vname avinst

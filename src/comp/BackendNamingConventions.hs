@@ -35,11 +35,14 @@ import PreStrings(fsDollar, fsUnderscore, fsEnable)
 import PreIds(idVReg)
 import Error
 import PPrint
-import Flags(Flags, removeReg, removeCross)
+import PhaseConfig
 
 import Position(Position, getPosition, noPosition)
 
 import ASyntax
+import ASyntaxUtil (isBypassWire, isBypassWire0)
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import VModInfo
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 
@@ -71,10 +74,8 @@ isRWire0 avi = getAVDefName avi == rwire0
 
 -- distinguish between BypassWire used within a domain
 -- and a BypassWire that crosses clock domains
-isBypassWire, isClockCrossingBypassWire, isBypassWire0 :: AVInst -> Bool
-isBypassWire avi = (getAVDefName avi == bypasswire) || (getAVDefName avi == crossbypasswire);
+isClockCrossingBypassWire :: AVInst -> Bool
 isClockCrossingBypassWire avi = isBypassWire avi && (length(getAVInputClocks avi) == 2)
-isBypassWire0 avi = getAVDefName avi == bypasswire0
 
 
 -- ---------------
@@ -445,13 +446,13 @@ cregToReg old_avi =
 -- XXX consider not generating mappings from a string to itself,
 -- XXX to save memory and lookup time
 
-createVerilogNameMap :: Flags -> ASPackage -> M.Map FString FString
+createVerilogNameMap :: (PhaseConfig VerilogGenFlags) -> ASPackage -> M.Map FString FString
 createVerilogNameMap flags aspkg =
     let vinsts = aspkg_state_instances aspkg
     in  M.fromList (concatMap (createVerilogNameMapForAVInst flags) vinsts)
 
 -- create a map for one instance
-createVerilogNameMapForAVInst :: Flags -> AVInst -> [(FString, FString)]
+createVerilogNameMapForAVInst :: (PhaseConfig VerilogGenFlags) -> AVInst -> [(FString, FString)]
 createVerilogNameMapForAVInst flags avi@(AVInst { avi_vname = inst_id,
                                                   avi_vmi = vminfo }) =
     let -- the default map
@@ -459,7 +460,7 @@ createVerilogNameMapForAVInst flags avi@(AVInst { avi_vname = inst_id,
         -- create a special map for register instance (without $Q_OUT)
         reg_map = updateVerilogNameMapForReg avi default_map
         -- choose which to return
-        result = if ((removeReg flags) && (isRegInst avi) && ((not (isClockCrossingRegInst avi)) || (removeCross flags)))
+        result = if (((verilogGenRemoveReg . phaseFlags) flags) && (isRegInst avi) && ((not (isClockCrossingRegInst avi)) || ((verilogGenRemoveCross . phaseFlags) flags)))
                  then reg_map
                  else default_map
     in  -- trace("result =" ++ (ppReadable result)) $

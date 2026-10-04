@@ -1,6 +1,6 @@
 module SimMakeCBlocks ( simMakeCBlocks ) where
 
-import Flags
+import PhaseConfig
 import PPrint
 import ErrorUtil(internalError)
 import SimPackage
@@ -8,6 +8,7 @@ import SimCCBlock
 import SimDomainInfo
 import SimBlocksToC(mkSchedName)
 import ASyntax
+import StaticSchedule
 import ASyntaxUtil
 import Wires(ResetId, wpClockDomain, wpResets)
 import VModInfo
@@ -72,7 +73,7 @@ top_blk_name = "top"
 -- Create SimCCBlocks and SimCCScheds from a SimSystem.
 -- The result will include one SimCCSched for each clock edge
 -- with any associated action, and one SimCCBlock for each module.
-simMakeCBlocks :: Flags -> SimSystem ->
+simMakeCBlocks :: (PhaseConfig BluesimGenFlags) -> SimSystem ->
                   ([SimCCBlock], [SimCCSched], [SimCCClockGroup], SimCCGateInfo, SBId)
 simMakeCBlocks flags sim_system =
   let pkg_map  = ssys_packages sim_system
@@ -230,7 +231,7 @@ getExprIds in_sched def_map known ((ASDef _ id):es) =
 getExprIds in_sched def_map known (_:es) = getExprIds in_sched def_map known es
 
 -- Create the SimCCBlock for a SimPackage
-onePackageToBlock :: Flags -> NameMap -> ModMethMap -> SimSystem -> SimPackage -> SimCCBlock
+onePackageToBlock :: (PhaseConfig BluesimGenFlags) -> NameMap -> ModMethMap -> SimSystem -> SimPackage -> SimCCBlock
 onePackageToBlock flags name_map full_meth_map ss pkg =
   let
       -- ----------
@@ -700,7 +701,7 @@ combineStmtGroups (SchedFns a1 b1 c1) (SchedFns a2 b2 c2) =
 
 -- Convert a SimSchedule into a map from clock edges to pairs of
 -- schedule statements and tick statements.
-mkScheduleStmts :: Flags -> [AIFace] -> S.Set AId -> S.Set AId -> [AId] ->
+mkScheduleStmts :: (PhaseConfig BluesimGenFlags) -> [AIFace] -> S.Set AId -> S.Set AId -> [AId] ->
                    InstModMap -> ModDefMap -> ModMethMap -> CallMap ->
                    SimSchedule -> SchedStmtMap
 mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
@@ -779,7 +780,7 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
            let en = do v <- e
                        return $ (vName_to_id v) `inlineIdFrom` inst
                wfs = [ (mkIdWillFire i) `inlineIdFrom` inst | i <- rs ]
-               init_port = (keepFires flags) || (any isUsedId ((maybeToList en) ++ wfs))
+               init_port = ((bluesimGenKeepFires . phaseFlags) flags) || (any isUsedId ((maybeToList en) ++ wfs))
            if init_port then return (en,wfs) else Nothing
 
       schedule_enables = mapMaybe getEnWFPort schedule_methods

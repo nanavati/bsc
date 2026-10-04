@@ -1,5 +1,7 @@
 module Main_vcdcheck(main) where
 
+import Warmup ()
+import Exceptions(withInternalErrorHandler)
 import Version
 import FileNameUtil(hasDotSuf, vcdSuffix)
 import Position
@@ -776,7 +778,7 @@ foldCmds handler state@(cs,msgs) (cmd:rest) =
 -- Main program routine
 
 main :: IO ()
-main = do -- parse command line arguments
+main = withInternalErrorHandler $ do -- parse command line arguments
           argv <- getArgs
           bluespecdir <- getBluespecDir
           let (opts, args, emsgs) = parseOpts argv bluespecdir

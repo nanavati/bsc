@@ -1,14 +1,17 @@
 module Main_bsv2bsc(main) where
 
+import Warmup ()
+import Exceptions(withInternalErrorHandler)
 import System.Environment
 
 import Parser.BSV(bsvParseString)
 import PPrint
-import FlagsDecode(defaultFlags)
+import FlagsDefaults(defaultFlags)
+import PhaseConfigDriver(parseConfig)
 import Error(initErrorHandle)
 
 main :: IO ()
-main =
+main = withInternalErrorHandler $
     do args <- getArgs
        case args of
          [] -> getContents >>= bsv2bsc "-"
@@ -18,7 +21,7 @@ main =
 bsv2bsc :: String -> String -> IO ()
 bsv2bsc filename text =
     do errh <- initErrorHandle
-       (pkg, _, _) <- bsvParseString errh (defaultFlags "") filename (stripExt filename) text
+       (pkg, _, _) <- bsvParseString errh (parseConfig (defaultFlags "")) filename (stripExt filename) text
        putStrLn (ppReadable pkg)
 
 stripExt :: String -> String

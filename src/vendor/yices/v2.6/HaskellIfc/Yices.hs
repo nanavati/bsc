@@ -153,7 +153,6 @@ import Data.IORef(IORef, newIORef, readIORef, modifyIORef)
 import Data.List(isPrefixOf)
 import System.IO.Unsafe(unsafePerformIO)
 
-import ErrorUtil
 
 word32_size, word64_size :: Int
 word32_size = finiteBitSize (0 :: Word32)
@@ -785,3 +784,7 @@ foreign import ccall "stdio.h"
   fclose :: Ptr CFile -> IO ()
 
 ------------------------------------------------------------------------
+
+-- Binding misuse is reported without depending on the compiler.
+internalError :: String -> a
+internalError msg = errorWithoutStackTrace ("Internal error in the Yices binding: " ++ msg)

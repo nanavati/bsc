@@ -1,0 +1,849 @@
+{
+  "_comment": "Compiler library ownership and direct import DAG. See doc/compiler-components.md. Run util/recabal/gen.py generate after changes; verify --strict enforces ownership, imports and phase boundaries.",
+  "expected_module_count": 267,
+  "cabal_version": "3.14",
+  "package_version": "2026.1",
+  "license": "BSD-3-Clause",
+  "tested_with": "GHC == 9.14.1",
+  "min_ghc": "9.6",
+  "setup": {
+    "name": "bsc-setup",
+    "dir": "components/setup",
+    "hooks_module": "BscSetupHooks",
+    "hooks_value": "bscSetupHooks"
+  },
+  "setup_depends": [
+    "base        >=4.18.3.0",
+    "Cabal       ^>=3.16",
+    "Cabal-hooks ^>=3.16",
+    "bsc-setup"
+  ],
+  "facade": {
+    "name": "bsc",
+    "cabal_file": "bsc.cabal",
+    "executable_hs_source_dirs": "src/comp/app",
+    "executable_other_modules": {
+      "showrules": ["LegacyOptionsDriver"]
+    },
+    "excluded_components": [
+      "bsc-legacy-ba"
+    ]
+  },
+  "extra_packages": {
+    "dirs": []
+  },
+  "source_roots": [
+    "src/comp",
+    "src/comp/Libs",
+    "src/comp/GHC/posix",
+    "src/Parsec",
+    "src/vendor/htcl",
+    "src/vendor/stp/HaskellIfc",
+    "src/vendor/yices/v2.6/HaskellIfc"
+  ],
+  "source_skip_dirs": [
+    "src/comp/app"
+  ],
+  "source_extensions": [
+    ".hs",
+    ".lhs"
+  ],
+  "generated_modules": [
+    "Warmup",
+    "BuildSystem",
+    "BuildVersion"
+  ],
+  "excluded_sources": {
+    "src/Parsec/ParsecLanguage.hs": "vendored Parsec module the compiler does not import (not in the baseline bsc.cabal)",
+    "src/Parsec/ParsecPerm.hs": "vendored Parsec module the compiler does not import (not in the baseline bsc.cabal)",
+    "src/Parsec/ParsecToken.hs": "vendored Parsec module the compiler does not import (not in the baseline bsc.cabal)"
+  },
+  "known_dag_edges": {
+    "_comment": "All package import edges must be declared. There are no tolerated cross-boundary imports.",
+    "edges": []
+  },
+  "library_defaults": {
+    "_comment": "The former common lib-defaults stanza of bsc.cabal, copied with its bounds.",
+    "build-depends": [
+      "array        >=0.5.8.0",
+      "base         >=4.18.3.0",
+      "ghc-bignum   >=1.3",
+      "bytestring   >=0.11.5.4",
+      "containers   >=0.6.7",
+      "deepseq      >=1.4.8.1",
+      "directory    >=1.3.8.5",
+      "filepath     >=1.4.301.0",
+      "integer-gmp  >=1.1",
+      "mtl          >=2.3.1",
+      "old-locale   ^>=1.0.0.7",
+      "old-time     ^>=1.1.1.0",
+      "process      >=1.6.19.0",
+      "regex-compat ^>=0.95.2.2",
+      "split        ^>=0.2.5",
+      "strict-concurrency ^>=0.2.4.3",
+      "syb          ^>=0.7.2",
+      "text         >=2.0.2",
+      "time         >=1.12.2",
+      "unix         >=2.8.6.0"
+    ],
+    "conditional-build-depends": [
+      {
+        "if": "impl(ghc >= 9.10)",
+        "build-depends": [
+          "ghc-internal"
+        ]
+      }
+    ],
+    "default-language": "GHC2021",
+    "default-extensions": [
+      "BangPatterns",
+      "FlexibleContexts",
+      "FlexibleInstances",
+      "TypeSynonymInstances"
+    ],
+    "ghc-options": "-Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches"
+  },
+  "components": [
+    {
+      "name": "htcl",
+      "dir": "components/htcl",
+      "synopsis": "Haskell Tcl binding (the vendored htcl) with its C shim; the hooks supply the Tcl include and link flags. Independent of the compiler and expected to leave the tree, hence no bsc- prefix.",
+      "extras": {
+        "c-sources": [
+          "src/vendor/htcl/haskell.c"
+        ]
+      },
+      "modules": [
+        "HTcl"
+      ],
+      "depends": []
+    },
+    {
+      "name": "waveforms",
+      "dir": "components/waveforms",
+      "synopsis": "Reusable VCD parsing and formatting, independent of the compiler.",
+      "modules": [
+        "VCD"
+      ],
+      "depends": []
+    },
+    {
+      "name": "bsc-stp",
+      "dir": "components/stp",
+      "synopsis": "Bluespec Compiler: the STP solver binding; the hooks build the vendored STP and link it. Independent of the compiler.",
+      "modules": [
+        "STP",
+        "STPFFI"
+      ],
+      "depends": [],
+      "extras": {
+        "extra-libraries-osx": [
+          "c++"
+        ],
+        "extra-libraries-other": [
+          "stdc++"
+        ]
+      },
+      "flags": [
+        {
+          "name": "stp-stub",
+          "description": "Build the vendored STP stub (Make: STP_STUB=1).",
+          "default": false,
+          "manual": true
+        }
+      ],
+      "extra-source-files": [
+        "platform.mk",
+        "platform.sh",
+        "src/vendor/stp/Makefile",
+        "src/vendor/stp/src/LICENSE/AUTHORS",
+        "src/vendor/stp/src/LICENSE/LICENSE",
+        "src/vendor/stp/src/LICENSE/LICENSE_COMPONENTS",
+        "src/vendor/stp/src/sat/LICENSE",
+        "src/vendor/stp/src/**/*.c",
+        "src/vendor/stp/src/**/*.cc",
+        "src/vendor/stp/src/**/*.cpp",
+        "src/vendor/stp/src/**/*.h",
+        "src/vendor/stp/src/**/*.hpp",
+        "src/vendor/stp/src/**/*.inc",
+        "src/vendor/stp/src/**/*.lex",
+        "src/vendor/stp/src/**/*.mk",
+        "src/vendor/stp/src/**/*.pl",
+        "src/vendor/stp/src/**/*.sh",
+        "src/vendor/stp/src/**/*.txt",
+        "src/vendor/stp/src/**/*.y",
+        "src/vendor/stp/src/**/Makefile",
+        "src/vendor/stp/src/AST/ASTKind.kinds",
+        "src/vendor/stp/src/Makefile.common",
+        "src/vendor/stp/src_stub/**/*.c",
+        "src/vendor/stp/src_stub/**/*.h",
+        "src/vendor/stp/src_stub/**/Makefile"
+      ]
+    },
+    {
+      "name": "bsc-yices",
+      "dir": "components/yices",
+      "synopsis": "Bluespec Compiler: the Yices solver binding; the hooks build the vendored Yices and link it. Independent of the compiler.",
+      "modules": [
+        "Yices",
+        "YicesFFI"
+      ],
+      "depends": [],
+      "flags": [
+        {
+          "name": "yices-stub",
+          "description": "Build the vendored Yices stub (Make: YICES_STUB=1).",
+          "default": false,
+          "manual": true
+        }
+      ],
+      "extra-source-files": [
+        "platform.mk",
+        "platform.sh",
+        "src/vendor/yices/Makefile",
+        "src/vendor/yices/v2.6/Makefile",
+        "src/vendor/yices/v2.6/stub/**/*.c",
+        "src/vendor/yices/v2.6/stub/**/Makefile",
+        "src/vendor/yices/v2.6/yices2/LICENSE.txt",
+        "src/vendor/yices/v2.6/yices2/Makefile",
+        "src/vendor/yices/v2.6/yices2/Makefile.build",
+        "src/vendor/yices/v2.6/yices2/autoconf/alignment",
+        "src/vendor/yices/v2.6/yices2/autoconf/check_assumptions",
+        "src/vendor/yices/v2.6/yices2/autoconf/config.guess",
+        "src/vendor/yices/v2.6/yices2/autoconf/os",
+        "src/vendor/yices/v2.6/yices2/autoconf/user",
+        "src/vendor/yices/v2.6/yices2/config.guess",
+        "src/vendor/yices/v2.6/yices2/config.sub",
+        "src/vendor/yices/v2.6/yices2/configure.ac",
+        "src/vendor/yices/v2.6/yices2/gmaketest",
+        "src/vendor/yices/v2.6/yices2/install-sh",
+        "src/vendor/yices/v2.6/yices2/make.include.in",
+        "src/vendor/yices/v2.6/yices2/scripts/**/*.sh",
+        "src/vendor/yices/v2.6/yices2/scripts/**/*.txt",
+        "src/vendor/yices/v2.6/yices2/src/**/*.c",
+        "src/vendor/yices/v2.6/yices2/src/**/*.cxxx",
+        "src/vendor/yices/v2.6/yices2/src/**/*.h",
+        "src/vendor/yices/v2.6/yices2/src/**/*.hxxx",
+        "src/vendor/yices/v2.6/yices2/src/**/*.txt",
+        "src/vendor/yices/v2.6/yices2/src/**/Makefile",
+        "src/vendor/yices/v2.6/yices2/utils/make_source_version",
+        "src/vendor/yices/v2.6/yices2/utils/**/*.c",
+        "src/vendor/yices/v2.6/yices2/utils/**/*.h",
+        "src/vendor/yices/v2.6/yices2/utils/**/*.py",
+        "src/vendor/yices/v2.6/yices2/utils/**/*.txt"
+      ]
+    },
+    {
+      "name": "bsc-common",
+      "dir": "components/common",
+      "modules": [
+        "ACaseUtils",
+        "ACheck",
+        "AModule",
+        "ASyntax",
+        "ASyntaxUtil",
+        "AUses",
+        "Assump",
+        "BDD",
+        "Backend",
+        "Bag",
+        "Balanced",
+        "BinData",
+        "BinForeignFunctions",
+        "BoolExp",
+        "BuildSystem",
+        "CCSyntax",
+        "CFreeVars",
+        "CSyntax",
+        "CSyntaxTypes",
+        "CSyntaxUtil",
+        "CType",
+        "CVPrint",
+        "Changed",
+        "Classic",
+        "CompilerVersion",
+        "ConTagInfo",
+        "CondTree",
+        "DynamicMap",
+        "Error",
+        "ErrorMonad",
+        "ErrorUtil",
+        "Eval",
+        "FStringCompat",
+        "FileIOUtil",
+        "FileNameUtil",
+        "Fixity",
+        "FlagTypes",
+        "ForeignFunctions",
+        "GHCPretty",
+        "GenWrapUtils",
+        "GlobPattern",
+        "GraphMap",
+        "GraphUtil",
+        "GraphWrapper",
+        "IOMutVar",
+        "IOUtil",
+        "IStateLoc",
+        "ISyntax",
+        "ISyntaxSubst",
+        "ISyntaxUtil",
+        "ISyntaxXRef",
+        "IType",
+        "Id",
+        "IdPrint",
+        "InstNodes",
+        "IntLit",
+        "IntegerUtil",
+        "Lex",
+        "ListMap",
+        "ListUtil",
+        "Literal",
+        "Log2",
+        "MVarStrict",
+        "PFPrint",
+        "PPrint",
+        "PVPrint",
+        "Params",
+        "PhaseConfig",
+        "Position",
+        "Pragma",
+        "PreIds",
+        "PreStrings",
+        "Pred",
+        "Pretty",
+        "Prim",
+        "ProofObligation",
+        "RealUtil",
+        "SCC",
+        "SchedInfo",
+        "Scheme",
+        "SignalNaming",
+        "Sort",
+        "SpeedyString",
+        "StdPrel",
+        "Subst",
+        "SymTab",
+        "SystemCheck",
+        "SystemVerilogKeywords",
+        "SystemVerilogTokens",
+        "TopUtils",
+        "Type",
+        "TypeOps",
+        "Undefined",
+        "Unify",
+        "Util",
+        "VFileName",
+        "VModInfo",
+        "Verilog",
+        "Warmup",
+        "Wires"
+      ],
+      "depends": [],
+      "synopsis": "Bluespec Compiler: shared utilities, compiler representations, neutral options and diagnostics"
+    },
+    {
+      "name": "bsc-sat",
+      "dir": "components/sat",
+      "synopsis": "Bluespec Compiler: solver translations, disjointness checking and SAT services",
+      "modules": [
+        "AExpr2STP",
+        "AExpr2Util",
+        "AExpr2Yices",
+        "DisjointTest",
+        "Pred2STP",
+        "Pred2Yices",
+        "SAT",
+        "SATPred"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-stp",
+        "bsc-yices"
+      ]
+    },
+    {
+      "name": "bsc-parse",
+      "dir": "components/parse",
+      "synopsis": "Bluespec Compiler: source preprocessing and parsing",
+      "modules": [
+        "BinParse",
+        "CPPLineDirectives",
+        "Parse",
+        "ParseOp",
+        "ParseSource",
+        "Parsec",
+        "ParsecChar",
+        "ParsecCombinator",
+        "ParsecExpr",
+        "ParsecPrim",
+        "Parser.BSV",
+        "Parser.BSV.CVParser",
+        "Parser.BSV.CVParserAssertion",
+        "Parser.BSV.CVParserCommon",
+        "Parser.BSV.CVParserImperative",
+        "Parser.BSV.CVParserUtil",
+        "Parser.Classic",
+        "Parser.Classic.CParser",
+        "Parser.Classic.Warnings",
+        "SEMonad",
+        "SystemVerilogPreprocess",
+        "SystemVerilogScanner",
+        "TclParseUtils",
+        "TmpNam"
+      ],
+      "depends": [
+        "bsc-common"
+      ]
+    },
+    {
+      "name": "bsc-package",
+      "dir": "components/package",
+      "synopsis": "Compiled package (.bo) codec and foreign declaration processing.",
+      "modules": [
+        "BinUtil",
+        "GenBin",
+        "GenForeign"
+      ],
+      "depends": [
+        "bsc-common"
+      ]
+    },
+    {
+      "name": "bsc-scheduled",
+      "dir": "components/scheduled",
+      "synopsis": "Shared scheduled module and resource-allocation types, without scheduler algorithms.",
+      "modules": [
+        "ABin",
+        "ADumpScheduleInfo",
+        "ASModule",
+        "AScheduleInfo",
+        "ArtifactHierarchy",
+        "RScheduleTypes",
+        "StaticSchedule"
+      ],
+      "depends": [
+        "bsc-common"
+      ]
+    },
+    {
+      "name": "bsc-typecheck",
+      "dir": "components/typecheck",
+      "synopsis": "Bluespec Compiler: source preparation, typechecking and internal conversion",
+      "modules": [
+        "CSubst",
+        "ContextErrors",
+        "CtxRed",
+        "Deriving",
+        "EquivalenceClass",
+        "FixupDefs",
+        "GenFuncWrap",
+        "GenSign",
+        "GenWrap",
+        "IConv",
+        "IConvLet",
+        "ISimplify",
+        "ISyntaxCheck",
+        "ITypeNormalize",
+        "IfcBetterInfo",
+        "InferKind",
+        "KIMisc",
+        "MakeSymTab",
+        "PoisonUtils",
+        "PragmaCheck",
+        "PredTrie",
+        "Simplify",
+        "SolvedBinds",
+        "TCMisc",
+        "TCPat",
+        "TCheck",
+        "TIMonad",
+        "TypeAnalysis",
+        "TypeCheck"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-sat"
+      ]
+    },
+    {
+      "name": "bsc-legacy-ba",
+      "dir": "components/legacy-ba",
+      "synopsis": "Existing module (.ba) reader, writer and wire-format compatibility data.",
+      "modules": [
+        "BinASyntax",
+        "BinSchedule",
+        "LegacyArtifactOptions",
+        "LegacyBA",
+        "LegacyBARead",
+        "LegacyBAWrite"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-scheduled"
+      ]
+    },
+    {
+      "name": "bsc-bluesim",
+      "dir": "components/bluesim",
+      "synopsis": "Bluesim generation from resolved module inputs; artifact loading is orchestrated by the executable.",
+      "modules": [
+        "BluesimAssumptions",
+        "BluesimNoInline",
+        "BluesimScheduleChecks",
+        "BluesimUndet",
+        "SimBlocksToC",
+        "SimCCBlock",
+        "SimCOpt",
+        "SimDomainInfo",
+        "SimExpand",
+        "SimFileUtils",
+        "SimMakeCBlocks",
+        "SimPackage",
+        "SimPackageOpt",
+        "SimPrimitiveModules",
+        "SystemCWrapper"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-scheduled"
+      ]
+    },
+    {
+      "name": "bsc-verilog",
+      "dir": "components/verilog",
+      "synopsis": "Bluespec Compiler: Verilog generation, optimization and optional AST diagnostic views",
+      "modules": [
+        "ADropDefs",
+        "AExpand",
+        "AOpt",
+        "APrims",
+        "ARenameIO",
+        "AState",
+        "AVeriQuirks",
+        "AVerilog",
+        "AVerilogCheck",
+        "AVerilogSyntax",
+        "AVerilogSyntaxUtil",
+        "AVerilogUtil",
+        "BackendNamingConventions",
+        "DPIWrappers",
+        "IOProperties",
+        "InlineCReg",
+        "InlineReg",
+        "InlineWires",
+        "LambdaCalc",
+        "LambdaCalcUtil",
+        "SAL",
+        "Synthesize",
+        "VFinalCleanup",
+        "VIOProps",
+        "VPIWrappers",
+        "VPrims",
+        "VVerilogDollar",
+        "VerilogAssumptions",
+        "VerilogForeignFunctions",
+        "VerilogNoInline",
+        "VerilogScheduleChecks",
+        "VerilogUndet"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-sat",
+        "bsc-scheduled"
+      ]
+    },
+    {
+      "name": "bsc-schedule",
+      "dir": "components/schedule",
+      "synopsis": "Scheduling, resource allocation, schedule diagnostics and validation.",
+      "modules": [
+        "AAddScheduleDefs",
+        "ADumpSchedule",
+        "APaths",
+        "AProofs",
+        "ASchedule",
+        "DOT",
+        "GraphPaths",
+        "RSchedule"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-sat",
+        "bsc-scheduled"
+      ]
+    },
+    {
+      "name": "bsc-elab",
+      "dir": "components/elab",
+      "synopsis": "Bluespec Compiler: elaboration and cleanup before scheduling",
+      "modules": [
+        "ACFTemplate",
+        "ACleanup",
+        "AConv",
+        "ARankMethCalls",
+        "ATaskSplice",
+        "BExpr",
+        "BoolOpt",
+        "IDropRules",
+        "IExpand",
+        "IExpandUtils",
+        "IInline",
+        "IInlineFmt",
+        "IInlineUtil",
+        "ILift",
+        "IPrims",
+        "ISplitIf",
+        "ITransform",
+        "IWireSet",
+        "Intervals"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-sat",
+        "bsc-typecheck"
+      ]
+    },
+    {
+      "name": "bsc-driver",
+      "dir": "components/driver",
+      "modules": [
+        "ABinUtil",
+        "BuildVersion",
+        "Depend",
+        "DriverTopUtils",
+        "Exceptions",
+        "Flags",
+        "FlagsDecode",
+        "FlagsDefaults",
+        "PhaseConfigDriver",
+        "Version"
+      ],
+      "depends": [
+        "bsc-common",
+        "bsc-parse",
+        "bsc-scheduled",
+        "bsc-typecheck"
+      ],
+      "synopsis": "Bluespec Compiler: command-line configuration and dependency orchestration",
+      "flags": [
+        {
+          "name": "no-git",
+          "description": "Build without Git version metadata (Make: NOGIT=1).",
+          "default": false,
+          "manual": true
+        },
+        {
+          "name": "no-update-build-version",
+          "description": "Preserve an existing generated version (Make: NOUPDATEBUILDVERSION=1).",
+          "default": false,
+          "manual": true
+        }
+      ]
+    }
+  ],
+  "boundaries": {
+    "driver_packages": [
+      "bsc-driver"
+    ],
+    "driver_modules": [
+      "Flags",
+      "FlagsDefaults",
+      "FlagsDecode",
+      "PhaseConfigDriver"
+    ],
+    "solver_packages": [
+      "bsc-stp",
+      "bsc-yices"
+    ],
+    "backend_packages": [
+      "bsc-verilog",
+      "bsc-bluesim"
+    ],
+    "frontend_packages": [
+      "bsc-parse",
+      "bsc-typecheck",
+      "bsc-elab",
+      "bsc-package"
+    ],
+    "phase_packages": [
+      "bsc-parse",
+      "bsc-typecheck",
+      "bsc-elab",
+      "bsc-schedule",
+      "bsc-verilog",
+      "bsc-bluesim",
+      "bsc-package",
+      "bsc-legacy-ba",
+      "bsc-scheduled"
+    ],
+    "no_native_links_packages": [
+      "bsc-common"
+    ],
+    "closure_cuts": [
+      {
+        "name": "parser",
+        "roots": [
+          "bsc-parse"
+        ],
+        "exclude": [
+          "bsc-typecheck",
+          "bsc-elab",
+          "bsc-schedule",
+          "bsc-verilog",
+          "bsc-bluesim",
+          "bsc-scheduled"
+        ]
+      },
+      {
+        "name": "typechecker",
+        "roots": [
+          "bsc-typecheck"
+        ],
+        "exclude": [
+          "bsc-parse",
+          "bsc-elab",
+          "bsc-schedule",
+          "bsc-verilog",
+          "bsc-bluesim",
+          "bsc-scheduled"
+        ]
+      },
+      {
+        "name": "package artifacts",
+        "roots": [
+          "bsc-parse",
+          "bsc-typecheck",
+          "bsc-package"
+        ],
+        "exclude": [
+          "bsc-elab",
+          "bsc-schedule",
+          "bsc-verilog",
+          "bsc-bluesim",
+          "bsc-scheduled"
+        ]
+      },
+      {
+        "name": "elaboration",
+        "roots": [
+          "bsc-elab"
+        ],
+        "exclude": [
+          "bsc-parse",
+          "bsc-schedule",
+          "bsc-verilog",
+          "bsc-bluesim",
+          "bsc-scheduled"
+        ]
+      },
+      {
+        "name": "scheduling",
+        "roots": [
+          "bsc-schedule"
+        ],
+        "exclude": [
+          "bsc-parse",
+          "bsc-typecheck",
+          "bsc-elab",
+          "bsc-verilog",
+          "bsc-bluesim"
+        ]
+      },
+      {
+        "name": "artifact codecs",
+        "roots": [
+          "bsc-package",
+          "bsc-legacy-ba",
+          "bsc-scheduled"
+        ],
+        "exclude": [
+          "bsc-parse",
+          "bsc-typecheck",
+          "bsc-elab",
+          "bsc-schedule",
+          "bsc-verilog",
+          "bsc-bluesim"
+        ]
+      },
+      {
+        "name": "Verilog backend",
+        "roots": [
+          "bsc-verilog"
+        ],
+        "exclude": [
+          "bsc-parse",
+          "bsc-typecheck",
+          "bsc-elab",
+          "bsc-schedule",
+          "bsc-bluesim"
+        ]
+      },
+      {
+        "name": "Bluesim backend",
+        "roots": [
+          "bsc-bluesim"
+        ],
+        "exclude": [
+          "bsc-parse",
+          "bsc-typecheck",
+          "bsc-elab",
+          "bsc-schedule",
+          "bsc-verilog"
+        ]
+      },
+      {
+        "name": "compiler phase libraries",
+        "roots": [
+          "htcl",
+          "waveforms",
+          "bsc-stp",
+          "bsc-yices",
+          "bsc-common",
+          "bsc-sat",
+          "bsc-parse",
+          "bsc-package",
+          "bsc-typecheck",
+          "bsc-scheduled",
+          "bsc-elab",
+          "bsc-verilog",
+          "bsc-bluesim",
+          "bsc-schedule"
+        ],
+        "exclude": [
+          "bsc-legacy-ba"
+        ]
+      },
+      {
+        "name": "scheduled representation",
+        "roots": [
+          "bsc-scheduled"
+        ],
+        "exclude": [
+          "bsc-schedule",
+          "bsc-verilog",
+          "bsc-bluesim",
+          "bsc-driver",
+          "bsc-package",
+          "bsc-legacy-ba"
+        ]
+      }
+    ],
+    "api_cuts": [
+      {
+        "name": "scheduler physical naming exclusion",
+        "packages": [
+          "bsc-schedule"
+        ],
+        "exclude": [
+          "BackendNamingConventions",
+          "VIOProps",
+          "WireAnalysis"
+        ]
+      }
+    ],
+    "driver_provenance_modules": [
+      "BuildVersion",
+      "Version"
+    ]
+  }
+}

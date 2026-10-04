@@ -1,4 +1,4 @@
-module AConv (aConv, aTypeConv, isLocalAId) where
+module AConv (aConv, aTypeConv) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
@@ -11,7 +11,8 @@ import PFPrint(pfpString)
 import Position
 import Id
 import FStringCompat
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes
 import PreStrings(sSigned)
 import PreIds(idBit, idActionValue_, idAVAction_, idAVValue_, idClockOsc, idClockGate,
               idInout_, idPrimArray, idPrimPair, idPrimFst, idPrimSnd, idPrimUnit)
@@ -51,10 +52,6 @@ import InstNodes(mkInstTree)
 aconvPref :: String
 aconvPref = "__d"
 
--- This is used by AExpand
-isLocalAId :: Id -> Bool
-isLocalAId i = isBadId i || isFromRHSId i
-
 -- =====
 
 -----
@@ -69,7 +66,7 @@ data AState = AState {
         cseMap :: CSEMap, -- for CSE
         stVarMap :: IdMap, -- I-expr names to A-expr names
         ieDefMap :: IEDefMap, -- accumulated definitions
-        flags :: Flags, -- to hold the flags on the Monad
+        flags :: PhaseConfig ElabFlags, -- to hold the flags on the Monad
         wmsgs :: [WMsg] -- to hold accumulated warnings
         }
 
@@ -77,7 +74,7 @@ type IdMap = M.Map Id Id
 
 type M = ReaderT Bool (StateT AState (Either EMsg))
 
-aInitState :: ErrorHandle -> IdMap -> Flags -> AState
+aInitState :: ErrorHandle -> IdMap -> PhaseConfig ElabFlags -> AState
 aInitState errh svm flags =
     AState {
              errHandle = errh,
@@ -130,7 +127,7 @@ addWarning w = do s <- get
                   put (s {wmsgs = w:(wmsgs s)})
 
 
-getFlags :: M Flags
+getFlags :: M (PhaseConfig ElabFlags)
 getFlags = liftM flags (get)
 
 {-
@@ -140,7 +137,7 @@ getWMsgs = M $ \ s -> (s, wmsgs s)
 
 -----
 
-aConv :: ErrorHandle -> [PProp] -> Flags -> IModule a -> IO APackage
+aConv :: ErrorHandle -> [PProp] -> PhaseConfig ElabFlags -> IModule a -> IO APackage
 aConv errh pps flags imod =
     let itr = makeIdMap (map fst (imod_state_insts imod))
         state = aInitState errh itr flags
@@ -333,7 +330,7 @@ aAbstractInput (IAI_Clock osc mgate) = (AAI_Clock osc mgate)
 aAbstractInput (IAI_Reset r) = (AAI_Reset r)
 aAbstractInput (IAI_Inout r n) = (AAI_Inout r n)
 
-aIface :: Flags -> IEFace a -> M AIFace
+aIface :: PhaseConfig ElabFlags -> IEFace a -> M AIFace
 aIface flags iface@(IEFace i its maybe_e maybe_rs wp fi) = do
         --trace ("enter " ++ ppReadable i) $ return ()
         -- `its` is grouped by source-language argument (one inner list per

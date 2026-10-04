@@ -18,7 +18,8 @@ import PFPrint
 import Position(Position, noPosition, getPositionLine, cmdPosition)
 import Error(internalError, EMsg, EMsgs(..), ErrMsg(..), ErrorHandle, bsError)
 import ErrorMonad(ErrorMonad, convErrorMonadToIO)
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes
 import FStringCompat
 import PreStrings(fsUnderscore, fs_t, fsTo, fsFrom, fsEmpty, fsEnable, fs_rdy, fsDot)
 import Id
@@ -57,7 +58,7 @@ data GenState = GenState
  {
    errHandle  ::  ErrorHandle,
    symtable   ::  SymTab,
-   flags      ::  Flags
+   flags      ::  ReduceFlags
  }
 
 runGWMonad :: GWMonad a -> GenState -> IO a
@@ -90,7 +91,7 @@ convEM m = do
   errh <- gets errHandle
   lift $ lift $ convErrorMonadToIO errh m
 
-getFlags :: GWMonad Flags
+getFlags :: GWMonad ReduceFlags
 getFlags = gets flags
 
 getSymTab :: GWMonad SymTab
@@ -242,7 +243,7 @@ type ModDefInfo = (CDef, CQType,  -- the new "<mod>_" def and it's type
 -- creates wrappers for separately compiled modules: wraps pack/unpack around method
 -- arguments and results; surfaces method ready signals
 -- Pragma are module specific
-genWrap :: ErrorHandle -> Flags -> [String] -> Bool -> CPackage -> SymTab ->
+genWrap :: ErrorHandle -> ReduceFlags -> [String] -> Bool -> CPackage -> SymTab ->
            IO (CPackage, [WrapInfo])
 genWrap errh flgs genNames generating cpack symt = do
     runGWMonad (genWrapE generating ppmap cpack) origstate
@@ -535,7 +536,7 @@ getDef generating ds (i, pps) =
    let defs = [ d | d@(CValueSign (CDef i' _ _)) <- ds, unQualId i == unQualId i' ]
    case defs of
      [d] -> do                  -- single element list of the module definition
-        let red = cCtxReduceDef flgs symt d
+        let red = cCtxReduceDef (reduceTypeSolverFlags flgs) symt d
         case red of
           Left msgs -> bads msgs
           Right (CValueSign (CDef defid cqt@(CQType ctx t) e)) ->
@@ -1337,7 +1338,7 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
    ftps <- mapM collectIfcInfo (reverse cfields)
    -- get back the arg port to type mapping, for recording
    flgs <- getFlags
-   arg_pts <- convEM $ checkModulePortNames flgs (getPosition i) vps vtis ftps
+   arg_pts <- convEM $ checkModulePortNames (reduceResetName flgs) (getPosition i) vps vtis ftps
    let arg_infos = thd $ unzip3 vtis
        (vs, ts) = unzip $ concatMap extractVTPairs arg_infos
 

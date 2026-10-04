@@ -5,6 +5,7 @@ module PragmaCheck ( checkModuleArgPragmas,
                      renamePProps
                    ) where
 
+import Warmup ()
 import qualified Data.Map as M
 
 import Control.Monad(msum)
@@ -23,7 +24,6 @@ import PreIds(idDefaultClock, idDefaultReset, idCLK, idCLK_GATE, mk_no)
 
 import FStringCompat
 import PreStrings(fsUnderscore)
-import Flags(Flags(..))
 
 import Pragma
 import CType
@@ -408,7 +408,7 @@ mkPortName def_pfx Nothing Nothing i
 
 -- This is the entry point for checking module port names (both arguments
 -- and interface ports).  This is
-checkModulePortNames :: Flags -> Position -> [PProp] ->
+checkModulePortNames :: String -> Position -> [PProp] ->
                         -- argument info
                         [(Id, CType, ArgInfo)] ->
                         -- interface info
@@ -417,7 +417,7 @@ checkModulePortNames :: Flags -> Position -> [PProp] ->
                         ErrorMonad [(Id, CType)]
 checkModulePortNames flgs pos pps vtis ftps =
     let
-        idrstn = (mk_no . mkFString . resetName) flgs
+        idrstn = (mk_no . mkFString) flgs
 
     -- ---------------
     -- Get the prefixes

@@ -1,6 +1,6 @@
 module SystemCWrapper (checkSystemCIfc, wrapSystemC) where
 
-import Flags(Flags(..), verbose)
+import PhaseConfig
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import Position(noPosition)
 import Id(getIdBaseString, getIdString, isRdyId, dropReadyPrefixId)
@@ -26,7 +26,7 @@ import qualified Data.Map as M
 
 --import Debug.Trace
 
-checkSystemCIfc :: ErrorHandle -> Flags -> SimSystem -> IO ()
+checkSystemCIfc :: ErrorHandle -> (PhaseConfig BluesimGenFlags) -> SimSystem -> IO ()
 checkSystemCIfc errh flags sim_system = do
     let top_pkg = findPkg (ssys_packages sim_system) (ssys_top sim_system)
         pps = sp_pps top_pkg
@@ -68,7 +68,7 @@ checkSystemCIfc errh flags sim_system = do
         rbm_err = (noPosition,ESystemCWrapperRuleBeforeMethod rbms_desc)
     when (not (null rbms)) $ bsError errh [rbm_err]
 
-wrapSystemC:: Flags -> SimSystem -> IO [(String,String)]
+wrapSystemC:: (PhaseConfig BluesimGenFlags) -> SimSystem -> IO [(String,String)]
 wrapSystemC flags sim_system = do
     when (verbose flags) $ putStrLnF "generating SystemC file"
     let top_pkg  = findPkg (ssys_packages sim_system) (ssys_top sim_system)

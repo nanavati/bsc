@@ -9,7 +9,8 @@ import qualified Data.Set as S
 import qualified EquivalenceClass as EC
 
 import ErrorUtil(internalError)
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes
 import PPrint hiding(empty)
 import Position
 import Id
@@ -18,7 +19,7 @@ import ISyntax
 import ISyntaxSubst(tSubst)
 import ISyntaxUtil
 import Changed(changedOrId)
-import IExpandUtils
+import ITypeNormalize(fullTypeNormalizer)
 import SymTab(SymTab, mustFindClass, findSClass, getAllTypes, TypeInfo(..))
 
 import Pred
@@ -37,13 +38,13 @@ trace_icheck = tracep doTraceICheck
 
 -----
 
-eqType :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+eqType :: TypeSolverFlags -> SymTab -> Env -> IType -> IType -> Bool
 eqType flags symt r (ITForAll i k t) (ITForAll i' k' t') =
     k == k' &&
     eqType flags symt (addK i k r) t (tSubst i' (ITVar i) t')
 eqType flags symt r t t' = eqType0 flags symt r t t'
 
-eqType0 :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+eqType0 :: TypeSolverFlags -> SymTab -> Env -> IType -> IType -> Bool
 eqType0 flags symt r@(E _ _ eqs _) t t' =
     let r_direct = t == t'
         r_ec = EC.isEqual eqs t t'
@@ -57,7 +58,7 @@ eqType0 flags symt r@(E _ _ eqs _) t t' =
                      ++ " result=" ++ show result) $
        result
 
-eqType1 :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+eqType1 :: TypeSolverFlags -> SymTab -> Env -> IType -> IType -> Bool
 
 -- hack to make commutative type constructors work
 eqType1 flags symt r (ITAp (ITAp (ITAp (ITCon i _ _) t1) t2) t3)
@@ -91,7 +92,7 @@ eqType1 _ _ _ _ _ = False
 -- only the three sub-preds; fundep-derived sub-goals like `NumEq sa
 -- sa'` (when the env has two `Bits a _` dicts with different result
 -- vars) cannot be discharged even though the EC records `sa ≡ sa'`.
-eqTypeNum :: Flags -> SymTab -> Env -> IType -> IType -> Bool
+eqTypeNum :: TypeSolverFlags -> SymTab -> Env -> IType -> IType -> Bool
 eqTypeNum flags symt r@(E _ _ ecRaw _) t1 t2
     -- Attempt to save time by weeding out cases without TAdd, SizeOf, etc
     -- (since there's no use trying to equate "n" and "m", for instance)
@@ -123,7 +124,7 @@ eqTypeNum flags symt r@(E _ _ ecRaw _) t1 t2
           addExplPreds (eqs ++ ecEqs)
           vp <- mkVPredFromPred [] (IsIn numEqCls [t1', t2'])
           satisfyFV boundTVs (eqs ++ ecEqs) [vp]
-        ti_result = tiResult (runTI flags False symt satisfyEq)
+        ti_result = tiResult (runTI (internalTypecheckFlags flags) False symt satisfyEq)
         result = case ti_result of
                    Right ([],_) -> True
                    _ -> False
@@ -147,7 +148,7 @@ assert False s e t x = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadab
 
 type EqTy = Env -> IType -> IType -> Bool
 
-tCheck :: Flags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
+tCheck :: TypeSolverFlags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
 tCheck flags symt cache r eqTy ec@(ILam i t e) =
     -- assert (kCheckErr r t == IKStar) "ILam" (ec, kCheckErr r t) $
         trace_icheck ("tCheck ILam: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
@@ -212,7 +213,7 @@ kCheckErr :: Env -> IType -> IKind
 kCheckErr r t = fj $ kCheck r t
   where fj = fromJustOrErr ("findK: " ++ ppReadable (r, t))
 
-tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
+tCheckIPackage :: TypeSolverFlags -> SymTab -> IPackage a -> Bool
 tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
     let r  = emptyEnv
         defOK (IDef i t e _) =
@@ -222,7 +223,7 @@ tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
                     (i,e,(t,t')) (t, t') True
     in  all defOK ds
 
-tCheckIModule :: Flags -> SymTab -> IModule a -> Bool
+tCheckIModule :: TypeSolverFlags -> SymTab -> IModule a -> Bool
 tCheckIModule flags symt (IModule { imod_type_args  = iks,
                                     imod_local_defs = ds,
                                     imod_rules      = rs,

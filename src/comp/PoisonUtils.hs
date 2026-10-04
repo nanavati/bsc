@@ -2,6 +2,7 @@ module PoisonUtils where
 
 -- utilities for generating and working with "poisoned" definitions
 
+import Warmup ()
 import Id
 import PreIds
 import CSyntax

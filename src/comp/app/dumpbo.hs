@@ -1,6 +1,8 @@
 {-# LANGUAGE CPP #-}
 module Main_dumpbo(main) where
 
+import Warmup ()
+import Exceptions(withInternalErrorHandler)
 import System.Environment(getArgs)
 import System.Exit(exitWith, ExitCode(..))
 
@@ -12,7 +14,7 @@ import System.IO
 import qualified Data.ByteString as BS
 
 main :: IO ()
-main = do
+main = withInternalErrorHandler $ do
     errh <- initErrorHandle
     as <- getArgs
     (isBI, fname) <- case as of

@@ -1,6 +1,8 @@
 module InlineCReg(aInlineCReg) where
 
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
 import Prim
 import Data.List(partition)

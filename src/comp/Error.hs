@@ -9,7 +9,7 @@ module Error(
              internalError,
 
              -- initialize the error handler
-             ErrorHandle, initErrorHandle, setErrorHandleFlags,
+             ErrorHandle, initErrorHandle, setErrorHandleFlags, withErrorHandleFlags,
 
              -- update the error handler state when files are opened/closed
              recordHandleOpen, recordHandleClose, closeOpenHandles,
@@ -65,7 +65,8 @@ import IntegerUtil(integerFormat)
 import Position
 import PPrint
 import Classic(isClassic)
-import qualified Flags as F
+import qualified FlagTypes as F
+import PhaseConfig(RunFlags(..))
 
 -- error handling
 import Data.List(genericLength)
@@ -182,15 +183,32 @@ initErrorHandle = do
   ref <- newIORef init_state
   return (ErrorHandle ref)
 
-setErrorHandleFlags :: ErrorHandle -> F.Flags -> IO ()
+setErrorHandleFlags :: ErrorHandle -> RunFlags -> IO ()
 setErrorHandleFlags ref flags = do
   state <- readErrorState ref
   let new_state = state {
-                    promotionSet = toMsgSet (F.promoteWarnings flags),
-                    demotionSet = toMsgSet (F.demoteErrors flags),
-                    suppressionSet = toMsgSet (F.suppressWarnings flags)
+                    promotionSet = toMsgSet (runPromoteWarnings flags),
+                    demotionSet = toMsgSet (runDemoteErrors flags),
+                    suppressionSet = toMsgSet (runSuppressWarnings flags)
                   }
   writeErrorState ref new_state
+
+-- A phase may have a different diagnostic policy (for example, from a
+-- module's options pragma). Restore the caller's policy on success or
+-- failure, while retaining accumulated diagnostics and open-handle state.
+withErrorHandleFlags :: ErrorHandle -> RunFlags -> IO a -> IO a
+withErrorHandleFlags ref flags action =
+  CE.bracket acquire restore (const action)
+  where
+    acquire = do
+      state <- readErrorState ref
+      setErrorHandleFlags ref flags
+      return (promotionSet state, demotionSet state, suppressionSet state)
+    restore (promotion, demotion, suppression) = do
+      state <- readErrorState ref
+      writeErrorState ref (state { promotionSet = promotion,
+                                  demotionSet = demotion,
+                                  suppressionSet = suppression })
 
 readErrorState :: ErrorHandle -> IO ErrorState
 readErrorState (ErrorHandle ref) = readIORef ref

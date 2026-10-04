@@ -1,10 +1,13 @@
 module AAddScheduleDefs (aAddScheduleDefs) where
 
+import Warmup ()
 import ASyntax
+import StaticSchedule
 import ASyntaxUtil
 import AScheduleInfo
 import AUses
-import Flags
+import PhaseConfig
+import FlagTypes (DumpFlag(..), ResourceFlag(..))
 import Pragma
 import ProofObligation(ProofObligation(..), ProofResult(..), MsgFn(..),
                        MsgTuple, warnUnlessProof, errorUnlessProof)
@@ -15,7 +18,6 @@ import VModInfo(VModInfo(..), VFieldInfo(..), VeriPortProp(..), mkNamedEnable)
 import Id (Id, getIdString, isRdyId, dropReadyPrefixId,
            mkIdWillFire, mkIdCanFire, mkRdyId)
 import Position
-import BackendNamingConventions
 import PreIds(id_write)
 
 import qualified Data.Map as M
@@ -84,7 +86,7 @@ import Data.Maybe(fromJust, fromMaybe, maybeToList, mapMaybe)
 
 type ExprMap = M.Map Id AExpr
 
-aAddScheduleDefs :: Flags -> [PProp] -> APackage -> AScheduleInfo ->
+aAddScheduleDefs :: ScheduleConfig -> [PProp] -> APackage -> AScheduleInfo ->
                     IO APackage
 aAddScheduleDefs flags pps pkg aschedinfo =
   do
@@ -416,3 +418,8 @@ handleSubmodAlwaysEnabled mumap insts =
       map makeAlwaysEnProof always_en_methods
 
 -- -------------------------
+
+-- Local projections keep this phase independent of invocation-wide options.
+
+type ScheduleConfig = PhaseConfig SchedFlags
+unsafeAlwaysRdy cfg = schedUnsafeAlwaysRdy (phaseFlags cfg)

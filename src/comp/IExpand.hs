@@ -52,7 +52,9 @@ import Undefined
 import FStringCompat
 import PreStrings(fsUnderscore)
 import PreIds
-import Flags
+import PhaseConfig
+import FlagTypes
+import qualified PhaseConfig as PC
 import SymTab(SymTab)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle,
              recordHandleOpen, recordHandleClose)
@@ -83,7 +85,7 @@ import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
 -----------------------------------------------------------------------------
--- Trace Flags
+-- Trace flags
 
 -- doProfile
 --   Keep a map of the number of times a top-level def is entered in evalAp
@@ -239,14 +241,14 @@ iExpandPref = "__h"
 --   Heap references become local defs in the module (named with "__h"),
 --   except when they are simple enough to be inlined.
 --   The actual elaboration work is done by iExpandModuleDef
-iExpand :: ErrorHandle -> Flags ->
+iExpand :: ErrorHandle -> PhaseConfig ElabFlags ->
            SymTab -> M.Map Id HExpr ->
            IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
 iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
   -- unbuffer output if we're tracing
-  when (doAnyTrace || showElabProgress flags) $
+  when (doAnyTrace || runShowElabProgress (phaseRunOptions flags)) $
       do hSetBuffering stdout LineBuffering
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
@@ -265,7 +267,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
 
   chkIfcPortNames errh args ifc vclockinfo vresetinfo
 
-  let norm = fullTypeNormalizer flags symt $ go_atfCache go
+  let norm = fullTypeNormalizer (elabTypeSolverFlags (phaseFlags flags)) symt $ go_atfCache go
 
   -- turn heap into IDef definitions
   let
@@ -355,12 +357,12 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- XXX to begin with rather than fixed up at the end
       rules_cleanup = cleanupFinalRules flags rules_heap
 
-      mpdefs = generateMethodPreds ( methodConditions flags ) rules_cleanup
+      mpdefs = generateMethodPreds ( elabMethodConditions (phaseFlags flags) ) rules_cleanup
       defs = defs1 ++ mpdefs
       wi = WireInfo (go_vclockinfo go) (go_vresetinfo go) varginfo
       comments_map = go_comments_map go
       mbe = if (go_backend_specific go)
-            then Just $ fromJustOrErr "iExpand: backend" (backend flags)
+            then Just $ fromJustOrErr "iExpand: backend" (elabBackend (phaseFlags flags))
             else Nothing
 
       -- the expanded module
@@ -532,8 +534,8 @@ unpack_method_call' _ e =
   -- trace ("unpack_method_call unable to match " ++ show e) $
   --[(mk_homeless_id "NOSTATE", mk_homeless_id "NOMETHOD")]
 
-removeInlinedPositions :: Flags -> IModule HeapData -> IModule HeapData
-removeInlinedPositions flags imod0 | (not (methodConditions flags)) = imod0
+removeInlinedPositions :: PhaseConfig ElabFlags -> IModule HeapData -> IModule HeapData
+removeInlinedPositions flags imod0 | (not (elabMethodConditions (phaseFlags flags))) = imod0
 removeInlinedPositions flags imod0 =
     let removeFn :: HExpr -> HExpr
         removeFn (ICon i ic) = (ICon (removeIdInlinedPositions i) ic)
@@ -900,7 +902,7 @@ iExpandModuleIfcArgs i
         flags <- getFlags
         symt <- getSymTab
         let v = unQualId i
-            mts = map (\ f -> tail (itSplit (lookupSelType flags ti f symt))) fs
+            mts = map (\ f -> tail (itSplit (lookupSelType (elabTypeSolverFlags (phaseFlags flags)) ti f symt))) fs
             mus = [ (i, n) | (i, (n,_)) <- argMeths arginfo ]
             vinf = VModInfo {
                         vName = VName (getIdString v),
@@ -1005,7 +1007,7 @@ iExpandIface modId clkRst (P pi e@(IAps c@(ICon _ (ICTuple { fieldIds = fs0 })) 
 
         norm <- getTypeNormalizerC
         let ifcName = iGetIfcName (iGetTypeNorm norm e)
-        let betterInfo = BetterInfo.extractMethodInfo flags symt ifcName
+        let betterInfo = BetterInfo.extractMethodInfo symt ifcName
         -- traceM ((ppReadable ifcName) ++ ": " ++ (ppReadable betterInfo))
         let newBetterInfo :: Id -> BetterInfo.BetterInfo
             newBetterInfo f = fromMaybe (BetterInfo.noMethodInfo f)
@@ -1506,7 +1508,7 @@ handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimChkCloc
 handlePrim _ _ _ p e@(IAps (ICon _ (ICPrim { primOp = PrimOpenFile })) _ [e_fname, e_mode]) = do
   flags <- getFlags
   (fname0, _) <- evalString e_fname
-  let fname = case (fdir flags) of
+  let fname = case (elabFdir (phaseFlags flags)) of
                 Just path | (isRelative fname0)
                   -> path ++ "/" ++ fname0
                 _ -> fname0
@@ -1969,7 +1971,7 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
         r2' <- convRules curClkRstn ns p' r2
         flags <- getFlags
         suf <- getNewRuleSuffix
-        let (suf', res, errs) = iRUnion flags suf r1' r2'
+        let (suf', res, errs) = iRUnion (elabRuleNameCheck (phaseFlags flags)) suf r1' r2'
         updNewRuleSuffix suf'
         deferErrors errs
         return res
@@ -1978,7 +1980,7 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
         r2' <- convRules curClkRstn ns p' r2
         flags <- getFlags
         suf <- getNewRuleSuffix
-        let (suf', res, errs) = iRUnionPreempt flags suf r1' r2'
+        let (suf', res, errs) = iRUnionPreempt (elabRuleNameCheck (phaseFlags flags)) suf r1' r2'
         updNewRuleSuffix suf'
         deferErrors errs
         return res
@@ -1987,7 +1989,7 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
         r2' <- convRules curClkRstn ns p' r2
         flags <- getFlags
         suf <- getNewRuleSuffix
-        let (suf', res, errs) = iRUnionUrgency flags suf r1' r2'
+        let (suf', res, errs) = iRUnionUrgency (elabRuleNameCheck (phaseFlags flags)) suf r1' r2'
         updNewRuleSuffix suf'
         deferErrors errs
         return res
@@ -1996,7 +1998,7 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
         r2' <- convRules curClkRstn ns p' r2
         flags <- getFlags
         suf <- getNewRuleSuffix
-        let (suf', res, errs) = iRUnionExecutionOrder flags suf r1' r2'
+        let (suf', res, errs) = iRUnionExecutionOrder (elabRuleNameCheck (phaseFlags flags)) suf r1' r2'
         updNewRuleSuffix suf'
         deferErrors errs
         return res
@@ -2005,7 +2007,7 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
         r2' <- convRules curClkRstn ns p' r2
         flags <- getFlags
         suf <- getNewRuleSuffix
-        let (suf', res, errs) = iRUnionMutuallyExclusive flags suf r1' r2'
+        let (suf', res, errs) = iRUnionMutuallyExclusive (elabRuleNameCheck (phaseFlags flags)) suf r1' r2'
         updNewRuleSuffix suf'
         deferErrors errs
         return res
@@ -2014,7 +2016,7 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
         r2' <- convRules curClkRstn ns p' r2
         flags <- getFlags
         suf <- getNewRuleSuffix
-        let (suf', res, errs) = iRUnionConflictFree flags suf r1' r2'
+        let (suf', res, errs) = iRUnionConflictFree (elabRuleNameCheck (phaseFlags flags)) suf r1' r2'
         updNewRuleSuffix suf'
         deferErrors errs
         return res
@@ -3610,9 +3612,9 @@ conAp' i (ICPrim _ PrimStringOf) _ [T t, _] = internalError ("PrimStringOf unsim
 -- synonym-expansion - no other synonyms should survive in the evaluator
 -- XXX using iToCT here means we're assuming the type is not polymorphic
 conAp' i (ICPrim _ PrimTypeOf) _ [T t, _] = do
-   flags <- getFlags
+   solver <- PC.elabTypeSolverFlags . phaseFlags <$> getFlags
    symt <- getSymTab
-   return $ pExpr (icType i (iConvT flags symt (iToCT t)))
+   return $ pExpr (icType i (iConvT solver symt (iToCT t)))
 
 -- Primitives that should be used downstream
 conAp' _ (ICPrim _ PrimZeroExt) _ [t2@(T t), t1, t3, e] =
@@ -4044,7 +4046,7 @@ conAp' i ic@(ICPrim _ PrimGenC) p [] = do
   setBackendSpecific
   -- get the result from the flags
   flags <- getFlags
-  let e = iMkRealBool (backend flags == Just Bluesim)
+  let e = iMkRealBool (elabBackend (phaseFlags flags) == Just Bluesim)
   return (pExpr e)
 
 -- genVerilog
@@ -4053,7 +4055,7 @@ conAp' i ic@(ICPrim _ PrimGenVerilog) p [] = do
   setBackendSpecific
   -- get the result from the flags
   flags <- getFlags
-  let e = iMkRealBool (backend flags == Just Verilog)
+  let e = iMkRealBool (elabBackend (phaseFlags flags) == Just Verilog)
   return (pExpr e)
 
 conAp' i ic@(ICPrim _ PrimGenModuleName) p [] = do
@@ -5036,7 +5038,7 @@ doSel sel s tys ty n as ee (p, e) =
             -- if method conditions are not being preserved,
             -- just return the default result
             flags <- getFlags
-            if (not (methodConditions flags))
+            if (not (elabMethodConditions (phaseFlags flags)))
               then dflt_res
               else do
                 -- see if the selector has any positions that need preserving
@@ -5183,26 +5185,25 @@ evalCExpr tag ce it as = do
 cExprToIExpr :: String -> CExpr -> IType -> G HExpr
 cExprToIExpr tag ce it = do
   --traceM("evalCExpr " ++ tag ++ "; ce: " ++ show ce ++ "; ct: " ++ show ct ++ "; as: " ++ show as)
-  flags <- getFlags
+  typeFlags <- PC.elabTypecheckFlags . phaseFlags <$> getFlags
   r <- getSymTab
   let err_tag = "evalCExpr " ++ tag
   -- built-in typeclass reflection only uses coherent typeclasses
   -- XXX there may be a corner case if we depend on user code that requires
   -- XXX incoherent matching
   let ct = iToCT it
-  let ti_res = TM.runTI flags False r (topExpr ct ce)
+  let ti_res = TM.runTI typeFlags False r (topExpr ct ce)
   case TM.tiResult ti_res of
     Left errs -> internalError (err_tag ++ " errors: " ++ ppReadable errs)
     Right (ps, ce') -> do
-      let convT = iConvT flags r
+      let convT = iConvT (typecheckTypeSolverFlags typeFlags) r
           newATFs = M.mapKeys (\(i, ts) -> (i, map convT ts))
                               (M.map convT (TM.tiATFCache ti_res))
       mergeATFCache newATFs
       when (not (null ps)) $ internalError (err_tag ++ " unreduced: " ++ ppReadable ps)
       env <- getDefEnv
       errh <- getErrHandle
-      flags <- getFlags
-      let ie = iConvExpr errh flags r env ce'
+      let ie = iConvExpr errh (typecheckTypeSolverFlags typeFlags) r env ce'
       --traceM(err_tag ++ "; ce': " ++ ppReadable ce')
       --traceM(err_tag ++ "; ie: " ++ ppReadable ie)
       ie' <- case ie of

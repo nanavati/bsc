@@ -5,6 +5,8 @@ module CondTree(
     enumerate,
     simplify,
 ) where
+import Warmup ()
+
 
 -- Representation of a condition tree in which conditions
 -- recursively subdivide a set into a number of leaf

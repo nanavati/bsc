@@ -36,9 +36,10 @@ import PFPrint
 import Position
 import Id(cmpIdByName)
 import ASyntax
+import StaticSchedule
 import AUses
 import VModInfo(VSchedInfo)
-import RSchedule(RAT)
+import RScheduleTypes(RAT)
 
 
 -- ========================================================================

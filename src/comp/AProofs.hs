@@ -1,11 +1,14 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, TypeSynonymInstances #-}
 module AProofs (aCheckProofs) where
 
+import Warmup ()
 import Control.Monad.State
 
 import Error(ErrorHandle)
-import Flags
+import PhaseConfig
+import FlagTypes (DumpFlag(..), ResourceFlag(..))
 import ASyntax
+import StaticSchedule
 import ProofObligation
 import SAT(SATState, initSATState, checkEq, checkNotEq)
 import PPrint
@@ -13,13 +16,13 @@ import PPrint
 
 -- -------------------------
 
-aCheckProofs :: ErrorHandle -> Flags -> APackage -> IO (APackage, Bool)
+aCheckProofs :: ErrorHandle -> ScheduleConfig -> APackage -> IO (APackage, Bool)
 aCheckProofs errh flags amod = do
     let obs = apkg_proof_obligations amod
         ds = apkg_local_defs amod
         ss = apkg_state_instances amod
     let str = "aproofs_" ++ ppString (apkg_name amod)
-    sat_state <- initSATState str errh flags True ds ss
+    sat_state <- initSATState str errh (schedSatBackend (phaseFlags flags)) True ds ss
     (ok, _) <- runStateT (checkProofs errh obs) sat_state
     let amod' = amod { apkg_proof_obligations = [] }
     return (amod', ok)
@@ -63,3 +66,7 @@ proveNotEq x y = do
 
 -- -------------------------
 
+
+-- Local projections keep this phase independent of invocation-wide options.
+
+type ScheduleConfig = PhaseConfig SchedFlags

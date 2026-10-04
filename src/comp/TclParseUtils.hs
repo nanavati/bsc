@@ -1,20 +1,20 @@
 module TclParseUtils(parseTypeExpr, parseQualConstructor) where
 
 import Error(ErrorHandle, EMsg, internalError)
-import Flags(Flags(..))
+import PhaseConfig
 
 import Classic
 import Parser.BSV(pStringWrapper, pTypeExpr, pQualConstructor)
 import FStringCompat(mkFString)
 import Id(Id)
-import Depend(outlaw_sv_kws_as_classic_ids)
+import ParseSource(outlaw_sv_kws_as_classic_ids)
 
 import Parser.Classic.CParser(CParser, pType, qcon, eof, errSyntax)
 import Parse(parse, (+..))
 import Lex(lexStart, LFlags(..))
 import CType(CType)
 
-type Parser a = ErrorHandle -> Flags -> String -> IO (Either [EMsg] a)
+type Parser a = ErrorHandle -> PhaseConfig ParseFlags -> String -> IO (Either [EMsg] a)
 
 parseTypeBSV :: Parser CType
 parseTypeBSV errh flags s = pStringWrapper errh flags pTypeExpr [s]
@@ -28,7 +28,7 @@ parseQConBSV errh flags s = pStringWrapper errh flags pQualConstructor [s]
 parseQConClassic :: Parser Id
 parseQConClassic _ flags = classicStringWrapper flags qcon
 
-classicStringWrapper :: (Show a) => Flags -> CParser a -> String -> IO (Either [EMsg] a)
+classicStringWrapper :: (Show a) => (PhaseConfig ParseFlags) -> CParser a -> String -> IO (Either [EMsg] a)
 classicStringWrapper flags parser s = fullParse $ lex s
   where fullParse ts =
           case parse (parser +.. eof) ts of
@@ -37,7 +37,7 @@ classicStringWrapper flags parser s = fullParse $ lex s
             Right [(p,[])] -> return $ Right p
             Right ps       -> internalError $ "TclParseUtils: multiple parses: " ++ show ps ++ "\n" ++ show s
         lex = lexStart lflags (mkFString "Commandline")
-        lflags = LFlags { lf_is_stdlib = stdlibNames flags,
+        lflags = LFlags { lf_is_stdlib = parseStdlibNames (phaseFlags flags),
                           lf_allow_sv_kws = not outlaw_sv_kws_as_classic_ids }
 
 -- Permissive parsing. If either a BSV or Classic parse succeeds, return that result,

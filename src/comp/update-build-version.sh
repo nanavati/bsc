@@ -3,40 +3,44 @@ set -euo pipefail
 
 export TMOUT=1
 
+OUTPUT_DIR=${1:-.}
+mkdir -p "$OUTPUT_DIR"
+
 # -------------------------
 # GIT
 
 # Arguments: 1=commit hash, 2=describe string
 genGITBuildVersion () {
-    echo "module BuildVersion(buildVersion, buildVersionNum, buildVersionName) where" > BuildVersion.hs.new;
+    echo "module BuildVersion(buildVersion, buildVersionNum, buildVersionName) where" > "$OUTPUT_DIR/BuildVersion.hs.new";
 
-    echo >> BuildVersion.hs.new;
-    echo buildVersion :: String >> BuildVersion.hs.new;
-    echo buildVersion = \"$1\" >> BuildVersion.hs.new;
+    echo "import Warmup ()" >> "$OUTPUT_DIR/BuildVersion.hs.new";
+    echo >> "$OUTPUT_DIR/BuildVersion.hs.new";
+    echo buildVersion :: String >> "$OUTPUT_DIR/BuildVersion.hs.new";
+    echo buildVersion = \"$1\" >> "$OUTPUT_DIR/BuildVersion.hs.new";
 
-    echo >> BuildVersion.hs.new;
-    echo buildVersionNum :: Integer >> BuildVersion.hs.new;
-    echo buildVersionNum = 0x$1 >> BuildVersion.hs.new;
+    echo >> "$OUTPUT_DIR/BuildVersion.hs.new";
+    echo buildVersionNum :: Integer >> "$OUTPUT_DIR/BuildVersion.hs.new";
+    echo buildVersionNum = 0x$1 >> "$OUTPUT_DIR/BuildVersion.hs.new";
 
-    echo >> BuildVersion.hs.new;
-    echo buildVersionName :: String >> BuildVersion.hs.new;
-    echo buildVersionName = \"$2\" >> BuildVersion.hs.new;
+    echo >> "$OUTPUT_DIR/BuildVersion.hs.new";
+    echo buildVersionName :: String >> "$OUTPUT_DIR/BuildVersion.hs.new";
+    echo buildVersionName = \"$2\" >> "$OUTPUT_DIR/BuildVersion.hs.new";
 
-    if test -f BuildVersion.hs; then
-	if !(diff BuildVersion.hs BuildVersion.hs.new); then
-            mv BuildVersion.hs.new BuildVersion.hs;
+    if test -f "$OUTPUT_DIR/BuildVersion.hs"; then
+	if !(diff "$OUTPUT_DIR/BuildVersion.hs" "$OUTPUT_DIR/BuildVersion.hs.new"); then
+            mv "$OUTPUT_DIR/BuildVersion.hs.new" "$OUTPUT_DIR/BuildVersion.hs";
 	else
             echo "BuildVersion.hs up-to-date";
-            rm BuildVersion.hs.new;
+            rm "$OUTPUT_DIR/BuildVersion.hs.new";
 	fi;
     else
-	mv BuildVersion.hs.new BuildVersion.hs;
+	mv "$OUTPUT_DIR/BuildVersion.hs.new" "$OUTPUT_DIR/BuildVersion.hs";
     fi;
 }
 
 # -------------------------
 
-if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
+if ( test -f "$OUTPUT_DIR/BuildVersion.hs" ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
     echo "BuildVersion.hs not modified"
 else
 

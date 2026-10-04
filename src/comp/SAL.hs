@@ -20,7 +20,8 @@ import Data.List(intersperse, groupBy)
 import Util(snd3, fst2of3, eqSnd, itos, concatMapM, map_deleteMany, makePairs)
 
 import Error(internalError, ErrorHandle, bsWarning)
-import Flags
+import PhaseConfig
+import FlagTypes(DumpFlag(..))
 import Eval
 import PPrint
 import Id
@@ -39,7 +40,7 @@ import LambdaCalcUtil
 
 -- requires that task splicing has already happened
 --
-convAPackageToSAL :: ErrorHandle -> Flags -> APackage -> IO SContext
+convAPackageToSAL :: ErrorHandle -> (PhaseConfig ElabFlags) -> APackage -> IO SContext
 
 -- avoid work if a dump wasn't requested
 convAPackageToSAL errh flags apkg | not (hasDumpStrict flags DFdumpSAL) =

@@ -12,7 +12,7 @@ module SAT(
 import qualified Control.Exception as CE
 
 import Error(ErrorHandle, bsError, ErrMsg(..))
-import Flags
+import FlagTypes (SATFlag(..))
 import ASyntax
 import Position(cmdPosition)
 
@@ -34,19 +34,19 @@ data SATState = SATS_Yices Yices.YState
 
 -- -------------------------
 
-initSATState :: String -> ErrorHandle -> Flags -> Bool -> [ADef] -> [AVInst] ->
+initSATState :: String -> ErrorHandle -> SATFlag -> Bool -> [ADef] -> [AVInst] ->
                 IO SATState
 initSATState str errh flags doHardFail ds avis =
-    case (satBackend flags) of
+    case flags of
       SAT_Yices -> do
-          yices_state <- Yices.initYState str flags doHardFail ds avis []
+          yices_state <- Yices.initYState str doHardFail ds avis []
           return (SATS_Yices yices_state)
       SAT_STP -> do
-          stp_state <- STP.initSState str flags doHardFail ds avis []
+          stp_state <- STP.initSState str doHardFail ds avis []
           return (SATS_STP stp_state)
 
 
-checkSATFlags :: ErrorHandle -> Flags -> IO Flags
+checkSATFlags :: ErrorHandle -> SATFlag -> IO SATFlag
 checkSATFlags eh f =
   let
       hasYices :: IO Bool
@@ -57,7 +57,7 @@ checkSATFlags eh f =
       hasSTP :: IO Bool
       hasSTP = STP.checkVersion
 
-      checkFn :: String -> String -> IO Bool -> IO Flags
+      checkFn :: String -> String -> IO Bool -> IO SATFlag
       checkFn flag_str lib_str hasFn = do
         res <- hasFn
         if res
@@ -66,7 +66,7 @@ checkSATFlags eh f =
                -- just report an error
                bsError eh [(cmdPosition,
                             WSATNotAvailable flag_str lib_str Nothing)]
-  in  case (satBackend f) of
+  in  case f of
         SAT_Yices -> checkFn "-sat-yices" "libyices.so.2" hasYices
         SAT_STP -> checkFn "-sat-stp" "libstp.so" hasSTP
 

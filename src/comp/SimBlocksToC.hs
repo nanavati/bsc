@@ -12,7 +12,7 @@ import System.Time -- XXX: in old-time package
 import qualified Data.Map as M
 
 import ErrorUtil(internalError)
-import Flags
+import PhaseConfig
 import Id(getIdString, getIdQual, getIdQualString, unQualId)
 import SimCCBlock
 import ASyntax
@@ -27,15 +27,14 @@ import PPrint(ppReadable) -- hiding (int, char)
 import Util(concatMapM, mapFst, mapSnd)
 import SimFileUtils(codeGenOptionDescr)
 import TopUtils(TimeInfo(..))
-import Version(versionname)
-import BuildVersion(buildVersion)
+import CompilerVersion(CompilerVersion(..))
 
 -- import Debug.Trace
 
 -- Create many .cxx and .h files from the entire list of SimCCBlocks
 -- and SimCCScheds.  The blocks are grouped by module, the schedules
 -- cut across all modules.
-simBlocksToC :: Flags -> TimeInfo -> SBId ->
+simBlocksToC :: (PhaseConfig BluesimGenFlags) -> TimeInfo -> SBId ->
                 (Maybe String) -> (Maybe String) ->
                 SBMap -> ForeignFuncMap ->
                 [String] -> [SimCCBlock] -> [SimCCSched] ->
@@ -171,7 +170,7 @@ schedCallsForeignFn :: SimCCSched -> Bool
 schedCallsForeignFn sched = fnCallsForeignFn (sched_fn sched)
 
 -- Convert the block for a module into .cxx and .h files
-convertModuleBlock :: Flags -> SBMap -> ForeignFuncMap ->
+convertModuleBlock :: (PhaseConfig BluesimGenFlags) -> SBMap -> ForeignFuncMap ->
                        M.Map SBId (M.Map (Bool,AId) ClockDomain) ->
                        M.Map SBId [AId] -> [String] -> SBId ->
                        (String -> String -> IO String)-> SimCCBlock ->
@@ -193,7 +192,7 @@ convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_blk write
         -- method definitions (for the CXX file)
         (method_defs, state) =
             runState (simCCBlockToClassDefinition sb_map dom_map sb)
-                     (initialState ff_map wdef_inst_map (unSpecTo flags))
+                     (initialState ff_map wdef_inst_map ((bluesimGenUnSpecTo . phaseFlags) flags))
         lit_defs = mkLiteralDecls (nub (literals state))
         str_defs = mkStringDecls (M.toList (str_map state))
         class_defs = lit_defs ++ str_defs ++ method_defs
@@ -207,7 +206,7 @@ convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_blk write
                    writeFileC
 
 -- Convert the schedule and reset functions into .cxx and .h files
-convertSchedules :: Flags -> TimeInfo -> SBId ->
+convertSchedules :: (PhaseConfig BluesimGenFlags) -> TimeInfo -> SBId ->
                     (Maybe String) -> (Maybe String) ->
                     SBMap -> ForeignFuncMap -> M.Map String [AId] ->
                     [SimCCSched] -> [SimCCClockGroup] -> SimCCGateInfo ->
@@ -293,7 +292,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
         -- definitions of the schedule functions
         (sch_fn_lists,state) =
             runState (mapM (simCCScheduleToFunctionDefinition top_blk) scheds)
-                     (initialState ff_map wdef_map (unSpecTo flags))
+                     (initialState ff_map wdef_map ((bluesimGenUnSpecTo . phaseFlags) flags))
         sched_fns = [comment "Schedule functions" (blankLines 1)] ++
                     concat sch_fn_lists
 
@@ -476,10 +475,10 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                                [ ptr . ptr . constant . char $ (mkVar "name")
                                , ptr . ptr . constant . char $ (mkVar "build")
                                ]
-        mk_version_str s = let vs = if showVersion flags then s else ""
+        mk_version_str s = let vs = if (bluesimGenShowVersion . phaseFlags) flags then s else ""
                            in  if vs == "" then mkNULL else mkStr vs
-        model_version_name  = mk_version_str versionname
-        model_version_build = mk_version_str buildVersion
+        model_version_name  = mk_version_str (compilerVersionName (phaseCompilerVersion flags))
+        model_version_build = mk_version_str (compilerBuildVersion (phaseCompilerVersion flags))
         gv_def =
           define get_version
                  (block [ stmt (cDeref (var "name"))  `assign` model_version_name
@@ -489,7 +488,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
         get_creation_time = function (userType "time_t")
                                      (mkScopedVar "get_creation_time")
                                      []
-        (TimeInfo _ clock_time@(TOD t _)) = if (timeStamps flags)
+        (TimeInfo _ clock_time@(TOD t _)) = if ((bluesimGenTimeStamps . phaseFlags) flags)
                                             then creation_time
                                             else TimeInfo 0 (TOD 0 0)
         time_str = calendarTimeToString (toUTCTime clock_time)
@@ -609,7 +608,7 @@ mkBacking sb =
 
 -- Create one .cxx and one .h file, given a list of
 -- referenced blocks, class declarations and method definitions.
-mkCxxAndH :: Flags -> SBMap -> String -> Bool -> Bool ->
+mkCxxAndH :: (PhaseConfig BluesimGenFlags) -> SBMap -> String -> Bool -> Bool ->
              ([SBId],[CCFragment],[CCFragment]) ->
              (String -> String -> IO String) -> IO [String]
 mkCxxAndH flags sb_map name include_foreign is_top (ids,decls,meths) writeFileC = do

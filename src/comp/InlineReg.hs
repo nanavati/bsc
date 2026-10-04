@@ -10,7 +10,7 @@ import IntegerUtil(aaaa)
 import Util(itos)
 import PPrint
 import Error
-import Flags(Flags)
+import PhaseConfig
 import Id
 import ASyntax
 import VModInfo
@@ -27,7 +27,7 @@ import BackendNamingConventions
 --      * the name of the instance
 --      * the list of inputs and their sizes
 --      * the output, to be declared "Reg" and its size
-vInlineReg :: ErrorHandle -> Flags -> [AVInst] -> ([VMItem], [RegInstInfo])
+vInlineReg :: ErrorHandle -> (PhaseConfig VerilogGenFlags) -> [AVInst] -> ([VMItem], [RegInstInfo])
 vInlineReg errh flags avis =
     let
         vco = flagsToVco flags
@@ -71,7 +71,7 @@ type RegInstInfo = (VId, String, [VExpr], [(VId, Maybe VRange)], (VId, Maybe VRa
 -- XXX the instantiation group for the inlined register (declare the
 -- XXX IO signals and the reg), or we can just do it ourselves here.
 -- XXX We do the former:
-mkRegInstInfo :: ErrorHandle -> Flags -> AVInst -> RegInstInfo
+mkRegInstInfo :: ErrorHandle -> (PhaseConfig VerilogGenFlags) -> AVInst -> RegInstInfo
 mkRegInstInfo errh flags avi =
     let vco = flagsToVco flags
         reg_id = vId (mkQOUT avi)
@@ -151,7 +151,7 @@ vInlineA vco ((clk, rstn), avis) =
 
 
 -- Assign an initial (debug) value to all RegUN
-mkInitialAssignments :: Flags -> [AVInst] -> [VMItem]
+mkInitialAssignments :: (PhaseConfig VerilogGenFlags) -> [AVInst] -> [VMItem]
 mkInitialAssignments flags [] = []
 mkInitialAssignments flags avis =
     let

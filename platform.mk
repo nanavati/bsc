@@ -16,7 +16,7 @@
 ## --------------------
 ## Setup MACHTYPE
 
-MACHTYPE = $(shell $(TOP)/platform.sh machtype)
+MACHTYPE = $(shell sh $(TOP)/platform.sh machtype)
 export MACHTYPE
 
 ifneq ($(MACHTYPE), $(findstring $(MACHTYPE), x86_64 i386 i486 i586 i686 ppc64le aarch64 arm64 armv7l))
@@ -26,7 +26,7 @@ endif
 ## --------------------
 ## Setup OSTYPE
 
-OSTYPE = $(shell $(TOP)/platform.sh ostype)
+OSTYPE = $(shell sh $(TOP)/platform.sh ostype)
 export OSTYPE
 
 ifneq ($(OSTYPE), $(findstring $(OSTYPE), Linux Darwin Freebsd))
@@ -60,7 +60,7 @@ export CXXFLAGS
 
 ifneq ($(WANT_TCL),)
 
-TCLSH = $(shell $(TOP)/platform.sh tclsh)
+TCLSH = $(shell sh $(TOP)/platform.sh tclsh)
 ifeq ($(TCLSH), )
 $(error Unable to find tclsh)
 endif
@@ -70,7 +70,7 @@ $(info Using tclsh: $(TCLSH))
 # and produce a list of defines
 # (that can be preceded with -D or -optc-D when passed to CC or GHC)
 #
-TCL_VERSION = $(shell $(TOP)/platform.sh tclversion)
+TCL_VERSION = $(shell sh $(TOP)/platform.sh tclversion)
 ifeq ($(TCL_VERSION),8.5)
 TCL_DEFS=TCL85
 else
@@ -87,13 +87,13 @@ endif
 $(info Tcl version: $(TCL_VERSION))
 $(info Using Tcl defines: $(TCL_DEFS))
 
-TCL_INC_FLAGS = $(shell $(TOP)/platform.sh tclinc 2> /dev/null || echo fail)
+TCL_INC_FLAGS = $(shell sh $(TOP)/platform.sh tclinc 2> /dev/null || echo fail)
 ifeq ($(TCL_INC_FLAGS), fail)
 $(error Unable to find tcl include directory)
 endif
 $(info Using tcl include flags: $(TCL_INC_FLAGS))
 
-TCL_LIB_FLAGS = $(shell $(TOP)/platform.sh tcllibs 2> /dev/null || echo fail)
+TCL_LIB_FLAGS = $(shell sh $(TOP)/platform.sh tcllibs 2> /dev/null || echo fail)
 ifeq ($(TCL_LIB_FLAGS), fail)
 $(error Unable to find tcl library flags)
 endif
