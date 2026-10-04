@@ -3,7 +3,8 @@ module Deriving(derive) where
 import Data.List(intercalate)
 import Util(log2, checkEither, headOrErr, lastOrErr, unconsOrErr, fromJustOrErr)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError)
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes
 import Position
 import Id
 import PreIds(
@@ -63,7 +64,7 @@ import qualified Data.Set as S
 
 -- | Derive instances for all types with deriving (...) in a package, and
 -- return the package agumented with the instance definitions.
-derive :: ErrorHandle -> Flags -> SymTab -> CPackage -> IO CPackage
+derive :: ErrorHandle -> TypeSolverFlags -> SymTab -> CPackage -> IO CPackage
 derive errh flags r (CPackage i exps imps impsigs fixs ds includes) =
     let all_ds = ds ++ concat [ cs | (CImpSign _ _ (CSignature _ _ _ cs)) <- impsigs ]
         -- Create an environment, that maps IDs to definitions for *all*
@@ -81,7 +82,7 @@ derive errh flags r (CPackage i exps imps impsigs fixs ds includes) =
 --  packageid  =  id of the package
 --  xs =  available bindings
 --  d  =  single definition potentially requiring deriving
-doDer :: Flags -> SymTab -> Id -> [(Id, CDefn)] -> CDefn ->
+doDer :: TypeSolverFlags -> SymTab -> Id -> [(Id, CDefn)] -> CDefn ->
          [Either EMsg [CDefn]]
 doDer flags r packageid xs data_decl@(Cdata {}) =
     let unqual_name = iKName (cd_name data_decl)
@@ -954,11 +955,11 @@ duplicate_tag_encoding_error type_name tag rest_tags
                | next_tag <- rest_tags,
                  cis_tag_encoding next_tag == cis_tag_encoding tag]
 
-addAutoDeriv :: Flags -> SymTab -> Id -> [CType] -> Id -> [CTypeclass]
+addAutoDeriv :: TypeSolverFlags -> SymTab -> Id -> [CType] -> Id -> [CTypeclass]
                  -> [CTypeclass]
 addAutoDeriv flags r i tvs clsId derivs
                          -- incoherent matches are resolved *after* reducePred
-    | Right True <- tiResult (runTI flags False r check) = derivs
+    | Right True <- tiResult (runTI (internalTypecheckFlags flags) False r check) = derivs
   where check = do
           let (kind, sort) =
                   -- trace ("check undef: " ++ show clsId) $
@@ -983,7 +984,7 @@ addAutoDeriv flags r i tvs clsId derivs =
 -- All types are automatically given instances for the typeclasses in
 -- autoderivedClasses if an explicit instance isn't provided by the user.
 -- Implement this by adding the classes to the derive list for each type.
-addAutoDerivs :: Flags -> SymTab -> Id -> [CType] -> [CTypeclass]
+addAutoDerivs :: TypeSolverFlags -> SymTab -> Id -> [CType] -> [CTypeclass]
                   -> [CTypeclass]
 addAutoDerivs flags r i tvs derivs =
   -- trace ("autoderivedClasses for " ++ show i ++ ": " ++ ppReadable autoderivedClasses) $

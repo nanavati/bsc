@@ -13,7 +13,7 @@ import Error (internalError, EMsg, ErrMsg(..), ErrorHandle, bsError,
               convExceptTToIO)
 import Position (noPosition, getPosition)
 import PPrint
-import Flags
+import PhaseConfig
 import FStringCompat(mkFString)
 import Backend
 
@@ -27,6 +27,7 @@ import VModInfo
 import Wires(WireProps(..), ClockDomain)
 import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..))
 import ASyntax
+import StaticSchedule
 import ASyntaxUtil(aSubst, findAExprs, exprFold)
 import AScheduleInfo
 import AUses(MethodId(..))
@@ -36,7 +37,7 @@ import SimPrimitiveModules(getPrimDomainInfo, checkBluesimPrimitives)
 import SimCCBlock(SimCCBlock(..), primBlocks)
 import SchedInfo (methodConflictInfo, sSB)
 import ABin (ABin(..), ABinModInfo(..))
-import ABinUtil(HierMap, getABIHierarchy, assertNoSchedErr)
+import ArtifactHierarchy(HierMap, ResolvedHierarchy(..))
 import SimDomainInfo
 
 import SCC (tsort)
@@ -58,19 +59,15 @@ trace_bs_mcd = "-trace-bs-mcd" `elem` progArgs
 -- fabis: the name of each .ba file paired with its contents
 --        (file + abi = fabi)
 --        the filename is kept for reporting errors to the user
-simExpand :: ErrorHandle -> Flags -> String -> [(String, ABin)] -> IO SimSystem
-simExpand errh flags topname fabis = do
-    -- get the names of the primitives
-    -- (to put in the list of mods we don't need .ba for)
-    let prim_names = map sb_name primBlocks
-
-    (topmodId, hiermap, instmap, ffuncmap, filemap, _, emodinfos_used_by_name)
-        <- convExceptTToIO errh $
-           getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
-                           prim_names topname fabis
-
-    modinfos_used_by_name <- convExceptTToIO errh $
-                             assertNoSchedErr emodinfos_used_by_name
+simExpand :: ErrorHandle -> PhaseConfig BluesimGenFlags -> ResolvedHierarchy -> IO SimSystem
+simExpand errh flags hierarchy = do
+    let topmodId = hierarchyTopModule hierarchy
+        topname = getIdString topmodId
+        hiermap = hierarchyModules hierarchy
+        instmap = hierarchyInstances hierarchy
+        ffuncmap = hierarchyForeignFunctions hierarchy
+        filemap = hierarchyArtifactFiles hierarchy
+        modinfos_used_by_name = hierarchyModuleInfos hierarchy
 
     -- reject top-level modules with always_enabled ifc, if generating
     -- a Bluesim executable
@@ -78,12 +75,12 @@ simExpand errh flags topname fabis = do
            case (lookup (getIdString topmodId) modinfos_used_by_name) of
                Just (mi,_) -> mi
                Nothing     -> internalError ("simExpand: topmodId not found")
-    when ((not (genSysC flags)) && (hasEnabledMethod topModInfo)) $
+    when ((not ((bluesimGenGenSysC . phaseFlags) flags)) && (hasEnabledMethod topModInfo)) $
         bsError errh [(noPosition, EBSimEnablePragma)]
 
     -- reject top-level modules with arguments or params in Bluesim or SystemC
     let (top_args, top_params) = getArgsAndParams topModInfo
-    if (genSysC flags)
+    if ((bluesimGenGenSysC . phaseFlags) flags)
      then when ((not (null top_args)) || (not (null top_params))) $
                bsError errh [(noPosition, EBSimTopLevelArgOrParam True (top_args ++ top_params))]
      else when ((not (null top_args)) || (not (null top_params))) $
@@ -122,7 +119,7 @@ simExpand errh flags topname fabis = do
 
 -- ===============
 
-simExpandABin :: ErrorHandle -> Flags -> (ABinModInfo,String) -> IO SimPackage
+simExpandABin :: ErrorHandle -> (PhaseConfig BluesimGenFlags) -> (ABinModInfo,String) -> IO SimPackage
 simExpandABin errh flags (abi,ver) = do
     let
         -- we will update the apkg, so name this as the initial value

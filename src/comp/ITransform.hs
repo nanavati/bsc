@@ -31,7 +31,8 @@ import PPrint
 import IntLit
 import Position(noPosition, getPosition)
 import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
-import Flags(Flags, optBool)
+import PhaseConfig
+import FlagTypes
 import FStringCompat(mkFString)
 import Id
 import Prim
@@ -56,8 +57,8 @@ import BoolOpt
 -- use the special-purpose boolean optimizer to optimize a boolean expression
 -- instead of the general-purpose iTransExpr
 -- will use BDDs for boolean optimization when -opt-bool is set (like optIRule)
-iTransBoolExpr :: Flags -> IExpr a -> IExpr a
-iTransBoolExpr flags = optBoolExpr (optBool flags)
+iTransBoolExpr :: PhaseConfig ElabFlags -> IExpr a -> IExpr a
+iTransBoolExpr flags = optBoolExpr (elabOptBool (phaseFlags flags))
 
 -----------------------------------------------------------------------------
 
@@ -81,12 +82,12 @@ iTransExprLoop e =
 -}
 -----------------------------------------------------------------------------
 
-iTransform :: ErrorHandle -> Flags -> String -> IModule a -> IModule a
+iTransform :: ErrorHandle -> PhaseConfig ElabFlags -> String -> IModule a -> IModule a
 iTransform errh flags prefix =
           iInline False .                -- XXX only for debug
         iTransform1 1 errh flags prefix . iSortDs
 
-iTransform1 :: Integer -> ErrorHandle -> Flags -> String ->
+iTransform1 :: Integer -> ErrorHandle -> PhaseConfig ElabFlags -> String ->
                IModule a -> IModule a
 iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
                                                  imod_local_defs  = ds,
@@ -1409,7 +1410,7 @@ eqE                               e1                                   e2     = 
 
 data TState a = TState {
         errHandle :: ErrorHandle,
-        flags :: Flags,
+        flags :: PhaseConfig ElabFlags,
 
         -- Prefix to use for generating new names (resulting from CSE)
         prefix :: String,
@@ -1433,7 +1434,7 @@ data TState a = TState {
 
 type T b a = State (TState a) b
 
-runT :: ErrorHandle -> Flags -> Integer -> String -> T b a -> (b, [IDef a])
+runT :: ErrorHandle -> PhaseConfig ElabFlags -> Integer -> String -> T b a -> (b, [IDef a])
 runT errh flags no prefix xforms =
     let initState :: TState a
         initState = TState { errHandle = errh
@@ -1457,7 +1458,7 @@ runT errh flags no prefix xforms =
 getDoBO :: T Bool a
 getDoBO = do
   flgs <- gets flags
-  return (optBool flgs)
+  return (elabOptBool (phaseFlags flgs))
 
 -- Create a CSE def for an expression, returning a reference;
 -- if a def already exists for this expression, return the existing reference.
@@ -1690,7 +1691,7 @@ getBit _ = Nothing
 -- Some of these defs are marked as not-CSE-able, so we keep those defs
 -- separate.
 --
-iTransFixupDefNames :: forall a . Flags -> T () a
+iTransFixupDefNames :: forall a . (PhaseConfig ElabFlags) -> T () a
 iTransFixupDefNames flags = do
   transform_state <- get
   let

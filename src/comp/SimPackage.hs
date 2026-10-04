@@ -41,9 +41,10 @@ import VModInfo
 import Wires
 import Pragma
 import ASyntax
+import StaticSchedule
 import ASyntaxUtil
 import AScheduleInfo
-import ABinUtil(InstModMap,ABinMap)
+import ArtifactHierarchy(InstModMap,ABinMap)
 import SimDomainInfo
 import ForeignFunctions(ForeignFuncMap)
 

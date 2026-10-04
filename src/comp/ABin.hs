@@ -1,3 +1,6 @@
+-- | Module data shared by backend consumers and inspection tools.
+-- The original .ba envelope stores invocation options and optional generated
+-- Verilog separately, so they do not become phase execution configuration.
 module ABin (ABin(..),
              ABinModInfo(..),
              ABinForeignFuncInfo(..),
@@ -8,32 +11,30 @@ module ABin (ABin(..),
              abemi_apkg,
              abemi_pps,
              abemi_oqt,
-             abemi_flags,
              abemi_method_uses_map,
              abemi_warnings,
              abemi_schedule,
              abemi_rule_relation_db
              ) where
 
-import Data.Maybe(isNothing)
+import Warmup ()
 import PPrint
 import Id(Id)
 import Position(Position)
 import Pragma(PProp)
 import CType(CQType)
 import ASyntax
+import StaticSchedule
 import AScheduleInfo
 import AUses(MethodUsesMap)
 import ADumpScheduleInfo(MethodDumpInfo)
 import VModInfo(VPathInfo)
 import ForeignFunctions(ForeignFunction(..))
-import Flags(Flags(..))
-import Verilog(VProgram)
 
 
 -- ===============
 
--- ab_version = BSC version which compiled the .ba
+-- ab_version identifies the compiler which produced this module view.
 data ABin = ABinMod { ab_modinfo :: ABinModInfo,
                       ab_version :: String }
           | ABinForeignFunc { ab_ffuncinfo :: ABinForeignFuncInfo,
@@ -48,8 +49,6 @@ data ABinModInfo =
         abmi_path :: String,
         -- the name of the BSV package which defined this module
         abmi_src_name :: String,
-        -- time when BSC was called to compile the .ba
-        --abmi_time :: ClockTime,
         abmi_apkg :: APackage,
         abmi_aschedinfo :: AScheduleInfo,
         -- if this can be used prior to generating abin,
@@ -61,10 +60,7 @@ data ABinModInfo =
         -- (for now, the list of preds is empty, so CType would do)
         abmi_oqt         :: CQType,
         abmi_method_dump :: MethodDumpInfo,
-        abmi_pathinfo :: VPathInfo,
-        abmi_flags       :: Flags,
-        -- the generated Verilog
-        abmi_vprogram :: Maybe VProgram
+        abmi_pathinfo :: VPathInfo
     }
 
 data ABinForeignFuncInfo =
@@ -87,9 +83,7 @@ data ABinModSchedErrInfo =
         -- pragmas
         abmsei_pps :: [PProp],
         -- original type of the module
-        abmsei_oqt :: CQType,
-        -- flags
-        abmsei_flags :: Flags
+        abmsei_oqt :: CQType
     }
 
 -- ---------------
@@ -113,7 +107,7 @@ instance PPrint ABin where
 
 
 instance PPrint ABinModInfo where
-    pPrint d p (ABinModInfo path srcName apkg aschedinfo pps oqt mi pathinfo flags vprog) =
+    pPrint d p (ABinModInfo path srcName apkg aschedinfo pps oqt mi pathinfo) =
         text "path:" <+> text path $+$
         text "package:" <+> text srcName $+$
         pPrint d 0 apkg $+$
@@ -121,11 +115,7 @@ instance PPrint ABinModInfo where
         text "pprop:" <+> pPrint d 0 pps $+$
         text "oqt:" <+> pPrint d 0 oqt $+$
         -- no dump of method info
-        text "pathinfo:" <+> pPrint d 0 pathinfo $+$
-        -- no dump of flags
-        text "vprog:" <+> (if (isNothing vprog)
-                           then text "Nothing"
-                           else text "Just ...") -- no dump of contents
+        text "pathinfo:" <+> pPrint d 0 pathinfo
 
 
 instance PPrint ABinForeignFuncInfo where
@@ -135,14 +125,13 @@ instance PPrint ABinForeignFuncInfo where
 
 
 instance PPrint ABinModSchedErrInfo where
-    pPrint d p (ABinModSchedErrInfo path srcName apkg aschederrinfo pps oqt flags) =
+    pPrint d p (ABinModSchedErrInfo path srcName apkg aschederrinfo pps oqt) =
         text "path:" <+> text path $+$
         text "package:" <+> text srcName $+$
         pPrint d 0 apkg $+$
         pPrint d 0 aschederrinfo $+$
         text "pprop:" <+> pPrint d 0 pps $+$
         text "oqt:" <+> pPrint d 0 oqt
-        -- no dump of flags
 
 
 -- ===============
@@ -176,11 +165,6 @@ abemi_oqt :: ABinEitherModInfo -> CQType
 abemi_oqt m = case m of
                 Left l  -> abmsei_oqt l
                 Right r -> abmi_oqt r
-
-abemi_flags :: ABinEitherModInfo -> Flags
-abemi_flags m = case m of
-                  Left l  -> abmsei_flags l
-                  Right r -> abmi_flags r
 
 -- common schedule information
 

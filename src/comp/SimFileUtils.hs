@@ -3,13 +3,13 @@ module SimFileUtils ( analyzeBluesimDependencies
                     ) where
 
 import Id(Id,getIdBaseString)
-import Flags(Flags(..))
+import PhaseConfig
 import SimPackage
 import SimPrimitiveModules(isPrimitiveModule)
 import ASyntax(AVInst(..))
-import ABinUtil(ABinMap)
+import ArtifactHierarchy(ABinMap)
 import VModInfo(VModInfo(..), getVNameString)
-import Version(bscVersionStr)
+import CompilerVersion(formatBscVersion)
 import FileNameUtil
 import ErrorUtil(internalError)
 
@@ -31,11 +31,11 @@ getModTime f =
                 return $ Just (modificationTime s)
         else return Nothing
 
-codeGenOptionDescr :: Flags -> Bool -> String
+codeGenOptionDescr :: (PhaseConfig BluesimGenFlags) -> Bool -> String
 codeGenOptionDescr flags is_top =
     unwords $ [ "Generation options:" ] ++
-              (if (keepFires flags) then ["keep-fires"] else []) ++
-              (if (is_top && (genSysC flags)) then ["sysc-top"] else [])
+              (if ((bluesimGenKeepFires . phaseFlags) flags) then ["keep-fires"] else []) ++
+              (if (is_top && ((bluesimGenGenSysC . phaseFlags) flags)) then ["sysc-top"] else [])
 
 readCodeGenOptionDescr :: FilePath -> IO (Maybe String)
 readCodeGenOptionDescr f =
@@ -51,15 +51,15 @@ readCodeGenOptionDescr f =
                                            return comment)
         else return Nothing
 
-isStale :: Flags -> FilePath -> ABinMap -> Id -> SimPackage -> IO Bool
+isStale :: (PhaseConfig BluesimGenFlags) -> FilePath -> ABinMap -> Id -> SimPackage -> IO Bool
 isStale flags prefix ba_map top_pkg pkg =
-    if (sp_version pkg /= bscVersionStr True)
+    if (sp_version pkg /= formatBscVersion (phaseCompilerVersion flags) True)
     then return True
     else let name = getIdBaseString (sp_name pkg)
          in case (M.lookup name ba_map) of
               Nothing        -> internalError $ "isStale: unknown package " ++ name
-              (Just ba_file) -> do h_file <- genFileName mkHName (cdir flags) "" name
-                                   o_file <- genFileName mkObjName (cdir flags) "" name
+              (Just ba_file) -> do h_file <- genFileName mkHName ((bluesimGenCdir . phaseFlags) flags) "" name
+                                   o_file <- genFileName mkObjName ((bluesimGenCdir . phaseFlags) flags) "" name
                                    ba_time <- getModTime ba_file
                                    h_time <- getModTime h_file
                                    obj_time <- getModTime o_file
@@ -82,7 +82,7 @@ remove_stale feeds pkgs (x:xs) =
          in remove_stale feeds (delete x pkgs) (invalidated ++ xs)
     else remove_stale feeds pkgs xs
 
-analyzeBluesimDependencies :: Flags -> SimSystem -> FilePath -> IO [String]
+analyzeBluesimDependencies :: (PhaseConfig BluesimGenFlags) -> SimSystem -> FilePath -> IO [String]
 analyzeBluesimDependencies flags sim_system prefix =
     do let pkgs = M.elems (ssys_packages sim_system)
            ba_map = ssys_filemap sim_system

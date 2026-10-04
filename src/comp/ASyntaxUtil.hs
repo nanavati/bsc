@@ -1,6 +1,7 @@
 {-# LANGUAGE PatternGuards #-}
 module ASyntaxUtil where
 import ASyntax
+import VModInfo (VName(..), vName)
 
 import ErrorUtil(internalError)
 
@@ -10,10 +11,11 @@ import Prim
 import PPrint
 import IntLit
 import SCC(tsort)
-import Util(separate)
+import Util(separate, ordPair)
+import Pragma (ASchedulePragma, SchedulePragma(..))
 import Data.List(nub, genericIndex, genericDrop)
 import Data.Maybe(mapMaybe, fromMaybe)
-import Id(Id)
+import Id(Id, isBadId, isFromRHSId)
 import Control.Monad(liftM)
 import PreIds(idInout_)
 
@@ -416,36 +418,6 @@ instance AExprs AVInst where
     -- find
     findAExprs f inst = findAExprs f (avi_iargs inst)
 
-instance AExprs ASPackage where
-    mapAExprs f pkg@(ASPackage { aspkg_state_instances = vs,
-                                aspkg_values = defs,
-                                aspkg_inout_values = iodefs,
-                                aspkg_foreign_calls = fs })
-        = pkg { aspkg_state_instances = (mapAExprs f vs),
-                aspkg_values = (mapAExprs f defs),
-                aspkg_inout_values = (mapAExprs f iodefs),
-                aspkg_foreign_calls = (mapAExprs f fs) }
-    -- monadic
-    mapMAExprs f pkg@(ASPackage { aspkg_state_instances = vs,
-                                  aspkg_values = defs,
-                                  aspkg_inout_values = iodefs,
-                                  aspkg_foreign_calls = fs })
-        = do vs' <- mapMAExprs f vs
-             defs' <- mapMAExprs f defs
-             iodefs' <- mapMAExprs f iodefs
-             fs' <- mapMAExprs f fs
-             return (pkg { aspkg_state_instances = vs',
-                           aspkg_values = defs',
-                           aspkg_inout_values = iodefs',
-                           aspkg_foreign_calls = fs' })
-    -- find
-    findAExprs f pkg@(ASPackage { aspkg_state_instances = vs,
-                                aspkg_values = defs,
-                                aspkg_inout_values = iodefs,
-                                aspkg_foreign_calls = fs })
-        = findAExprs f vs ++ findAExprs f defs ++
-          findAExprs f iodefs ++ findAExprs f fs
-
 instance AExprs APackage where
     mapAExprs f pack = pack {
         apkg_interface = mapAExprs f (apkg_interface pack),
@@ -796,3 +768,36 @@ aOrsLabel aid es = if any isTrue es then aTrue else aOrs' (nub (filter (not . is
   where aOrs' []  = aFalse
         aOrs' [e] = e
         aOrs' es  = APrim aid aTBool PrimBOr es
+
+-- Conflict-free declarations are source facts, independent of scheduling.
+extractCFPairsSP :: [ASchedulePragma] -> [(ARuleId,ARuleId)]
+extractCFPairsSP sps =
+    let
+        mkAllPairs (SPUrgency _) = []
+        mkAllPairs (SPExecutionOrder _) = []
+        mkAllPairs (SPPreempt _ _) = []
+        mkAllPairs (SPSchedule _) = []
+        mkAllPairs (SPMutuallyExclusive ids) = []
+        mkAllPairs (SPConflictFree ids) = cfPairs ids
+    in
+        nub (map ordPair (concatMap mkAllPairs sps))
+
+
+cfPairs :: [[Id]] -> [(Id, Id)]
+cfPairs [] = []
+cfPairs (ids:idss) = -- trace_answer (\x -> ("cfPairs: " ++ (ppString x)))$
+    [(x,y) | x <- ids, y <- concat idss] ++ (cfPairs idss)
+
+
+needsCFConditionWires :: APackage -> Bool
+needsCFConditionWires = not . null . extractCFPairsSP . apkg_schedule_pragmas
+
+-- Predicate shared by definition expansion and dead-definition removal.
+isLocalAId :: Id -> Bool
+isLocalAId i = isBadId i || isFromRHSId i
+
+-- Logical primitive classifiers used by scheduling and physical lowering.
+isBypassWire, isBypassWire0 :: AVInst -> Bool
+isBypassWire avi = (vName (avi_vmi avi) == VName "BypassWire") ||
+                   (vName (avi_vmi avi) == VName "CrossingBypassWire")
+isBypassWire0 avi = vName (avi_vmi avi) == VName "BypassWire0"

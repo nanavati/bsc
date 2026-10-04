@@ -1,5 +1,6 @@
 module BoolOpt(optBoolExprQM) where
 
+import Warmup ()
 import Data.List(union, sort, nub, (\\))
 
 import ErrorUtil

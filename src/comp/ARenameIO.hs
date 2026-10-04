@@ -7,8 +7,10 @@ import qualified Data.Map as M
 import Util(mapFst)
 import FStringCompat(FString)
 
-import Flags(Flags)
+import PhaseConfig
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import BackendNamingConventions(createVerilogNameMap,
                                 xLateIdUsingFStringMap)
 import Util(fastNub)
@@ -28,7 +30,7 @@ import Pragma(DefProp)
 -- signal name.  This is accounted for by createVerilogNameMap, so no
 -- special handling is needed here.
 
-aRenameIO :: Flags -> ASPackage -> ASPackage
+aRenameIO :: (PhaseConfig VerilogGenFlags) -> ASPackage -> ASPackage
 aRenameIO flags pkg =
     let mi    = aspkg_name pkg
         fmod  = aspkg_is_wrapped pkg

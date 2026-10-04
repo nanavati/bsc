@@ -15,9 +15,10 @@ import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
 import Id
 import Prim
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
 import VModInfo
-import AConv(isLocalAId)
 --import Util(traces)
 --import Debug.Trace
 

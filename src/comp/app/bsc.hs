@@ -47,7 +47,7 @@ import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName,
                     getFullFilePath, getRelativeFilePath)
 import FileIOUtil(writeFileCatch, readFileMaybe, removeFileCatch,
                   readFilePath)
-import TopUtils
+import DriverTopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
 import IOUtil(getEnvDef)
@@ -71,7 +71,7 @@ import FlagsDecode(
         exitWithHelpHidden)
 import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
-             bsError, bsWarning, bsMessage,
+             bsError, bsWarning, bsMessage, convExceptTToIO,
              exitFail, exitOK, exitFailWith)
 import Position(noPosition, cmdPosition)
 import CVPrint
@@ -105,11 +105,16 @@ import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
 import Params(iParams)
-import ASyntax(APackage(..), ASPackage(..),
+import ASyntax(APackage(..),
                ppeAPackage,
                getAPackageFieldInfos)
 import ASyntaxUtil(getForeignCallNames)
-import ACheck(aMCheck, aSMCheck, aSignalCheck, aSMethCheck)
+import AModule(AModule(..), AModuleInfo(..))
+import ASModule(ASModule(..))
+import AVerilogSyntax(ASPackage(..))
+import AVerilogSyntaxUtil ()
+import ACheck(aMCheck)
+import AVerilogCheck(aSMCheck, aSignalCheck, aSMethCheck)
 import AConv(aConv)
 import IDropRules(iDropRules)
 import ARankMethCalls(aRankMethCalls)
@@ -130,7 +135,12 @@ import ABin(ABin(..), ABinModInfo(..), ABinForeignFuncInfo(..),
            ABinModSchedErrInfo(..))
 import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
                 assertNoSchedErr)
-import GenABin(genABinFile)
+import LegacyBA(LegacyABin(..))
+import LegacyBAWrite(genLegacyBAFile)
+import LegacyOptionsDriver(freezeLegacyOptions)
+import LegacyArtifactReader(readLegacyArtifact)
+import ArtifactHierarchy(ResolvedHierarchy(..))
+import qualified PhaseConfigDriver as PC
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
                         mkImportDeclarations)
 import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
@@ -153,10 +163,15 @@ import ACleanup(aCleanup)
 import ATaskSplice(aTaskSplice)
 import ADumpSchedule (MethodDumpInfo, aDumpSchedule, aDumpScheduleErr,
                       dumpMethodInfo, dumpMethodBVIInfo)
-import ANoInline (aNoInline)
-import AAddSchedAssumps(aAddSchedAssumps,aAddCFConditionWires)
-import ARemoveAssumps(aRemoveAssumps)
-import ADropUndet(aDropUndet)
+import VerilogNoInline(lowerVerilogNoInline)
+import BluesimNoInline(lowerBluesimNoInline)
+import ACFTemplate(getCFConditionWireTemplate)
+import VerilogScheduleChecks(addVerilogCFConditionWires, addVerilogScheduleAssumptions)
+import BluesimScheduleChecks(addBluesimCFConditionWires, addBluesimScheduleAssumptions)
+import VerilogAssumptions(lowerVerilogAssumptions)
+import BluesimAssumptions(lowerBluesimAssumptions)
+import VerilogUndet(lowerVerilogUndet)
+import BluesimUndet(lowerBluesimUndet)
 import SAT(checkSATFlags)
 import InlineWires(aInlineWires)
 import InlineCReg(aInlineCReg)
@@ -199,7 +214,7 @@ hmain args = do
     let (warnings, decoded) = decodeArgs (baseName pprog) args' cdir
     errh <- initErrorHandle
     let doWarnings = when ((not . null) warnings) $ bsWarning errh warnings
-        setFlags = setErrorHandleFlags errh
+        setFlags = setErrorHandleFlags errh . PC.runFlags
     case decoded of
         DHelp flags ->
             do { setFlags flags; doWarnings;
@@ -233,7 +248,8 @@ main' :: ErrorHandle -> Flags -> String -> IO ()
 main' errh flags name =  do
     tStart <- getNow
 
-    flags' <- checkSATFlags errh flags
+    sat <- checkSATFlags errh (satBackend flags)
+    let flags' = flags { satBackend = sat }
 
     -- check system requirements
     doSystemCheck errh
@@ -347,7 +363,7 @@ compilePackage
     start flags DFimports
     -- Read imported signatures
     (mimp@(CPackage _ _ imps impsigs _ _ _), binmap, hashmap)
-        <- readImports errh flags binmap0 hashmap0 min
+        <- readImports errh (PC.reduceConfig flags) binmap0 hashmap0 min
     when (hasDump flags DFimports) $
       let impsigs' = [ppReadable s |  (CImpSign _ _ s) <- impsigs]
       in mapM_ (putStr) impsigs'
@@ -377,12 +393,12 @@ compilePackage
 
     -- Turn `noinline' into module definitions
     start flags DFgenfuncwrap
-    (mfwrp, symt0, funcs) <- genFuncWrap errh flags generating mop symt00
+    (mfwrp, symt0, funcs) <- genFuncWrap errh (PC.typeSolverFlags flags) generating mop symt00
     t <- dump errh flags t DFgenfuncwrap dumpnames mfwrp
 
     -- Generate wrapper for Verilog interface.
     start flags DFgenwrap
-    (mwrp, gens) <- genWrap errh flags (genName flags) generating mfwrp symt0
+    (mwrp, gens) <- genWrap errh (PC.phaseFlags (PC.reduceConfig flags)) (genName flags) generating mfwrp symt0
     t <- dump errh flags t DFgenwrap dumpnames mwrp
 
     -- Rebuild the symbol table because GenWrap added new types
@@ -396,7 +412,7 @@ compilePackage
 
     -- Turn deriving into instance declarations
     start flags DFderiving
-    mder <- derive errh flags symt1 mfawrp
+    mder <- derive errh (PC.typeSolverFlags flags) symt1 mfawrp
     t <- dump errh flags t DFderiving dumpnames mder
 
     -- Rebuild the symbol table because Deriving added new instances
@@ -410,7 +426,7 @@ compilePackage
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh (PC.typeSolverFlags flags) symt11 mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -426,7 +442,7 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
+    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh (PC.typecheckConfig flags) symt minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
@@ -436,7 +452,7 @@ compilePackage
     -- Generate wrapper info for foreign function imports
     -- (this always happens, even when not generating for modules)
     start flags DFgenforeign
-    foreign_func_info <- genForeign errh flags prefix mod
+    foreign_func_info <- genForeign errh (PC.internalConfig flags) (writeForeignArtifact errh) prefix mod
     t <- dump errh flags t DFgenforeign dumpnames foreign_func_info
 
     -- Generate VPI wrappers for foreign function imports
@@ -446,13 +462,13 @@ compilePackage
     vpi_wrappers <- if (backend flags /= Just Verilog)
                     then return []
                     else if (useDPI flags)
-                         then genDPIWrappers errh flags prefix blurb ffuncs
-                         else genVPIWrappers errh flags prefix blurb ffuncs
+                         then genDPIWrappers errh (PC.internalForeignWrapperConfig (PC.internalConfig flags)) prefix blurb ffuncs
+                         else genVPIWrappers errh (PC.internalForeignWrapperConfig (PC.internalConfig flags)) prefix blurb ffuncs
     t <- dump errh flags t DFgenVPI dumpnames vpi_wrappers
 
     -- Simplify a little
     start flags DFsimplified
-    let mod' = simplify flags mod
+    let mod' = simplify (PC.phaseFlags (PC.internalConfig flags)) mod
     t <- dump errh flags t DFsimplified dumpnames mod'
     stats flags DFsimplified mod'
 
@@ -461,7 +477,7 @@ compilePackage
     --------------------------------------------
     start flags DFinternal
     let combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
-    imod <- iConvPackage errh flags symt combinedATFCache mod'
+    imod <- iConvPackage errh (PC.typeSolverFlags flags) symt combinedATFCache mod'
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
     iPCheck flags symt imod "internal"
@@ -706,7 +722,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
+    imod0 <- iExpand errh (PC.elabConfig flags) symt alldefs atf_cache fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
@@ -739,28 +755,28 @@ genModule
     stats flags DFinline imod_inline
 
     start flags DFtransform
-    let imod_trans = iTransform errh flags "__i" imod_inline
+    let imod_trans = iTransform errh (PC.elabConfig flags) "__i" imod_inline
     iMCheck flags symt imod_trans "transform"
     t <- dump errh flags t DFtransform dumpnames imod_trans
     stats flags DFtransform imod_trans
 
     -- Split rules containing if statements
     start flags DFsplitIf
-    let imod_splitif = iSplitIf flags imod_trans
+    let imod_splitif = iSplitIf (PC.elabConfig flags) imod_trans
     iMCheck flags symt imod_splitif "splitIf"
     t <- dump errh flags t DFsplitIf dumpnames imod_splitif
     stats flags DFsplitIf imod_splitif
 
     -- Lift where possible
     start flags DFlift
-    let imod_lift = iLift errh flags imod_splitif
+    let imod_lift = iLift errh (PC.elabConfig flags) imod_splitif
     iMCheck flags symt imod_lift "lift"
     t <- dump errh flags t DFlift dumpnames imod_lift
     stats flags DFlift imod_lift
 
     -- Transform to simpler form (take 2)
     start flags DFtransform
-    let imod_trans2 = iTransform errh flags "__j" imod_lift
+    let imod_trans2 = iTransform errh (PC.elabConfig flags) "__j" imod_lift
     iMCheck flags symt imod_trans2 "transform"
     t <- dump errh flags t DFtransform dumpnames imod_trans2
     stats flags DFtransform imod_trans2
@@ -772,14 +788,14 @@ genModule
     t <- dump errh flags t DFiparams dumpnames imod_param
 
     start flags DFidroprules
-    imod_drop <- iDropRules errh flags imod_param
+    imod_drop <- iDropRules errh (PC.elabConfig flags) imod_param
     stats flags DFidroprules imod_drop
     t <- dump errh flags t DFidroprules dumpnames imod_drop
 
     -- Generate ATS
     -- ATS stands for "Abstract Transition System" from James C. Hoe's Ph.D. thesis
     start flags DFATS
-    amod <- aConv errh pps flags imod_drop
+    amod <- aConv errh pps (PC.elabConfig flags) imod_drop
     aCheck flags amod "ATS"
     t <- dump errh flags t DFATS dumpnames amod
     amod == amod `seq` return ()
@@ -815,95 +831,42 @@ genModule
 
 -- clean up ATS (merge any ME calls to the same action in the same rule)
     start flags DFATSclean
-    amod_clean <- aCleanup errh flags amod_splice
+    amod_clean <- aCleanup errh (satBackend flags) amod_splice
     aCheck flags amod_clean "ATSclean"
     t <- dump errh flags t DFATSclean dumpnames amod_clean
 
     start flags DFdumpLambdaCalculus
-    lc_pkg <- convAPackageToLambdaCalc errh flags amod_clean
+    lc_pkg <- convAPackageToLambdaCalc errh (PC.elabConfig flags) amod_clean
     t <- dump errh flags t DFdumpLambdaCalculus dumpnames lc_pkg
 
     start flags DFdumpSAL
-    sal_ctx <- convAPackageToSAL errh flags amod_clean
+    sal_ctx <- convAPackageToSAL errh (PC.elabConfig flags) amod_clean
     t <- dump errh flags t DFdumpSAL dumpnames sal_ctx
 
-    -- Build path graph for everything except rules
-    start flags DFpathsPreSched
-    (pathGraphInfo, urgency_pairs) <- aPathsPreSched errh flags amod_clean
-    t <- dump errh flags t DFpathsPreSched dumpnames pathGraphInfo
-
-    -- Schedule
-    start flags DFschedule
-    (schedule_info, amod_sched)
-        <- do res <- aSchedule errh flags prefix urgency_pairs pps amod_clean
-              case res of
-                Right r -> return r
-                Left schedule_info -> do
-                    t <- dump errh flags t DFschedule dumpnames
-                             (asei_schedule schedule_info)
-                    -- dump the schedule, if requested
-                    t <- if (showSchedule flags)
-                         then do start flags DFdumpschedule
-                                 aDumpScheduleErr errh flags prefix
-                                                  amod_clean schedule_info
-                                 dump errh flags t DFdumpschedule dumpnames ()
-                         else return t
-                    -- generate a .ba file, if requested
-                    t <- if (genABin flags)
-                         then writeABinSchedErr errh pps flags dumpnames t
-                                  prefix modstr srcName (orig_cqt wi)
-                                  schedule_info amod_clean
-                         else return t
-                    exitFail errh
-    t <- dump errh flags t DFschedule dumpnames (asi_schedule schedule_info)
-    stats flags DFschedule amod_sched
-    start flags DFresources
-    t <- dump errh flags t DFresources dumpnames
-         (asi_resource_alloc_table schedule_info)
-    start flags DFvschedinfo
-    t <- dump errh flags t DFvschedinfo dumpnames (asi_v_sched_info schedule_info)
-
-    -- Add CAN_FIRE and WILL_FIRE defs based on the schedule
-    start flags DFscheduledefs
-    amod_scheduled <- aAddScheduleDefs flags
-                                       pps
-                                       amod_sched
-                                       schedule_info
-    t <- dump errh flags t DFscheduledefs dumpnames amod_scheduled
-
-    start flags DFdumpschedule
-    -- only difference from amod_scheduled to amod_dump is some rules removed
-    (amod_dump, schedule_info_updated, methodConflict)
-        <- aDumpSchedule errh flags pps prefix amod_scheduled schedule_info
-    let schedule_final = asi_schedule schedule_info_updated
-    let ms = (amod_dump, schedule_final)
-    t <- dump errh flags t DFdumpschedule dumpnames ms
-
-    -- prove any proof obligations accumulated at this point
-    start flags DFcheckproofs
-    -- the obligations are removed from the module
-    (amod_check, ok) <- aCheckProofs errh flags amod_dump
-    t <- dump errh flags t DFcheckproofs dumpnames ok
-
-    -- Add scheduler edges to the path graph
-    -- (we assume that pathGraphInfo is consistent with amod_checked, because
-    -- at most only a few rules have been removed since amod_clean)
-    start flags DFpathsPostSched
-    vPathInfo <- aPathsPostSched flags pps amod_check pathGraphInfo schedule_final
-    t <- dump errh flags t DFpathsPostSched dumpnames vPathInfo
+    let moduleInfo = AModuleInfo (mod_nm wi) (orig_cqt wi) pps fwrapper prefix srcName
+    (t, scheduled) <- scheduleModule errh flags dumpnames t (AModule moduleInfo amod_clean)
+    let amod_check = smod_body scheduled
+        schedule_info_updated = smod_schedule scheduled
+        schedule_final = asi_schedule schedule_info_updated
+        methodConflict = smod_method_dump scheduled
+        vPathInfo = smod_path_info scheduled
 
     -- lift all no-inline func calls and assign instance names to them
     start flags DFnoinline
-    let amod_noinline = aNoInline flags amod_check
+    let amod_noinline = if backend flags == Just Verilog
+                        then lowerVerilogNoInline amod_check
+                        else lowerBluesimNoInline amod_check
     t <- dump errh flags t DFnoinline dumpnames amod_noinline
 
     -- add scheduling assumptions (ME, CF, etc.) to APackage (in two steps)
     start flags DFaddSchedAssumps
-    (amod_wires, sched_info')
-        <- aAddCFConditionWires errh symt alldefs flags
-                                amod_noinline schedule_info_updated
-    let (amod_assumps, sched_info'') =
-            aAddSchedAssumps amod_wires schedule_final sched_info'
+    cfTemplate <- getCFConditionWireTemplate errh (PC.elabConfig flags) symt alldefs amod_noinline
+    let addWires = if backend flags == Just Verilog
+                   then addVerilogCFConditionWires else addBluesimCFConditionWires
+        addAssumptions = if backend flags == Just Verilog
+                         then addVerilogScheduleAssumptions else addBluesimScheduleAssumptions
+        (amod_wires, sched_info') = addWires cfTemplate amod_noinline schedule_info_updated
+        (amod_assumps, sched_info'') = addAssumptions amod_wires schedule_final sched_info'
     aCheck flags amod_assumps "addSchedAssumps"
     t <- dump errh flags t DFaddSchedAssumps dumpnames
              (amod_assumps,
@@ -912,7 +875,9 @@ genModule
 
     -- move assumption actions into rule bodies
     start flags DFremoveAssumps
-    let amod_no_assumps = aRemoveAssumps amod_assumps
+    let amod_no_assumps = if backend flags == Just Verilog
+                          then lowerVerilogAssumptions amod_assumps
+                          else lowerBluesimAssumptions amod_assumps
     aCheck flags amod_no_assumps "aRemoveAssumps"
     t <- dump errh flags t DFremoveAssumps dumpnames amod_no_assumps
 
@@ -920,7 +885,9 @@ genModule
     -- just before the split because other paths add new expressions
     -- and because we might choose more undets in pathsPostSched
     start flags DFdropundet
-    let amod_no_undet = aDropUndet errh flags amod_no_assumps
+    let amod_no_undet = if backend flags == Just Verilog
+                       then lowerVerilogUndet errh (PC.phaseFlags (PC.verilogGenConfig flags)) amod_no_assumps
+                       else lowerBluesimUndet errh (PC.phaseFlags (PC.bluesimGenConfig flags)) amod_no_assumps
     t <- dump errh flags t DFdropundet dumpnames amod_no_undet
 
     -- the amod doesn't change beyond this point
@@ -935,7 +902,7 @@ genModule
         methodConflictBlurb
             | methodConf flags =
                 ["Method conflict info:"]
-                ++ lines (pretty 78 78 (vcat (dumpMethodInfo flags methodConflict)) )
+                ++ lines (pretty 78 78 (vcat (dumpMethodInfo (PC.schedConfig flags) methodConflict)) )
             | otherwise = []
 
     let methodConflictBVI :: [String] -- string printed in top of Verilog file
@@ -978,7 +945,7 @@ genModule
     def <- (deffun wi)
                  fwrapper
                  wireinfo
-                 (asi_v_sched_info schedule_info)
+                 (smod_wrapper_schedule scheduled)
                  vPathInfo
                  veriPortProps
                  symt
@@ -989,6 +956,94 @@ genModule
     t <- dump errh flags t DFwrappergen dumpnames def
     return (def)
 
+
+
+-- Schedule the elaborated input without applying either backend's lowering.
+-- The body is the original pass sequence; the result keeps schedule and
+-- interface facts together for the next compiler phase.
+scheduleModule :: ErrorHandle -> Flags -> DumpNames -> TimeInfo -> AModule ->
+                  IO (TimeInfo, ASModule)
+scheduleModule errh flags dumpnames t amod = do
+    let info = amod_info amod
+        pps = ami_pragmas info
+        prefix = ami_source_prefix info
+        srcName = ami_source_package info
+        modstr = getIdString (unQualId (ami_name info))
+        amod_clean = amod_body amod
+    -- Build path graph for everything except rules
+    start flags DFpathsPreSched
+    (pathGraphInfo, urgency_pairs) <- aPathsPreSched errh (PC.schedConfig flags) amod_clean
+    t <- dump errh flags t DFpathsPreSched dumpnames pathGraphInfo
+
+    -- Schedule
+    start flags DFschedule
+    (schedule_info, amod_sched)
+        <- do res <- aSchedule errh (PC.schedConfig flags) prefix urgency_pairs pps amod_clean
+              case res of
+                Right r -> return r
+                Left schedule_info -> do
+                    t <- dump errh flags t DFschedule dumpnames
+                             (asei_schedule schedule_info)
+                    -- dump the schedule, if requested
+                    t <- if (showSchedule flags)
+                         then do start flags DFdumpschedule
+                                 aDumpScheduleErr errh (PC.schedConfig flags) prefix
+                                                  amod_clean schedule_info
+                                 dump errh flags t DFdumpschedule dumpnames ()
+                         else return t
+                    -- generate a .ba file, if requested
+                    t <- if (genABin flags)
+                         then writeABinSchedErr errh pps flags dumpnames t
+                                  prefix modstr srcName (ami_original_type info)
+                                  schedule_info amod_clean
+                         else return t
+                    exitFail errh
+    t <- dump errh flags t DFschedule dumpnames (asi_schedule schedule_info)
+    stats flags DFschedule amod_sched
+    start flags DFresources
+    t <- dump errh flags t DFresources dumpnames
+         (asi_resource_alloc_table schedule_info)
+    start flags DFvschedinfo
+    t <- dump errh flags t DFvschedinfo dumpnames (asi_v_sched_info schedule_info)
+
+    -- Add CAN_FIRE and WILL_FIRE defs based on the schedule
+    start flags DFscheduledefs
+    amod_scheduled <- aAddScheduleDefs (PC.schedConfig flags)
+                                       pps
+                                       amod_sched
+                                       schedule_info
+    t <- dump errh flags t DFscheduledefs dumpnames amod_scheduled
+
+    start flags DFdumpschedule
+    -- only difference from amod_scheduled to amod_dump is some rules removed
+    (amod_dump, schedule_info_updated, methodConflict)
+        <- aDumpSchedule errh (PC.schedConfig flags) pps prefix amod_scheduled schedule_info
+    let schedule_final = asi_schedule schedule_info_updated
+    let ms = (amod_dump, schedule_final)
+    t <- dump errh flags t DFdumpschedule dumpnames ms
+
+    -- prove any proof obligations accumulated at this point
+    start flags DFcheckproofs
+    -- the obligations are removed from the module
+    (amod_check, ok) <- aCheckProofs errh (PC.schedConfig flags) amod_dump
+    t <- dump errh flags t DFcheckproofs dumpnames ok
+
+    -- Add scheduler edges to the path graph
+    -- (we assume that pathGraphInfo is consistent with amod_checked, because
+    -- at most only a few rules have been removed since amod_clean)
+    start flags DFpathsPostSched
+    vPathInfo <- aPathsPostSched (PC.schedConfig flags) pps amod_check pathGraphInfo schedule_final
+    t <- dump errh flags t DFpathsPostSched dumpnames vPathInfo
+
+
+    return (t, ASModule {
+        smod_info = info,
+        smod_body = amod_check,
+        smod_schedule = schedule_info_updated,
+        smod_wrapper_schedule = asi_v_sched_info schedule_info,
+        smod_method_dump = methodConflict,
+        smod_path_info = vPathInfo
+    })
 
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
@@ -1024,13 +1079,12 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_pps         = pps,
                           abmi_oqt         = oqt,
                           abmi_method_dump = methodConflict,
-                          abmi_pathinfo = vPathInfo,
-                          abmi_flags       = flags,
-                          abmi_vprogram    = if (genABinVerilog flags)
-                                             then vprog else Nothing
+                          abmi_pathinfo = vPathInfo
                      }
            abin = ABinMod modinfo (bscVersionStr True)
-       genABinFile errh afilename abin
+       genLegacyBAFile errh afilename
+           (LegacyABin abin (Just (freezeLegacyOptions flags))
+               (if genABinVerilog flags then vprog else Nothing))
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
        dump errh flags t DFwriteABin dumpnames afilename
 
@@ -1053,11 +1107,11 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
                           abmsei_apkg          = amod,
                           abmsei_aschederrinfo = sched_info,
                           abmsei_pps           = pps,
-                          abmsei_oqt           = oqt,
-                          abmsei_flags         = flags
+                          abmsei_oqt           = oqt
                      }
            abin = ABinModSchedErr modinfo (bscVersionStr True)
-       genABinFile errh afilename abin
+       genLegacyBAFile errh afilename
+           (LegacyABin abin (Just (freezeLegacyOptions flags)) Nothing)
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
        dump errh flags t DFwriteABin dumpnames afilename
 
@@ -1093,7 +1147,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
            readABin ffname =
                let err = (noPosition,
                           EMissingABinForeignFuncFile ffname moduleName)
-               in  readAndCheckABinPathCatch errh
+               in  readAndCheckABinPathCatch readLegacyArtifact errh
                        (verbose flags) (ifcPath flags) (Just Verilog)
                        ffname err
        abis <- mapM readABin foreign_func_names
@@ -1102,7 +1156,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Generate muxes etc.
        start flags DFastate
-       asmod <- aState errh flags pprops scheduleInfo atsPackage
+       asmod <- aState errh (PC.verilogGenConfig flags) pprops scheduleInfo atsPackage
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
        t <- dump errh flags t DFastate dumpnames asmod
@@ -1111,7 +1165,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Get rid of wires (and warn about BypassWire where necessary)
        start flags DFrwire
        let (asmodNoWires, wireWarnings, wireErrors)
-               | removeRWire flags = aInlineWires flags asmod
+               | removeRWire flags = aInlineWires (PC.verilogGenConfig flags) asmod
                | otherwise = (asmod, [], [])
        when (not (null wireWarnings)) $ bsWarning errh wireWarnings
        when (not (null wireErrors))   $ bsError errh wireErrors
@@ -1131,7 +1185,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Rename submodule ports from the method-notation to the actual
        -- Verilog port names
        start flags DFrenameio
-       let armod = aRenameIO flags asmodNoCReg
+       let armod = aRenameIO (PC.verilogGenConfig flags) asmodNoCReg
        asCheck flags armod "renameio"
        t <- dump errh flags t DFrenameio dumpnames armod
        stats flags DFrenameio armod
@@ -1145,14 +1199,14 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Improve
        start flags DFaopt
-       aomod <- aOpt errh flags adropmod
+       aomod <- aOpt errh (PC.verilogGenConfig flags) adropmod
        asCheck flags aomod "aopt"
        t <- dump errh flags t DFaopt dumpnames aomod
        stats flags DFaopt aomod
 
        -- Expand some primitives
        start flags DFsynthesize
-       let asynmod = (aSynthesize flags aomod)
+       let asynmod = (aSynthesize (PC.verilogGenConfig flags) aomod)
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
@@ -1161,7 +1215,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFveriquirks
-       let aqmod = aVeriQuirks flags asynmod
+       let aqmod = aVeriQuirks (PC.verilogGenConfig flags) asynmod
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1171,7 +1225,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFfinalcleanup
-       let aumod =  finalCleanup flags aqmod
+       let aumod =  finalCleanup (PC.verilogGenConfig flags) aqmod
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1180,13 +1234,13 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        stats flags DFfinalcleanup aumod
 
        start flags DFIOproperties
-       let (ioprops, ips) = getIOProps flags aumod
+       let (ioprops, ips) = getIOProps (PC.verilogGenConfig flags) aumod
        t <- dump errh flags t DFIOproperties dumpnames ioprops
 
        -- Generate Verilog
        start flags DFverilog
        -- This is monadic because it can report an error
-       vprog0 <- aVerilog errh flags pprops aumod ff_map
+       vprog0 <- aVerilog errh (PC.verilogGenConfig flags) pprops aumod ff_map
        t <- dump errh flags t DFverilog dumpnames vprog0
 
        -- Remove dollar signs from Verilog identifiers
@@ -1291,31 +1345,32 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 
        -- create SimSystem which contains SimPackages and SimSchedules
        start flags DFsimExpand
-       sim_system <- simExpand errh flags toplevel abis
+       hierarchy <- resolveBluesimHierarchy errh flags toplevel abis
+       sim_system <- simExpand errh (PC.bluesimGenConfig flags) hierarchy
        time <- dump errh flags time0 DFsimExpand dumpnames sim_system
 
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
        start flags DFsimDepend
-       reused <- analyzeBluesimDependencies flags sim_system prefix
+       reused <- analyzeBluesimDependencies (PC.bluesimGenConfig flags) sim_system prefix
        time <- dump errh flags time DFsimDepend dumpnames reused
 
        -- optimize the SimPackages and SimSchedules
        start flags DFsimPackageOpt
-       sim_system_opt <- simPackageOpt errh flags sim_system
+       sim_system_opt <- simPackageOpt errh (PC.bluesimGenConfig flags) sim_system
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
 
        -- convert SimPackages and SimSchedules to SimCCBlocks and SimCCScheds
        start flags DFsimMakeCBlocks
        let (simblocks, simCCscheds, clk_groups, gate_info, top_id) =
-                simMakeCBlocks flags sim_system_opt
+                simMakeCBlocks (PC.bluesimGenConfig flags) sim_system_opt
        let simBlockInfo = (simblocks, simCCscheds, clk_groups, gate_info)
        time <- dump errh flags time DFsimMakeCBlocks dumpnames simBlockInfo
 
        -- optimize the SimCCBlocks and SimCCScheds
        start flags DFsimCOpt
        let (simblocks_opt, simCCscheds_opt, clk_groups_opt, gate_info_opt) =
-               simCOpt flags
+               simCOpt (PC.bluesimGenConfig flags)
                        (ssys_instmap sim_system_opt)
                        (simblocks, simCCscheds, clk_groups, gate_info)
        let simBlockInfo = (simblocks_opt, simCCscheds_opt, clk_groups_opt, gate_info_opt)
@@ -1344,7 +1399,7 @@ genModuleC errh flags dumpnames time0 toplevel abis =
                                      (simblocks_opt ++ primBlocks)
            creation_time = time
 
-       block_names <- simBlocksToC flags
+       block_names <- simBlocksToC (PC.bluesimGenConfig flags)
                                    creation_time
                                    top_id
                                    (ssys_default_clk sim_system_opt)
@@ -1375,9 +1430,9 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        start flags DFgenSystemC
        when (genSysC flags) $
             do bsMessage errh [(cmdPosition, MRestrictions "creating SystemC models" "the -systemc option")]
-               checkSystemCIfc errh flags sim_system_opt
+               checkSystemCIfc errh (PC.bluesimGenConfig flags) sim_system_opt
        sysc_files <- if (genSysC flags)
-                     then wrapSystemC flags sim_system_opt
+                     then wrapSystemC (PC.bluesimGenConfig flags) sim_system_opt
                      else return []
        time <- dump errh flags time DFgenSystemC dumpnames sysc_files
 
@@ -1420,7 +1475,7 @@ simLink errh flags toplevel afilenames cfilenames = do
 
     -- read in the abin files (check hash and that they are C files)
     start flags DFreadelab
-    let read_abin_fn = readAndCheckABin errh (Just Bluesim)
+    let read_abin_fn = readAndCheckABin readLegacyArtifact errh (Just Bluesim)
     abis <- mapM read_abin_fn afilenames_unique
     t <- dump errh flags t DFreadelab dumpnames (map fst abis)
 
@@ -1875,13 +1930,13 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
 
     -- read in the abin files (check hash and that they are Verilog files)
     start flags DFreadelab
-    let read_abin_fn = readAndCheckABin errh (Just Verilog)
+    let read_abin_fn = readAndCheckABin readLegacyArtifact errh (Just Verilog)
     user_abis <- mapM read_abin_fn afilenames_unique
 
     -- see if .ba files exist for the top-level of this design
     let prim_names = map sb_name primBlocks
     mhier0 <- runExceptT $
-              getABIHierarchy errh
+              getABIHierarchy readLegacyArtifact errh
                   (verbose flags) (ifcPath flags) (Just Verilog)
                   prim_names topmod_name user_abis
 
@@ -2095,7 +2150,7 @@ vGenFFuncs errh flags t prefix cfilenames_unique ffuncs = do
         else do
           -- generate the vpi_startup_array file
           blurb <- mkGenFileHeader flags
-          filenames <- genVPIRegistrationArray errh flags prefix blurb ffuncs
+          filenames <- genVPIRegistrationArray errh (PC.foreignGenWrapperConfig (PC.foreignGenConfig flags)) prefix blurb ffuncs
           t <- timestampStr flags "generate VPI registration array" t
           return (t, filenames)
 
@@ -2167,7 +2222,7 @@ vGenMods t0 flags abmis = do
                   | methodConf flags =
                       ["Method conflict info:"]
                       ++ lines (pretty 78 78
-                                   (vcat (dumpMethodInfo flags methodConflict)))
+                                   (vcat (dumpMethodInfo (PC.schedConfig flags) methodConflict)))
                   | otherwise = []
                 pathinfo = abmi_pathinfo abmi
                 aschedinfo = abmi_aschedinfo abmi
@@ -2199,22 +2254,22 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx, _, _) <- cCtxReduceIO errh (PC.typeSolverFlags flags) symt cpkg0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh flags symt cpkg_ctx
+    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh (PC.typecheckConfig flags) symt cpkg_ctx
     t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
 
     start flags DFwrapper_simplified
-    let cpkg_simp = simplify flags cpkg_chk
+    let cpkg_simp = simplify (PC.phaseFlags (PC.internalConfig flags)) cpkg_chk
         def' = case cpkg_simp of
                  (CPackage _ _ _ _ _ [d] _) -> d
                  _ -> internalError "compileCDefToIDef: unexpected number of defs"
     t <- dump errh flags t DFwrapper_simplified dumpnames cpkg_simp
 
     start flags DFwrapper_internal
-    let idef = iConvDef errh flags symt ipkg def'
+    let idef = iConvDef errh (PC.typeSolverFlags flags) symt ipkg def'
     t <- dump errh flags t DFwrapper_internal dumpnames idef
 
     return (idef, not tcErrors)
@@ -2223,7 +2278,7 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
 
 iPCheck :: Flags -> SymTab -> IPackage a -> String -> IO ()
 iPCheck flags symt ipkg desc = -- deepseq ipkg $
-        if doICheck flags && not (tCheckIPackage flags symt ipkg)
+        if doICheck flags && not (tCheckIPackage (PC.typeSolverFlags flags) symt ipkg)
             then internalError (
                 "internal typecheck failed (iPCheck after " ++
                 desc ++ ")")
@@ -2234,7 +2289,7 @@ iPCheck flags symt ipkg desc = -- deepseq ipkg $
 
 iMCheck :: Flags -> SymTab -> IModule a -> String -> IO ()
 iMCheck flags symt imod desc =
-    if doICheck flags && not (tCheckIModule flags symt imod)
+    if doICheck flags && not (tCheckIModule (PC.typeSolverFlags flags) symt imod)
         then internalError (
                 "internal typecheck failed (iMCheck after " ++
                 desc ++ ")")
@@ -2292,3 +2347,20 @@ buildForeignFunctionMap errh abis = build abis M.empty
           do let ff = abffi_foreign_func (ab_ffuncinfo abi)
                  ff_map' = M.insert (getIdString (ff_name ff)) ff ff_map
              build abis ff_map'
+
+
+-- Wire-format adapters live in the executable. The phase libraries consume
+-- only their in-memory results and never deserialize driver configuration.
+writeForeignArtifact :: ErrorHandle -> FilePath -> Id -> ForeignFunction -> IO ()
+writeForeignArtifact errh filename source function =
+    genLegacyBAFile errh filename
+        (LegacyABin (ABinForeignFunc (ABinForeignFuncInfo source function)
+                       (bscVersionStr True)) Nothing Nothing)
+
+resolveBluesimHierarchy :: ErrorHandle -> Flags -> String -> [(String, ABin)] -> IO ResolvedHierarchy
+resolveBluesimHierarchy errh flags top files = do
+    (topId, modules, instances, foreignFunctions, artifactFiles, _, errorsOrModules) <-
+        convExceptTToIO errh $ getABIHierarchy readLegacyArtifact errh
+            (verbose flags) (ifcPath flags) (Just Bluesim) (map sb_name primBlocks) top files
+    moduleInfos <- convExceptTToIO errh (assertNoSchedErr errorsOrModules)
+    return (ResolvedHierarchy topId modules instances foreignFunctions artifactFiles moduleInfos)

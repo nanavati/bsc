@@ -1,4 +1,5 @@
 module Simplify(simplify) where
+import Warmup ()
 import Data.List(partition)
 import Util(mapSnd)
 import ListMap(lookupWithDefault)
@@ -16,7 +17,8 @@ import CType(getCQArrows)
 import SCC
 import Util(tracep)
 import IOUtil(progArgs)
-import Flags(Flags, simplifyCSyntax)
+import PhaseConfig
+import FlagTypes
 --import Debug.Trace
 
 --import Util(traces)
@@ -32,9 +34,9 @@ traced name orig result =
 
 -- XXX not updated for let/letrec split
 
-simplify :: Flags -> CPackage -> CPackage
+simplify :: InternalFlags -> CPackage -> CPackage
 simplify flags pkg@(CPackage mi exps imps impsigs fixs ds includes)
-    | simplifyCSyntax flags =
+    | internalSimplifyCSyntax flags =
         let (env, _) = selectSimple [] [ d | CValueSign d <- ds ]
         in  CPackage mi exps imps impsigs fixs (simp env ds) includes
     | otherwise = pkg

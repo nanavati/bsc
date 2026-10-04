@@ -1,6 +1,7 @@
 module Main_bsc2bsv(main) where
 
 import Warmup ()
+import Exceptions(withInternalErrorHandler)
 import System.Environment
 import qualified Control.Exception as CE
 
@@ -13,7 +14,7 @@ import Lex
 import Error(internalError, showErrorList)
 
 main :: IO ()
-main =
+main = withInternalErrorHandler $
     do args <- getArgs
        case args of
          [] -> getContents >>= bsc2bsv "-"

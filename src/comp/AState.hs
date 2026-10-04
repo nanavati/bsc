@@ -18,7 +18,7 @@ import IntLit
 
 import Error(internalError, ErrMsg(..), ErrorHandle)
 import ErrorMonad(ErrorMonad(..), convErrorMonadToIO)
-import Flags(Flags, useDPI)
+import PhaseConfig
 import Position(noPosition)
 
 import PreStrings( fsUnderUnder,
@@ -30,12 +30,15 @@ import PFPrint
 
 import VModInfo
 import ASyntax
+import StaticSchedule
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
-import ASchedule(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive,
-                 MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..))
+import AScheduleInfo(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive)
+import AUses(MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..))
 import AUses(useDropCond)
 import AVerilogUtil(vNameToTask)
-import RSchedule(RAT, ratToNestedLists)
+import RScheduleTypes(RAT, ratToNestedLists)
 import Wires(WireProps(..))
 import Data.Maybe (listToMaybe)
 
@@ -152,13 +155,13 @@ type MethPortBlob = [(AExpr, Maybe [ARuleId])]
 --       to a AForeignCall type (with the rule's WILL_FIRE in the condition)
 --
 
-aState :: ErrorHandle -> Flags -> [PProp] -> AScheduleInfo -> APackage ->
+aState :: ErrorHandle -> (PhaseConfig VerilogGenFlags) -> [PProp] -> AScheduleInfo -> APackage ->
           IO (ASPackage)
 aState errh flags pps sr m = convErrorMonadToIO errh (aState' flags pps sr m)
 
 -- ---------------
 -- XXX this function is WAY TOO BIG
-aState' :: Flags -> [PProp] -> AScheduleInfo -> APackage -> ErrorMonad (ASPackage)
+aState' :: (PhaseConfig VerilogGenFlags) -> [PProp] -> AScheduleInfo -> APackage -> ErrorMonad (ASPackage)
 aState' flags pps schedule_info apkg = do
     --traceM( "In AState: " ++ ppReadable pps ) ;
     let
@@ -358,7 +361,7 @@ aState' flags pps schedule_info apkg = do
         -- when "isC", translate from the call name to the
         -- system task wrapper name
         cvtName False f = f
-        cvtName True  f = vNameToTask (useDPI flags) f
+        cvtName True  f = vNameToTask ((verilogGenUseDPI . phaseFlags) flags) f
 
         addWF rid (c:es) =
             let wf = aBoolVar (mkIdWillFire rid)

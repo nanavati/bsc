@@ -1,5 +1,6 @@
 module IPrims(doPrimOp) where
 
+import Warmup ()
 import Error(internalError, ErrMsg)
 import PPrint(ppReadable)
 import Position

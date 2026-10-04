@@ -8,6 +8,7 @@
 module Main (main) where
 
 import Warmup ()
+import Exceptions(withInternalErrorHandler)
 import BlueTcl () -- force the blueshell_Init_Foreign export to be linked in
 import Foreign.C.String (CString, newCString)
 import Foreign.C.Types (CInt (..))
@@ -21,7 +22,7 @@ foreign import ccall "run_bluetcl"
   c_run_bluetcl :: CInt -> Ptr CString -> IO ()
 
 main :: IO ()
-main = do
+main = withInternalErrorHandler $ do
   -- The Tcl side reads $BLUESPECDIR, so call getBluespecDir for its setenv side
   -- effect.
   void getBluespecDir

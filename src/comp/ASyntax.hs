@@ -29,10 +29,6 @@ module ASyntax(
         mkIfcInoutN,
         AExpr(..),
         ADef(..),
-        ASPackage(..),
-        ASPSignalInfo(..),
-        ASPMethodInfo(..),
-        ASPCommentInfo(..),
         AStateOut,
         AVInst(..),
         getSpecialOutputs,
@@ -40,8 +36,6 @@ module ASyntax(
         getOutputClockPorts,
         getOutputResetPorts,
         getIfcInoutPorts,
-        ASchedule(..),
-        AScheduler(..),
         AAction(..),
         ANoInlineFun(..),
         ARuleDescr,
@@ -84,9 +78,6 @@ module ASyntax(
         isFalse,
         aNoReset,
         cmpASInt,
-        getSchedulerIds,
-        dropScheduleIds,
-        dropSchedulerIds,
         aNat,
         AForeignCall(..),
         AForeignBlock,
@@ -117,7 +108,7 @@ module ASyntax(
 import Prelude hiding ((<>))
 #endif
 
-import Data.List(nub, intersect, (\\), partition)
+import Data.List(nub, partition)
 -- import IntegerUtil(integerFormatPref)
 import Eval
 import PPrint
@@ -138,7 +129,6 @@ import Util(itos)
 import VModInfo
 import Wires
 import ProofObligation(ProofObligation, MsgFn)
-import Flags
 import qualified Data.Map as M
 import ISyntax(IType)
 import InstNodes(InstTree)
@@ -244,189 +234,6 @@ apkgExposesClkOrRst apkg =
         isClkOrRst _ = False
     in  any isClkOrRst (apkg_interface apkg)
 
-
--- a scheduled package
--- rules and interface methods have turned into logic connected to state instances
-data ASPackage = ASPackage {
-        -- package name
-         aspkg_name :: AId,
-        -- module wrapped around a pure function with pragma no-inline
-        aspkg_is_wrapped :: Bool,
-        -- parameters (names in Verilog)
-        -- (i.e. module args generated as params, size parameters)
-        -- XXX there are no size parameters because we don't support
-        -- XXX synthesis of size-polymorphic modules
-        aspkg_parameters :: [AInput],
-        -- package outputs (output clocks/resets, method results/RDY)
-        aspkg_outputs :: [AOutput],
-        -- package inputs (input clocks/resets, method args/EN, module args)
-        -- (i.e. clock, reset, method arguments, module args as ports)
-        aspkg_inputs :: [AInput],
-        -- package inouts (module args and provided interface)
-        aspkg_inouts :: [AInput],
-        -- state elements (Verilog instances)
-        aspkg_state_instances :: [AVInst],
-        -- state element outputs (wires coming out of state elements)
-        aspkg_state_outputs :: [AStateOut],
-        -- defs (all sorts)
-        aspkg_values :: [ADef],
-        -- inout defs
-        aspkg_inout_values :: [ADef],
-        -- foreign function calls (grouped by clock domain)
-        aspkg_foreign_calls :: [AForeignBlock],
-        -- wire ports from inlined submodules (RWire and CReg)
-        --   which shouldn't be unecessarily inlined away
-        aspkg_inlined_ports :: [AId],
-        -- info about which Ids are for what purpose
-        aspkg_signal_info :: ASPSignalInfo,
-        -- user comments to be included in the output RTL
-        aspkg_comment_info :: ASPCommentInfo
-    }
-        deriving (Eq, Show)
-
-instance NFData ASPackage where
-    rnf (ASPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14) =
-        rnf14 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14
-
-data ASPSignalInfo = ASPSignalInfo {
-        -- input params, ports, clocks, and resets are all in one list
-        -- (can use isParam etc to filter it out)
-        aspsi_inputs :: [AId],
-        -- the interface output clocks (and possibly empty list of gates)
-        aspsi_output_clks :: [(AId,[AId])],
-        aspsi_output_rsts :: [AId],
-        aspsi_ifc_iots :: [AId],
-        -- the ifc methods
-        aspsi_methods :: [ASPMethodInfo],
-
-        -- inline submodule info (RWire and CReg)
-        -- XXX this somewhat duplicates the aspkg_inlined_ports field
-        --   * instance name
-        --   * module name as String
-        --   * list of ports that became signals
-        aspsi_inlined_ports :: [(AId, String, [AId])],
-
-        -- rule scheduling signals
-        --   relation from rule name to its CAN_FIRE and WILL_FIRE signals
-        aspsi_rule_sched :: [(AId, [AId])],
-
-        -- mux selectors
-        --   ids of defs created in AState for the selectors to submod muxes
-        aspsi_mux_selectors :: [AId],
-        -- mux values
-        --   ids of defs created in AState for the values to submod muxes
-        aspsi_mux_values :: [AId],
-        -- submodule enables
-        --   ids of defs created in AState for the enables to submod methods
-        aspsi_submod_enables :: [AId]
-    }
-        deriving (Eq, Show)
-
-
-instance PPrint ASPSignalInfo where
-    pPrint d p aspsi = text "ASPSignalInfo = " <> braces
-                       (text "Inputs" <+> pPrint d p (aspsi_inputs aspsi)
-                       $+$ text "Output Clocks" <+> pPrint d p (aspsi_output_clks aspsi)
-                       $+$ text "Output Resets" <+> pPrint d p (aspsi_output_rsts aspsi)
-                       $+$ text "Inouts" <+> pPrint d p (aspsi_ifc_iots aspsi)
-                       $+$ text "Methods" <+> pPrint d p (aspsi_methods aspsi)
-                       -- $+$ text "Inlined Ports" <+> pPrint d p (aspsi_inlined_ports aspsi)
-                       )
-
-        --   relation from method name to
-        --     type of method (value, action, actionvalue) as string
-        --     ports for RDY, EN, val, args
-        --     names of the associated rules (for methods with actions)
-data ASPMethodInfo = ASPMethodInfo {
-                                    aspm_name :: AId,
-                                    aspm_type :: String,
-                                    aspm_mrdyid :: Maybe AId,
-                                    aspm_menableid :: Maybe AId,
-                                    aspm_resultids :: [AId],
-                                    aspm_inputs :: [AId],
-                                    aspm_assocrules :: [AId]
-                                                       }
-                   deriving (Eq, Show)
-
-instance PPrint ASPMethodInfo where
-    pPrint d p aspmi = text "method:" <+> pPrint d p( aspm_name aspmi)
-                       <+> text (aspm_type aspmi) <> equals <>
-                       braces ( pPrint d 0 (aspm_mrdyid aspmi) <+>
-                                pPrint d 0 (aspm_menableid aspmi) <+>
-                                pPrint d 0 (aspm_resultids aspmi) $+$
-                                pPrint d 0 (aspm_inputs aspmi) $+$
-                                pPrint d 0 (aspm_assocrules aspmi) )
-
-instance NFData ASPMethodInfo where
-    rnf (ASPMethodInfo n t mr me mres ins assoc) = rnf7 n t mr me mres ins assoc
-
-instance NFData ASPSignalInfo where
-    rnf (ASPSignalInfo ins oclks orsts iots meths iports rsched muxsels muxvals senables) =
-        rnf10 ins oclks orsts iots meths iports rsched muxsels muxvals senables
-
-data ASPCommentInfo = ASPCommentInfo {
-        -- comments on submodule instantiations
-        aspci_submod_insts :: [(Id, [String])],
-        -- comments on rules
-        aspci_rules :: [(AId, [String])]
-        -- comments on methods
-        -- aspsi_methods :: ...
-    }
-        deriving (Eq, Show)
-
-instance NFData ASPCommentInfo where
-    rnf (ASPCommentInfo insts rules) = rnf2 insts rules
-
--- parallel rule groups; total order on state
--- (first rule in the list writes, present only if there are state conflicts)
-data ASchedule = ASchedule {
-        asch_scheduler :: [AScheduler],
-                        -- list of ruleids is REVERSE ordering for execution
-        asch_rev_exec_order :: [ARuleId]
-    }
-        deriving (Eq, Show)
-
-instance NFData ASchedule where
-    rnf (ASchedule sched order) = rnf2 sched order
-
-newtype AScheduler =
-          -- esposito: (r,f) s.t.
-          --   f is the list of conditions for which
-          --        rule r should not fire when enabled
-          --   f is expressed as a
-          --        list of rules that conflict with the rule r.
-          --   In the future, f should be a list of list of rules,
-          --      where the sublists are a list of rules which when
-          --      enabled should disable the firing of r.
-          --      So [[a,b],[c],[d,e,f]] = !(ab) && !c && !(def)
-    ASchedEsposito [(ARuleId, [ARuleId])]
-        deriving (Eq, Show)
-
-instance NFData AScheduler where
-    rnf (ASchedEsposito fs) = rnf fs
-
-getSchedulerIds :: AScheduler -> [ARuleId]
-getSchedulerIds (ASchedEsposito fs) = map fst fs
-
-dropScheduleIds :: [ARuleId] -> ASchedule -> ASchedule
-dropScheduleIds dropIds (ASchedule gs order) = (ASchedule gs' order')
-  where order' = order \\ dropIds
-        gs' = map (dropSchedulerIds dropIds) gs
-
-dropSchedulerIds :: [ARuleId] -> AScheduler -> AScheduler
-dropSchedulerIds dropIds sch =
-  let result = dropSchedulerIds' dropIds sch in
-      -- paranoia check
-      if (not . null) (dropIds `intersect` getSchedulerIds result) then
-         internalError("ASyntax.dropSchedulerIds " ++ ppReadable dropIds ++
-                       "\n" ++ ppReadable sch)
-      else result
-
-dropSchedulerIds' :: [ARuleId] -> AScheduler -> AScheduler
-dropSchedulerIds' dropIds (ASchedEsposito fs) = ASchedEsposito fs'
-  where fs' = [(rid, rs') | (rid, rs) <- fs,
-                            not (rid `elem` dropIds),
-                            let rs' = rs \\ dropIds]
 
 type AId = Id
 
@@ -1413,41 +1220,6 @@ instance NFData AVInst where
 ppVTI :: PDetail -> (VModInfo, [AExpr], [(AId, Integer)]) -> Doc
 ppVTI d (vi, es, ns) = sep [pPrint d 0 (vName vi), pPrint d 0 vi, pPrint d 0 es, pPrint d 0 ns]
 
-instance PPrint ASPackage where
-    pPrint d p pack@(ASPackage mi fmod ps exps is ios ss sos ds iods fs ws ids cmap) =
-        (text "ASPackage" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
-        text "-- ASPackage parameters" $+$
-        (text "" <+> sep (map (pPrint d 0) ps) <> text ";") $+$
-        text "-- ASPackage outputs" $+$
-        (text "" <+> sep (map (pPrint d 0) exps) <> text ";") $+$
-        text "-- ASPackage inputs" $+$
-        foldr (($+$) . ppV d) (text "") is $+$
-        text "-- ASPackage inouts" $+$
-        foldr (($+$) . ppV d) (text "") ios $+$
-        text "-- ASP state elements" $+$
-        foldr (($+$) . pPrint d 0) (text "") ss $+$
-        text "-- ASP state elements outputs" $+$
-        foldr (($+$) . ppV d) (text "") sos $+$
-        text "-- ASP inlined rwire ports" $+$
-        foldr (($+$) . pPrint d 0) (text "") ws $+$
-        text "-- ASP definitions" $+$
-        foldr (($+$) . pPrint d 0) (text "") ds $+$
-        text "-- ASP inout definitions" $+$
-        foldr (($+$) . pPrint d 0) (text "") iods $+$
-        text "-- ASP foreign function calls" $+$
-        foldr (($+$) . pPrint d 0) (text "") fs $+$
-        text "--ASP Signal Info" $+$ pPrint d 0 (aspkg_signal_info pack)
-
-instance PPrint ASchedule where
-     pPrint d p (ASchedule groups order) = (text "parallel:" <+> pPrint d 0 groups)
-                                           $+$ (text "order:" <+> pPrint d 0 (reverse order))
-
-instance PPrint AScheduler where
-     pPrint d p (ASchedEsposito fs) =
-         let ppDep (r,cfs) = pPrint d 0 r <+> text "->" <+> pPrint d 0 cfs
-         in  text "esposito:" <+> text "[" <> sep (punctuate (text ",") (map ppDep fs)) <> text "]"
-
-
 instance PPrint ADef where
     pPrint d _ (ADef i t e props) =
         (pPrint d 0 i <+> text "::" <+> pPrint d 0 t <> text ";") $+$
@@ -1685,10 +1457,10 @@ pContext = PExpandContext { useParen=True,
 class (PPrint a) => PPrintExpand a where
     pPrintExpand :: PExpandDef -> PDetail -> PExpandContext -> a -> Doc
 
-pPrintExpandFlags :: (PPrintExpand a) => Flags -> [ADef] -> PDetail -> PExpandContext -> a -> Doc
-pPrintExpandFlags flags ds =
+pPrintExpandFlags :: (PPrintExpand a) => Int -> [ADef] -> PDetail -> PExpandContext -> a -> Doc
+pPrintExpandFlags limit ds =
     let edef = PExpandDef {defmap = M.fromList [(id,expr) | (ADef id _ expr _) <- ds ]
-                          ,lookupLimit = expandATSlimit flags
+                          ,lookupLimit = limit
                           ,lookupLevel = 0 }
   in pPrintExpand edef
 

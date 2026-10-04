@@ -6,7 +6,8 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import Util
 import Eval(NFData(..), rnf)
-import Flags
+import PhaseConfig
+import IOProperties(VIOProps(..), IOIO(..))
 import PPrint
 import ErrorUtil(internalError)
 import Id
@@ -15,6 +16,8 @@ import VModInfo(vArgs, vFields, VName(..), VeriPortProp(..),
                 VArgInfo(..), VFieldInfo(..), VPort)
 import Prim
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil( AVars(..) )
 import BackendNamingConventions(createVerilogNameMapForAVInst,
                                 xLateIdUsingFStringMap)
@@ -26,35 +29,8 @@ import BackendNamingConventions(createVerilogNameMapForAVInst,
 -- The VIO properties are best described as the comments which are printed
 -- before the verilog module is dumped in the Verilog file..
 
-data IOIO = INPUT | OUTPUT | INOUT deriving (Eq)
-
-instance NFData IOIO where rnf x = seq x ()
-
---   (name, input(T)/output(F), width, properties)
-newtype VIOProps = VIOProps [(AId, IOIO, Integer, [VeriPortProp])]
-        deriving (Eq)
-
-instance NFData VIOProps where
-    rnf (VIOProps xs) = rnf xs
-
-instance PPrint VIOProps where
-    pPrint d p (VIOProps ps) =
-                text "Name                         I/O  size props" $+$
-                foldr ($+$) (text "") (map pp ps)
-        where pp (i, io, sz, ps) =
-                let s = getIdString i
-                    si = s ++ replicate (29 - length s) ' '
-                    n = itos sz
-                    sn = replicate (5 - length n) ' ' ++ n
-                    iotxt = case (io) of
-                              INPUT -> " I"
-                              OUTPUT-> " O"
-                              INOUT -> "IO"
-                in  text si <+> text iotxt <+>
-                    text sn <+> sep (map (pPrint d 0) ps)
-
 -- assuming foreign functions do not affect the IO properties
-getIOProps :: Flags -> ASPackage -> (VIOProps, [VPort])
+getIOProps :: PhaseConfig VerilogGenFlags -> ASPackage -> (VIOProps, [VPort])
 getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
         -- returns the VIOProps structure
         -- and a mapping of Verilog port names to their port properties

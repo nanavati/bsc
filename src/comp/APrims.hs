@@ -1,5 +1,6 @@
 module APrims(evalAExprToInteger) where
 
+import Warmup ()
 import PPrint(ppReadable)
 import ASyntax
 import ASyntaxUtil

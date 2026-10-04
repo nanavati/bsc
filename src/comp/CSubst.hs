@@ -5,6 +5,7 @@ module CSubst (
                cSubstQualsN
               ) where
 
+import Warmup ()
 import CSyntax
 import Util(mapSnd)
 import Id(Id)

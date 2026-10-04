@@ -7,7 +7,8 @@ import PFPrint
 import Id
 import PreIds(tmpTyVarIds)
 import Error(internalError, EMsg, ErrorHandle, bsWarning, bsError)
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes
 import CSyntax
 import Type
 import CType(getTyVarId, isGeneratedTVar, tVar, tVarKind)
@@ -34,25 +35,25 @@ doTraceCtxReduce = "-trace-ctxreduce" `elem` progArgs
 --  * the cache of ATF (associated type function) resolutions recorded
 --    while solving contexts (merged with the cache from typecheck in
 --    bsc.hs and threaded through iConvPackage into elaboration)
-cCtxReduceIO :: ErrorHandle -> Flags -> SymTab -> CPackage ->
+cCtxReduceIO :: ErrorHandle -> TypeSolverFlags -> SymTab -> CPackage ->
                IO (CPackage, S.Set Id, CATFCache)
 cCtxReduceIO errh flags s (CPackage mi exps imps impsigs fixs ds includes) = do
     -- The False argument to 'runTI' indicates that incoherent instances should not be matched at this time
     -- We want to preserve those contexts to be handled in typecheck (XXX why?)
-    let ti_res = runTI flags False s (mapM ctxRed ds)
+    let ti_res = runTI (internalTypecheckFlags flags) False s (mapM ctxRed ds)
     when (not (null (tiWarnings ti_res))) $ bsWarning errh (tiWarnings ti_res)
     case tiResult ti_res of
       Left emsgs -> bsError errh emsgs
       Right ds' -> return (CPackage mi exps imps impsigs fixs ds' includes,
                            tiUsedPackages ti_res, tiATFCache ti_res)
 
-cCtxReduceDef :: Flags -> SymTab -> CDefn -> Either [EMsg] CDefn
+cCtxReduceDef :: TypeSolverFlags -> SymTab -> CDefn -> Either [EMsg] CDefn
 cCtxReduceDef flags s def =
     -- XXX This assumes no warnings in the Left case!  If we want to handle errors and
     -- warnings better, return an ErrorMonad.
     -- The False argument to 'runTI' indicates that incoherent instances should not be matched at this time
     -- We want to preserve those contexts to be handled in typecheck (XXX why?)
-    case tiResult (runTI flags False s (ctxRed def)) of
+    case tiResult (runTI (internalTypecheckFlags flags) False s (ctxRed def)) of
     Left msgs -> Left msgs
     Right t   -> Right t
 

@@ -1,40 +1,18 @@
-module ErrorUtil (internalError) where
+-- | Internal failures carry diagnostic data without depending on invocation
+-- metadata. Executable drivers attach their compiler version when reporting.
+module ErrorUtil (internalError, InternalCompilerError(..)) where
 
--- import Pretty        -- causes loops
-import System.IO(hPutStr, stderr)
-import System.IO.Unsafe(unsafePerformIO)
-import System.Exit(exitWith, ExitCode(..))
+import Warmup ()
+import qualified Control.Exception as CE
 
-import Version(bscVersionStr)
+newtype InternalCompilerError = InternalCompilerError String
+    deriving (Show)
+
+instance CE.Exception InternalCompilerError
 
 {-# NOINLINE internalError #-}
---
--- This module contains very basic *internal* error facilities,
--- so that packages such as Util and IntegerUtil can use basic
--- error functions, while Error can import those packages without
--- circular dependency.
---
-
--- This is called from anywhere, even when not in the IO monad
+-- This is called from anywhere, even when not in the IO monad. Keep a distinct
+-- exception type so user-error recovery never mistakes an internal failure for
+-- an ErrorCall and continues compilation with a poisoned definition.
 internalError :: String -> a
-internalError = unsafePerformIO . safeInternalError
-
-safeInternalError :: String -> IO a
-safeInternalError msg_data =
-    let title = "Internal Bluespec Compiler Error"
-        desc1 = "Please report this failure to the BSC developers, by opening a ticket\n" ++
-                "in the issue database: https://github.com/B-Lang-org/bsc/issues\n"
-        desc2 = "The following internal error message should be included in your\n" ++
-                "correspondence along with any other relevant details:\n"
-        ver = bscVersionStr True ++ "\n"
-{- pretty-printing causes reference loops here.
-        msg_doc = (text title) <> (char ':') $$
-                  nest 2 ((s2par desc1) $$
-                          (s2par desc2) $$
-                          nest 2 (s2par msg_data))
-        msg_str = pretty 78 78 msg_doc
- -}
-        msg_str = title ++ ":\n" ++ desc1 ++ desc2 ++ ver ++ msg_data ++ "\n"
-    in
-        hPutStr stderr msg_str >>
-        exitWith (ExitFailure 1)
+internalError = CE.throw . InternalCompilerError

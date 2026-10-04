@@ -9,6 +9,7 @@ module SimPrimitiveModules ( primMap
                            ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
+import Warmup ()
 import Prelude hiding ((<>))
 #endif
 

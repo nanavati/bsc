@@ -1,6 +1,7 @@
 module Fixity(Fixity(..), defaultFixity) where
 import Warmup ()
 
+
 data Fixity
         = FInfixl Int | FInfixr Int | FInfix Int
         | FPrefix

@@ -8,11 +8,7 @@ module BinUtil (
 
 import Control.Monad(when, foldM)
 import qualified Data.Map as M
-import Flags(Flags,
-             ifcPath,
-             enablePoisonPills,
-             usePrelude,
-             verbose)
+import PhaseConfig
 import Position(noPosition)
 import Id
 import PreIds
@@ -50,7 +46,7 @@ type BinMap a = M.Map String (BinFile a)
 -- =========================
 
 -- Read all .bo files imported by this package
-readImports :: ErrorHandle -> Flags -> BinMap a -> HashMap -> CPackage ->
+readImports :: ErrorHandle -> PhaseConfig ReduceFlags -> BinMap a -> HashMap -> CPackage ->
                IO (CPackage, BinMap a, HashMap)
 readImports errh flags binmap0 hashmap0
             (CPackage pkgId exps imps old_impsigs fixs ds includes) = do
@@ -93,7 +89,7 @@ readImports errh flags binmap0 hashmap0
 
 
 -- helper function that reads in a .bo file, and any .bo files that it needs
-readBin :: ErrorHandle -> Flags -> (Maybe String) ->
+readBin :: ErrorHandle -> PhaseConfig ReduceFlags -> (Maybe String) ->
            BinMap a -> HashMap -> Id ->
            IO (BinMap a, HashMap, BinFile a, [Id])
 readBin errh flags maybePkgName binmap0 hashmap0 p0 = do
@@ -161,26 +157,26 @@ sortImportedSignatures signatures =
 
 
 -- Add the Prelude to the list of imports, unless compiling the Prelude itself
-addPrelude :: Flags -> [CImport] -> [CImport]
-addPrelude flags imps | usePrelude flags = CImpId False idPrelude :
+addPrelude :: PhaseConfig ReduceFlags -> [CImport] -> [CImport]
+addPrelude flags imps | reduceUsePrelude (phaseFlags flags) = CImpId False idPrelude :
                                            CImpId False idPreludeBSV :
                                            imps
                       | otherwise = imps
 
 -- Import one .bo file
-doImport :: ErrorHandle -> Flags -> HashMap -> Id ->
+doImport :: ErrorHandle -> PhaseConfig ReduceFlags -> HashMap -> Id ->
             IO (String, CSignature, CSignature, IPackage a, String,
                 HashMap, [Id])
 doImport errh flags hashmap i = do
     let binname = getIdString i ++ "." ++ binSuffix
         missingErr = (getIdPosition i,
                       EMissingBinFile binname (pfpString i))
-        pillMsg = if (enablePoisonPills flags)
+        pillMsg = if (runEnablePoisonPills (phaseRunFlags flags))
                   then bsWarning errh
                   else bsError errh
     (file, name) <- fromMaybeM (bsError errh [missingErr]) $
                       readBinFilePath errh (getIdPosition i)
-                          (verbose flags) binname (ifcPath flags)
+                          (verbose flags) binname (reduceIfcPath (phaseFlags flags))
     (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash)
         <- readBinFile errh name file
     when (pi /= i) $

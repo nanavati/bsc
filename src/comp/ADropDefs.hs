@@ -1,11 +1,12 @@
 module ADropDefs(aDropDefs) where
 
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad.State
-import AConv(isLocalAId)
 import Id
 
 -- get all of the ASDef usage in a "thing"

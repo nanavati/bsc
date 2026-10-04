@@ -103,10 +103,13 @@ module APaths(
 --
 -- ========================================================================
 
+import Warmup ()
 import ErrorMonad(ErrorMonad(..), convErrorMonadToIO)
 import PFPrint
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes (DumpFlag(..), ResourceFlag(..))
 import ASyntax
+import StaticSchedule
 import ASyntaxUtil(argInputPorts)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle)
 import VModInfo(vPath, vFields, vArgs,
@@ -365,7 +368,7 @@ enWhenRdyNode pps _ = False
 --   A list of urgency requirements implied by paths, to be used in
 --   scheduling.
 --
-aPathsPreSched :: ErrorHandle -> Flags -> APackage ->
+aPathsPreSched :: ErrorHandle -> ScheduleConfig -> APackage ->
                   IO (PathGraphInfo, PathUrgencyPairs)
 aPathsPreSched errh flags apkg = do
 
@@ -1041,7 +1044,7 @@ aPathsPreSched errh flags apkg = do
 --   scheds = list of schedulers on conflict-free groups of rules
 --   ruleOrd = list of rule IDs in reverse order of execution
 --
-aPathsPostSched :: Flags -> [PProp] -> APackage ->
+aPathsPostSched :: ScheduleConfig -> [PProp] -> APackage ->
                    PathGraphInfo -> ASchedule -> IO (VPathInfo)
 aPathsPostSched flags pps apkg pathGraphInfo (ASchedule scheds _) = do
 
@@ -1505,3 +1508,7 @@ getVModInfoArgs avi =
     in
         (clk_pairs, gate_triples, rst_pairs, arg_triples)
 -}
+
+-- Local projections keep this phase independent of invocation-wide options.
+
+type ScheduleConfig = PhaseConfig SchedFlags

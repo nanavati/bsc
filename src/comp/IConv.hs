@@ -17,7 +17,8 @@ import qualified SCC(tsort,Graph)
 import FStringCompat(getFString)
 import PPrint(ppReadable, ppString)
 import Error(internalError, ErrorHandle)
-import Flags(Flags)
+import PhaseConfig
+import FlagTypes
 import Position
 import CSyntax
 import CSyntaxTypes
@@ -47,12 +48,12 @@ import IConvLet(docycles, reorderDs, unpoly)
 -- import Debug.Trace
 
 -- XXX consider creating an IConv state monad to store the various state
--- XXX that's passed around (read-only state like ErrorHandle, Flags, SymTab
+-- XXX that's passed around (read-only state like ErrorHandle, TypeSolverFlags, SymTab
 -- XXX and possibly writeable state like the Env and scope variables)
 
 type Env a = M.Map Id (IExpr a)
 
-iConvPackage :: ErrorHandle -> Flags -> SymTab ->
+iConvPackage :: ErrorHandle -> TypeSolverFlags -> SymTab ->
                CATFCache -> CPackage -> IO (IPackage a)
 iConvPackage errh flags r ctypeATFCache (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds' itypeATFCache)
@@ -67,7 +68,7 @@ iConvPackage errh flags r ctypeATFCache (CPackage pi _ _ _ _ ds _) =
                                   (M.map convT ctypeATFCache)
 
 
-iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage a -> CDefn -> IDef a
+iConvDef :: ErrorHandle -> TypeSolverFlags -> SymTab -> IPackage a -> CDefn -> IDef a
 iConvDef errh flags r (IPackage pi _ _ ds _) def =
     let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
         pvs = map IVar tmpVarIds
@@ -75,7 +76,7 @@ iConvDef errh flags r (IPackage pi _ _ ds _) def =
         [d] -> d
         ds -> internalError ("iConvDef " ++ ppReadable ds ++ ppReadable def)
 
-iConvVar :: Flags -> SymTab -> Env a -> Id -> IExpr a
+iConvVar :: TypeSolverFlags -> SymTab -> Env a -> Id -> IExpr a
 iConvVar flags r env i =
         --trace ("lookup " ++ ppReadable i ++ show env) $
         case M.lookup i env of
@@ -136,7 +137,7 @@ type IPVars a = [IExpr a]
 
 -----
 
-iConvD :: ErrorHandle -> Flags -> Id -> SymTab -> Env a -> IPVars a ->
+iConvD :: ErrorHandle -> TypeSolverFlags -> Id -> SymTab -> Env a -> IPVars a ->
           CDefn -> [IDef a]
 iConvD errh flags pi r env pvs (CValueSign (CDefT i vs qt cs)) =
     case iConvVS errh flags r env pvs i vs qt cs of
@@ -154,7 +155,7 @@ qualId' pi i = if tilde `elem` getIdString i then i else qualId pi i
                   _ -> internalError "IConv.qualId': unexpected tilde string"
 
 iConvVS :: ErrorHandle
-           -> Flags
+           -> TypeSolverFlags
            -> SymTab
            -> Env a
            -> IPVars a
@@ -172,7 +173,7 @@ iConvVS errh flags r env pvs i vs (CQType _ t) cs =
 
 -- expandSynN resolves ATFs before conversion to IType, so the resulting
 -- IType contains no ATF applications and does not need the ATF cache.
-iConvT :: Flags -> SymTab -> Type -> IType
+iConvT :: TypeSolverFlags -> SymTab -> Type -> IType
 iConvT flags s t = iConvT' (expandSynN flags s t)
 
 iConvT' :: Type -> IType
@@ -201,11 +202,11 @@ iConvK (KVar _) = internalError "iConvK"
 -- * list of variable bindings from the pattern
 -- * the environment updated with the variable bindings
 --
-iConvPs :: Flags -> SymTab -> Env a -> [(IExpr a, IType, CPat)] ->
+iConvPs :: TypeSolverFlags -> SymTab -> Env a -> [(IExpr a, IType, CPat)] ->
            (IExpr a, [(Id, IType, IExpr a)], Env a)
 iConvPs flags r env vtps = iConvPs' flags r env id [] (length vtps) vtps
 
-iConvPs' :: Flags -> SymTab -> Env a ->
+iConvPs' :: TypeSolverFlags -> SymTab -> Env a ->
             (IExpr a -> IExpr a) -> [(Id, IType, IExpr a)] -> Int ->
             [(IExpr a, IType, CPat)] -> (IExpr a, [(Id, IType, IExpr a)], Env a)
 iConvPs' flags r env cond bs n [] = (cond iTrue, bs, env)
@@ -252,7 +253,7 @@ iConvPs' flags r env cond bs n ((v, t, CPAny p) : ps) =
 -- and replaces them with a variable and a guard
 iConvPs' flags r env cond bs n _ = internalError ("iConvPs'")
 
-iConvCs :: ErrorHandle -> Flags -> SymTab -> Env a ->
+iConvCs :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a ->
            IPVars a -> IType -> [CClause] -> IExpr a
 iConvCs errh flags r env pvs t cs@(CClause ps _ _ : _) =
     foldr (uncurry ILam) (iConvCs' errh flags r env pos pvs' (map (IVar . fst) vts) ts rt cs) vts
@@ -270,7 +271,7 @@ iConvCs errh flags r env pvs t cs@(CClause ps _ _ : _) =
         pos = getPosition ps
 iConvCs errh flags r env pvs t [] = internalError "IConv.iConvCs: []"
 
-iConvCs' :: ErrorHandle -> Flags -> SymTab -> Env a
+iConvCs' :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a
          -> Position -> IPVars a -> [IExpr a] -> [IType] -> IType -> [CClause]
          -> IExpr a
 iConvCs' errh flags r env pos pvs (v:vs) (t_v:t_vs) t [] =
@@ -283,7 +284,7 @@ iConvCs' errh flags r env pos pvs vs ts t (c:cs) =
     ieIf t cond rhs (iConvCs' errh flags r env pos pvs vs ts t cs)
   where (cond, rhs) = iConvC errh flags r env pvs vs ts c
 
-iConvC :: ErrorHandle -> Flags -> SymTab -> Env a ->
+iConvC :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a ->
           IPVars a -> [IExpr a] -> [IType] -> CClause -> (IExpr a, IExpr a)
 iConvC errh flags r env pvs vs ts (CClause ps qs e) =
     let (p1, _, env') = iConvPs flags r env (zip3 vs ts ps)
@@ -312,11 +313,11 @@ iConvC errh flags r env pvs vs ts (CClause ps qs e) =
 -- preserved if it's a name that has meaning to the user (but is there an
 -- efficiency trade-off?).
 --
-iConvQs :: ErrorHandle -> Flags -> SymTab -> Env a ->
+iConvQs :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a ->
            IPVars a -> [CQual] -> (IExpr a, (IExpr a -> IExpr a), Env a)
 iConvQs errh flags r env pvs qs = iConvQs' errh flags r env pvs id [] qs
 
-iConvQs' :: ErrorHandle -> Flags -> SymTab -> Env a ->
+iConvQs' :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a ->
             IPVars a -> (IExpr a -> IExpr a) -> [(Id, IType, IExpr a)] ->
             [CQual] -> (IExpr a, (IExpr a -> IExpr a), Env a)
 iConvQs' errh flags r env pvs cond bs [] =
@@ -345,7 +346,7 @@ iConvQs' errh flags r env pvs cond bs (CQGen ct p e:qs) =
     in  iConvQs' errh flags r env' pvs new_cond new_bs qs
 
 -- convert definitions in a sequential let
-iConvLetSeq :: ErrorHandle -> Flags -> SymTab -> Env a ->
+iConvLetSeq :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a ->
                IPVars a -> [CDefl] -> (Env a, [(Id, IType, IExpr a)])
 iConvLetSeq errh flags symtab env ipvars [] = (env, [])
 iConvLetSeq errh flags symtab env ipvars
@@ -361,7 +362,7 @@ iConvLetSeq _ _ _ _ _ _ = internalError "iConvLetSeq"
 
 -- convert definitions in a recursive let
 iConvLet :: forall a .
-            ErrorHandle -> Flags -> SymTab -> Env a -> IPVars a -> [CDefl] ->
+            ErrorHandle -> TypeSolverFlags -> SymTab -> Env a -> IPVars a -> [CDefl] ->
             (Env a, [(Id, IType, IExpr a)])
 iConvLet errh flags r env pvs ds = answer
   where answer = case loop_test of
@@ -423,7 +424,7 @@ iConvLet errh flags r env pvs ds = answer
             in iConvLet errh flags r env pvs
                    (non_cycle ++ (docycles errh ds cycle_nodes))
 
-iAddWhen :: ErrorHandle -> Flags -> SymTab -> Env a
+iAddWhen :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a
          -> IPVars a -> [CQual] -> (Env a -> IPVars a -> (Id, IType, IExpr a))
          -> (Id, IType, IExpr a)
 iAddWhen errh flags r env pvs [] ite = ite env pvs
@@ -435,10 +436,10 @@ iAddWhen errh flags r env pvs qs ite =
         (i, t, e') -> (i, t, underLAM t e' [] $ \ t e -> iAps icPrimWhen [t] [p, bindFn e])
 
 -- external interface for converting expressions
-iConvExpr :: ErrorHandle -> Flags -> SymTab -> Env a -> CExpr -> IExpr a
+iConvExpr :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a -> CExpr -> IExpr a
 iConvExpr errh flags r env ce = iConvE errh flags r env (map IVar tmpVarIds) ce
 
-iConvE :: ErrorHandle -> Flags -> SymTab -> Env a -> IPVars a ->
+iConvE :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a -> IPVars a ->
           CExpr -> IExpr a
 -- CLam
 iConvE errh flags r env pvs (Cletrec ds e) =
@@ -593,14 +594,14 @@ iConvE errh flags r env pvs (Cattributes pps) =
          (ICAttrib { iConType = iConvT flags r tAttributes, iAttributes = pps })
 iConvE errh flags r env pvs e = internalError ("IConv.iConvE:" ++ ppReadable e)
 
-getMethodType :: Flags -> SymTab -> Id -> [IType] -> Id -> IType
+getMethodType :: TypeSolverFlags -> SymTab -> Id -> [IType] -> Id -> IType
 getMethodType flags r ti ts m = iInst selty ts
   where sel = iConvField flags r ti m
         selty = case sel of
                   (ICon _ (ICSel t _ _)) -> t
                   _ -> internalError "IConv.getMethodType: selty"
 
-iConvR :: ErrorHandle -> Flags -> SymTab -> Env a ->
+iConvR :: ErrorHandle -> TypeSolverFlags -> SymTab -> Env a ->
           IPVars a -> CRule -> IExpr a
 iConvR errh flags r env pvs rule@(CRule rps i qs a) =
     let (p, bindFn, env') = iConvQs errh flags r env pvs qs
@@ -655,7 +656,7 @@ iConvLit (LChar c) pos t = iMkCharAt pos c
 iConvLit LPosition pos t = iMkPosition pos
 
 -- converts implicit field extract functions to bit select.
-iConvField :: Flags -> SymTab -> Id -> Id -> IExpr a
+iConvField :: TypeSolverFlags -> SymTab -> Id -> Id -> IExpr a
 iConvField flags r ti i =
     case findType r ti of
       Just (TypeInfo _ _ _ (TIstruct _ fs) _) ->
@@ -675,7 +676,7 @@ iTypeFieldTypeArity r ti c =
         Nothing -> internalError ("iTypeFieldTypeArity: " ++ ppString c)
 -}
 
-lookupConType :: Flags -> Id -> Id -> SymTab -> (IType, ConTagInfo)
+lookupConType :: TypeSolverFlags -> Id -> Id -> SymTab -> (IType, ConTagInfo)
 lookupConType flags ti c r =
         case findCon r c of
         Just xs -> let convs = [(iConvSc flags r sc, ci_taginfo ci)
@@ -687,7 +688,7 @@ lookupConType flags ti c r =
                                             show convs)
         Nothing -> internalError ("lookupConType: " ++ ppString c)
 
-lookupSelType :: Flags -> Id -> Id -> SymTab -> IType
+lookupSelType :: TypeSolverFlags -> Id -> Id -> SymTab -> IType
 lookupSelType flags ti c r =
         case findField r c of
         Just xs ->
@@ -702,7 +703,7 @@ lookupSelType flags ti c r =
                         ys -> internalError ("lookupSelType: " ++ ppString (xs, (ti, c), ys))
         Nothing -> internalError ("lookupSelType: " ++ ppString c)
 
-iConvSc :: Flags -> SymTab -> Scheme -> IType
+iConvSc :: TypeSolverFlags -> SymTab -> Scheme -> IType
 iConvSc flags r (Forall ks qt) =
     foldr (uncurry ITForAll) (iConvT flags r (inst ts (qualToType qt))) (zip vs (map iConvK ks))
   where vs = tmpTyVarIds
@@ -794,14 +795,14 @@ iLetSimp i t e b = iLet i t e b
 
 ---
 
-buildUndef :: Flags -> SymTab -> Env a ->
+buildUndef :: TypeSolverFlags -> SymTab -> Env a ->
               Position -> UndefKind -> IType -> IExpr a
 buildUndef flags r env pos kind t =
     IAps p [t] [iMkPosition pos, iuKindToExpr kind]
   where p = iConvVar flags r env idBuildUndef
 
 -- use the scrutinee's position to build the undefined value on a no-match
-buildUndefNoMatchPos :: Flags -> SymTab -> Env a ->
+buildUndefNoMatchPos :: TypeSolverFlags -> SymTab -> Env a ->
                         (IExpr a, IType) -> IType -> IExpr a
 buildUndefNoMatchPos flags r env (e, t_e) t =
     IAps bu [t] [IAps gp [t_e] [e], iuNoMatchExpr]

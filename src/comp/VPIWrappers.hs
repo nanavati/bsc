@@ -4,7 +4,7 @@ import ForeignFunctions
 import CCSyntax
 import Id (getIdString)
 import Error(ErrorHandle)
-import Flags(Flags(..), quiet)
+import PhaseConfig
 import FileNameUtil(mkVPICName, mkVPIHName, mkVPIArrayCName,
                     getRelativeFilePath, dropSuf, baseName)
 import AVerilogUtil(vNameToTask)
@@ -18,21 +18,21 @@ import Control.Monad(unless)
 --import Debug.Trace
 
 genVPIWrappers :: ErrorHandle ->
-                  Flags -> String -> [String] -> [ForeignFunction] ->
+                  (PhaseConfig ForeignWrapperFlags) -> String -> [String] -> [ForeignFunction] ->
                   IO [CCFragment]
 genVPIWrappers errh flags prefix blurb ffs =
   do files <- mapM (writeWrapper errh flags prefix blurb) ffs
      return $ concat files
 
 writeWrapper :: ErrorHandle ->
-                Flags -> String -> [String] -> ForeignFunction ->
+                (PhaseConfig ForeignWrapperFlags) -> String -> [String] -> ForeignFunction ->
                 IO [CCFragment]
 writeWrapper errh flags prefix blurb ff =
   do let function_name = getIdString (ff_name ff)
 
          -- generate the wrapper file names
-         c_filename = mkVPICName (vdir flags) prefix function_name
-         h_filename = mkVPIHName (vdir flags) prefix function_name
+         c_filename = mkVPICName ((foreignWrapperVdir . phaseFlags) flags) prefix function_name
+         h_filename = mkVPIHName ((foreignWrapperVdir . phaseFlags) flags) prefix function_name
          h_filename_rel = getRelativeFilePath h_filename
 
          -- generate the wrapper file contents
@@ -301,12 +301,12 @@ mkVPIRegisterBody name has_return stores_handles =
              ]
 
 genVPIRegistrationArray :: ErrorHandle ->
-                           Flags -> String -> [String] -> [ForeignFunction] ->
+                           (PhaseConfig ForeignWrapperFlags) -> String -> [String] -> [ForeignFunction] ->
                            IO [String]
 genVPIRegistrationArray _ _ _ _ [] = return []
 genVPIRegistrationArray errh flags prefix blurb ffs =
   do let -- generate the registration array file name
-         c_filename = mkVPIArrayCName (vdir flags) prefix
+         c_filename = mkVPIArrayCName ((foreignWrapperVdir . phaseFlags) flags) prefix
          c_filename_rel = getRelativeFilePath c_filename
 
          -- generate the resitration array file contents
@@ -321,10 +321,10 @@ genVPIRegistrationArray errh flags prefix blurb ffs =
      -- return the file name
      return [c_filename]
 
-mkVPIRegistrationArray :: Flags -> String -> [ForeignFunction] -> Bool -> CCFragment
+mkVPIRegistrationArray :: (PhaseConfig ForeignWrapperFlags) -> String -> [ForeignFunction] -> Bool -> CCFragment
 mkVPIRegistrationArray flags prefix ffs with_fn =
   let names         = [ getIdString (ff_name ff) | ff <- ffs ]
-      include_files = map (mkVPIHName (vdir flags) prefix) names
+      include_files = map (mkVPIHName ((foreignWrapperVdir . phaseFlags) flags) prefix) names
       reg_fn_type   = regRoutineType (mkVar "vpi_register_all")
       reg_fn_body   =
         block [ stmt $ (var (name ++ "_vpi_register")) `cCall` []

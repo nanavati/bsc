@@ -4,10 +4,12 @@ import Data.List(nub)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Position(noPosition)
-import Flags(Flags, keepFires, removeUnusedMods, finalcleanup, keepInlined)
+import PhaseConfig
 import Id
 import FStringCompat(mkFString)
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
 import BackendNamingConventions(createVerilogNameMapForAVInst)
 
@@ -32,7 +34,7 @@ data ConnState = ConnState {
                      visited_insts :: S.Set AId,
                      defs          :: M.Map AId ADef,
                      instances     :: M.Map AId AVInst,  -- instances from the package
-                     flags         :: Flags
+                     flags         :: (PhaseConfig VerilogGenFlags)
                  }
 
 -- ==============================
@@ -40,13 +42,13 @@ data ConnState = ConnState {
 -- Final cleanup of the ASyntax before Verilog generation.
 --  * removes unused state module if flag is set
 --  * removes unused variables introduced during veri quirks
-finalCleanup :: Flags -> ASPackage -> ASPackage
+finalCleanup :: (PhaseConfig VerilogGenFlags) -> ASPackage -> ASPackage
 finalCleanup flags pin = (unusedm) pin
     where
       unusedm = if (cleanup) then removeUnusedInsts flags else id
       -- only do this phase if the LSB of the flag is 1
       -- (this flag may be extended to have other functions for other bits)
-      cleanup = odd $ finalcleanup flags
+      cleanup = odd $ (verilogGenFinalcleanup . phaseFlags) flags
 
 
 -- Returns the package with only the wires and instances which are
@@ -56,13 +58,13 @@ finalCleanup flags pin = (unusedm) pin
 --   Typically synthesizable modules will not have any foreign functions.
 --   Note: Removed instances also need to have their ports removed from
 --   the state output list in the ASPackage.  XXX hack used to do this
-removeUnusedInsts :: Flags -> ASPackage -> ASPackage
+removeUnusedInsts :: (PhaseConfig VerilogGenFlags) -> ASPackage -> ASPackage
 removeUnusedInsts flags package =
     package { aspkg_state_instances = ss'',
               aspkg_state_outputs = sos',
               aspkg_values = ds' }
     where
-          keepInlinedMods = keepInlined flags
+          keepInlinedMods = (verilogGenKeepInlined . phaseFlags) flags
           ds = aspkg_values package
           ss = aspkg_state_instances package
           sos = aspkg_state_outputs package
@@ -77,12 +79,12 @@ removeUnusedInsts flags package =
           ds' = filter isDefUsed ds
           isDefUsed :: ADef -> Bool
           isDefUsed def@(ADef i _ _ _) = S.member (adef_objid def) cdefs
-          ss'' = if (removeUnusedMods flags)
+          ss'' = if ((verilogGenRemoveUnusedMods . phaseFlags) flags)
                  then filter isModuleUsed ss
                  else ss
           isModuleUsed :: AVInst -> Bool
           isModuleUsed inst = S.member (avi_vname inst) cinsts
-          sos' = if (removeUnusedMods flags)
+          sos' = if ((verilogGenRemoveUnusedMods . phaseFlags) flags)
                  then filter isPortOfConnectedInst sos
                  else sos
           isPortOfConnectedInst (i,_) =
@@ -97,10 +99,10 @@ removeUnusedInsts flags package =
                        fires ++ instconn ++
                        aVars fs ++ avdefs ++
                        inlinedports ++ keepEvenUnused
-          instconn   = if (removeUnusedMods flags)
+          instconn   = if ((verilogGenRemoveUnusedMods . phaseFlags) flags)
                        then []
                        else concatMap (getPortIdsFromInst flags) ss
-          fires = if (keepFires flags)
+          fires = if ((verilogGenKeepFires . phaseFlags) flags)
                   then [i | def@(ADef i t e _) <- ds, isFire i ]
                   else []
           inlinedports = if (keepInlinedMods)
@@ -109,7 +111,7 @@ removeUnusedInsts flags package =
           keepEvenUnused = [i | def@(ADef i _ _ _) <- ds, hasIdProp i IdP_keepEvenUnused]
 
 -- return a  set of connected nodes and connected instances
-connectedNode :: Flags -> [AId] -> [AVInst] ->  [ADef]  -> (S.Set AId, S.Set AId)
+connectedNode :: (PhaseConfig VerilogGenFlags) -> [AId] -> [AVInst] ->  [ADef]  -> (S.Set AId, S.Set AId)
 connectedNode flags outputs ainsts din = (visited_wires cstate, visited_insts cstate)
     where
     defMap  = M.fromList (map (\d@(ADef i _ _ _) -> (i,d))  din)
@@ -151,7 +153,7 @@ handleInst cstate instId = handleInst2 rootId
                          Nothing -> [] -- inputs have no defs
 
 -- Get AIds from an instance, ports plus clock and reset
-getPortIdsFromInst :: Flags -> AVInst -> [AId]
+getPortIdsFromInst :: (PhaseConfig VerilogGenFlags) -> AVInst -> [AId]
 getPortIdsFromInst flags inst =
         cr ++ portids
     where

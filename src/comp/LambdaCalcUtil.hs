@@ -33,7 +33,7 @@ import Util(makePairs, flattenPairs, allSame, fst2of3)
 import SCC(tsort)
 
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle)
-import Flags
+import PhaseConfig
 import PPrint
 import Id
 import Position (getPosition)
@@ -53,7 +53,7 @@ import Params(isConstAExpr)
 -- -------------------------
 
 -- process the APackge before conversion
-lcAPackageProcess :: ErrorHandle -> Flags -> APackage -> APackage
+lcAPackageProcess :: ErrorHandle -> (PhaseConfig ElabFlags) -> APackage -> APackage
 lcAPackageProcess errh flags apkg = (
   -- update the types of the primitives
   updateAPackageTypes

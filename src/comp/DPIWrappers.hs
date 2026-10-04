@@ -1,20 +1,21 @@
 module DPIWrappers ( genDPIWrappers ) where
 
+import Warmup ()
 import ForeignFunctions(ForeignFunction(..), isPoly)
 import CCSyntax(CCFragment)
 import Position(getPosition)
 import Error(ErrorHandle, bsError, ErrMsg(EGeneric))
-import Flags(Flags(..))
+import PhaseConfig
 
 genDPIWrappers :: ErrorHandle ->
-                  Flags -> String -> [String] -> [ForeignFunction] ->
+                  (PhaseConfig ForeignWrapperFlags) -> String -> [String] -> [ForeignFunction] ->
                   IO [CCFragment]
 genDPIWrappers errh flags prefix blurb ffs =
   do files <- mapM (writeWrapper errh flags prefix blurb) ffs
      return $ concat files
 
 writeWrapper :: ErrorHandle ->
-                Flags -> String -> [String] -> ForeignFunction ->
+                (PhaseConfig ForeignWrapperFlags) -> String -> [String] -> ForeignFunction ->
                 IO [CCFragment]
 writeWrapper errh flags prefix blurb (FF name rt arg_types) =
   if (isPoly rt || any isPoly arg_types)

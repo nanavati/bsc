@@ -109,7 +109,6 @@ import Data.Maybe
 import FStringCompat(mkNumFString)
 
 import qualified Data.Set as S
-import Flags
 import Error(internalError, EMsg, ErrMsg(..))
 import PFPrint
 import IStateLoc(IStateLoc)
@@ -321,9 +320,9 @@ renameFromMap idmap id = fromMaybe id newId
 
 -- Return a new second set of rules, with names changed to not clash
 -- with a first set of rules
-uniquifyRules :: Flags -> Integer -> IRules a -> IRules a -> (Integer, IRules a)
-uniquifyRules flags suf r1@(IRules _ rs1) r2@(IRules sps2 rs2) =
-    if (ruleNameCheck flags)
+uniquifyRules :: Bool -> Integer -> IRules a -> IRules a -> (Integer, IRules a)
+uniquifyRules checkRuleNames suf r1@(IRules _ rs1) r2@(IRules sps2 rs2) =
+    if checkRuleNames
     then let rids1 = map getIRuleId rs1
              rids2 = map getIRuleId rs2
              -- rename the rules in r2 if needed
@@ -339,54 +338,54 @@ uniquifyRules flags suf r1@(IRules _ rs1) r2@(IRules sps2 rs2) =
              sps2' = mapSPIds (renameFromMap idmap) sps2
          in  (suf', IRules sps2' rs2')
 
-iRUnion :: Flags -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
-iRUnion flags suf r1@(IRules _ rs1) r2 =
-    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules flags suf r1 r2
+iRUnion :: Bool -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
+iRUnion checkRuleNames suf r1@(IRules _ rs1) r2 =
+    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules checkRuleNames suf r1 r2
         (errs, sps) = checkRUnionAttributes r1 r2_unique
     in  (suf', IRules sps (rs1 ++ rs2), errs)
 
-iRUnionPreempt :: Flags -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
-iRUnionPreempt flags suf r1@(IRules _ rs1) r2 =
-    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules flags suf r1 r2
+iRUnionPreempt :: Bool -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
+iRUnionPreempt checkRuleNames suf r1@(IRules _ rs1) r2 =
+    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules checkRuleNames suf r1 r2
         (errs, sps) = checkRUnionAttributes r1 r2_unique
         sps3 = [SPPreempt (map getIRuleId rs1) (map getIRuleId rs2)]
     in  (suf', IRules (sps3 ++ sps) (rs1 ++ rs2), errs)
 
-iRUnionUrgency :: Flags -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
-iRUnionUrgency flags suf r1@(IRules _ rs1) r2 =
-    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules flags suf r1 r2
+iRUnionUrgency :: Bool -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
+iRUnionUrgency checkRuleNames suf r1@(IRules _ rs1) r2 =
+    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules checkRuleNames suf r1 r2
         (errs, sps) = checkRUnionAttributes r1 r2_unique
         sps3 = [ SPUrgency [rid1, rid2]
                    | rid1 <- map getIRuleId rs1,
                      rid2 <- map getIRuleId rs2 ]
     in  (suf', IRules (sps3 ++ sps) (rs1 ++ rs2), errs)
 
-iRUnionExecutionOrder :: Flags -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
-iRUnionExecutionOrder flags suf r1@(IRules _ rs1) r2 =
-    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules flags suf r1 r2
+iRUnionExecutionOrder :: Bool -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
+iRUnionExecutionOrder checkRuleNames suf r1@(IRules _ rs1) r2 =
+    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules checkRuleNames suf r1 r2
         (errs, sps) = checkRUnionAttributes r1 r2_unique
         sps3 = [ SPExecutionOrder [rid1, rid2]
                    | rid1 <- map getIRuleId rs1,
                      rid2 <- map getIRuleId rs2 ]
     in  (suf', IRules (sps3 ++ sps) (rs1 ++ rs2), errs)
 
-iRUnionPairwiseSchedPragma :: Flags -> Integer
+iRUnionPairwiseSchedPragma :: Bool -> Integer
                            -> ([[Id]] -> ISchedulePragma)
                            -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
-iRUnionPairwiseSchedPragma flags suf sched_pragma r1@(IRules _ rs1) r2 =
-    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules flags suf r1 r2
+iRUnionPairwiseSchedPragma checkRuleNames suf sched_pragma r1@(IRules _ rs1) r2 =
+    let (suf', r2_unique@(IRules _ rs2)) = uniquifyRules checkRuleNames suf r1 r2
         (errs, sps) = checkRUnionAttributes r1 r2_unique
         sps3 = [sched_pragma [ map getIRuleId rs1, map getIRuleId rs2 ]]
     in  (suf', IRules (sps3 ++ sps) (rs1 ++ rs2), errs)
 
-iRUnionMutuallyExclusive :: Flags -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
-iRUnionMutuallyExclusive flags suf r1 r2 =
-    iRUnionPairwiseSchedPragma flags suf SPMutuallyExclusive r1 r2
+iRUnionMutuallyExclusive :: Bool -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
+iRUnionMutuallyExclusive checkRuleNames suf r1 r2 =
+    iRUnionPairwiseSchedPragma checkRuleNames suf SPMutuallyExclusive r1 r2
 
-iRUnionConflictFree :: Flags -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
-iRUnionConflictFree flags suf r1 r2 =
+iRUnionConflictFree :: Bool -> Integer -> IRules a -> IRules a -> (Integer, IRules a, [EMsg])
+iRUnionConflictFree checkRuleNames suf r1 r2 =
     -- trace "iRUnionConflictFree" $
-    iRUnionPairwiseSchedPragma flags suf SPConflictFree r1 r2
+    iRUnionPairwiseSchedPragma checkRuleNames suf SPConflictFree r1 r2
 
 iREmpty :: IRules a
 iREmpty = IRules [] []

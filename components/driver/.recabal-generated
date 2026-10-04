@@ -1,0 +1,13 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+ABinUtil.hs
+Depend.hs
+DriverTopUtils.hs
+Exceptions.hs
+Flags.hs
+FlagsDecode.hs
+FlagsDefaults.hs
+PhaseConfigDriver.hs
+SetupHooks.hs
+Version.hs
+bsc-driver.cabal

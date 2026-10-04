@@ -26,17 +26,18 @@ import FileIOUtil(appendFileCatch, writeFileCatch)
 import IOMutVar
 
 -- compiler libs
-import Flags( Flags(..), verbose, quiet,
-             DumpFlag(..), dumpInfo)
+import FlagTypes(DumpFlag(..))
+import PhaseConfig(PhaseConfig(..), RunFlags(..), RunOptions(..),
+                   verbose, quiet, dumpInfo)
 -- import CSyntax
 import CVPrint
 import IdPrint
 import ISyntax(IPackage(..), IModule(..),
                IStateVar(..), IRules(..))
-import ASyntax(APackage(..), ASPackage(..), ARule(..),
+import ASyntax(APackage(..), ARule(..),
                aif_name)
 import SystemVerilogTokens(SV_Token(..))
-import Version(bluespec, bscVersionStr)
+import CompilerVersion(CompilerVersion, bluespec, formatBscVersion)
 
 import Error(ErrorHandle, exitOK)
 
@@ -87,27 +88,27 @@ dfltBSC_MAKEFLAGS = ""
 fmtDouble :: Double -> String
 fmtDouble = printf "%.2f"
 
-start :: Flags -> DumpFlag -> IO ()
+start :: PhaseConfig config -> DumpFlag -> IO ()
 start flags d = when (verbose flags) (putStrLnF ("starting " ++ drop 2 (show d)) >> hFlush stdout)
 
 type DumpNames = (Maybe String {- file name (last path component) -}, Maybe String {- package name -}, Maybe String {- module name -})
 
 dump :: (PPrint a, NFData a) =>
-        ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
+        ErrorHandle -> PhaseConfig config -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
 dump errh flags t d names a =
         deepseq a          -- force evaluation
         dumpStr errh flags t d names (ppReadable a)
 
 ddump :: (PPrint a, NFData a) =>
-        ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
+        ErrorHandle -> PhaseConfig config -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
 ddump errh flags t d names a =
         deepseq a $        -- force evaluation
         dumpStr errh flags t d names (ppDebug a)
 
 vdump :: (PVPrint a, NFData a) =>
-        ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
+        ErrorHandle -> PhaseConfig config -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
 vdump errh flags t d names a =
         deepseq a $        -- force evaluation
@@ -115,7 +116,7 @@ vdump errh flags t d names a =
 
 
 sdump :: (Show a, NFData a) =>
-        ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> a
+        ErrorHandle -> PhaseConfig config -> TimeInfo -> DumpFlag -> DumpNames -> a
      -> IO TimeInfo
 sdump errh flags t d names a =
         deepseq a $        -- force evaluation
@@ -124,7 +125,7 @@ sdump errh flags t d names a =
 dumpedFiles :: MutableVar (S.Set FilePath)
 dumpedFiles = unsafePerformIO $ newVar S.empty
 
-dumpStr :: ErrorHandle -> Flags -> TimeInfo -> DumpFlag -> DumpNames -> String
+dumpStr :: ErrorHandle -> PhaseConfig config -> TimeInfo -> DumpFlag -> DumpNames -> String
         -> IO TimeInfo
 dumpStr errh flags t d names@(file, pkg, mod) a = do
     -- the name of this stage
@@ -157,7 +158,7 @@ dumpStr errh flags t d names@(file, pkg, mod) a = do
     -- second, dump the timestamp (and get the new time)
     t' <- timestamp flags t
     -- finally, decide whether to exit here
-    case (kill flags) of
+    case (runKill (phaseRunFlags flags)) of
         (Just (pass, Nothing))
           | pass == d -> do
              putStrLnF ("\ncompilation stopped because of -KILL" ++
@@ -183,7 +184,7 @@ substNames names@(file,pkg,mod,stage) ('%':c:cs) = subst ++ substNames names cs
                   c'  -> [c']
 substNames names (c:cs) = c : substNames names cs
 
-timestamp :: Flags -> TimeInfo -> IO TimeInfo
+timestamp :: PhaseConfig config -> TimeInfo -> IO TimeInfo
 timestamp flags t = do
         t' <- getNow
         when (verbose flags) $
@@ -191,7 +192,7 @@ timestamp flags t = do
         return t'
 
 -- a simplfiied "dumpStr" which only prints a title and the timestamp
-timestampStr :: Flags -> String -> TimeInfo -> IO TimeInfo
+timestampStr :: PhaseConfig config -> String -> TimeInfo -> IO TimeInfo
 timestampStr flags title t = do
         t' <- getNow
         when (verbose flags) $ do
@@ -213,9 +214,9 @@ printElapsed t t' = do
         putStrLnF (" elapsed time: CPU " ++ fmtDouble dc ++ "s, real " ++ fmtDouble dr ++ "s\n")
 
 
-stats :: (Stats a) => Flags -> DumpFlag -> a -> IO ()
+stats :: (Stats a) => PhaseConfig config -> DumpFlag -> a -> IO ()
 stats flags df a =
-    if not (showStats flags) then
+    if not (runShowStats (phaseRunOptions flags)) then
         return ()
     else do
         putStrLn (pretty 78 78 (text ("stats " ++ drop 2 (show df) ++ ":") $+$ (text "  " <> pStats (verbose flags) a)))
@@ -302,18 +303,6 @@ instance Stats APackage where
          if v then text "" <+> pPrint PDReadable 0 (map aif_name (apkg_interface apkg)) else text "")
         ))
 
-instance Stats ASPackage where
-    pStats _ (ASPackage i _ _ os is ios vs sos ds _ fs _ _ _) =
-        (text "module" <+> ppId PDReadable i) $+$
-        (text "  " <> (
-        showLen os "outputs" $+$
-        showLen is "inputs" $+$
-        showLen ios "inouts" $+$
-        showLen vs "state elements" $+$
-        showLen sos "state elements outputs" $+$
-        showLen ds "local definitions" $+$
-        showLen fs "foreign function calls"))
-
 instance Stats [SV_Token] where
     pStats _ toks = showLen toks "tokens"
 
@@ -340,15 +329,15 @@ showCnt cnt s = text $ itos cnt ++ " " ++ s
 -- ------------
 
 -- | Makes a timestamp string for generated code, respecting the timeStamps flag
-mkTimestampComment :: Flags -> IO String
-mkTimestampComment flags
-  | timeStamps flags = getClockTime >>= return . ("On " ++) . show
-  | otherwise        = return ""
+mkTimestampComment :: Bool -> IO String
+mkTimestampComment timeStamps
+  | timeStamps = getClockTime >>= return . ("On " ++) . show
+  | otherwise = return ""
 
-mkGenFileHeader :: Flags -> IO [String]
-mkGenFileHeader flags = do
-  ts <- mkTimestampComment flags
-  let compiler = bscVersionStr (showVersion flags)
+mkGenFileHeader :: CompilerVersion -> Bool -> Bool -> IO [String]
+mkGenFileHeader identity showVersion timeStamps = do
+  ts <- mkTimestampComment timeStamps
+  let compiler = formatBscVersion identity showVersion
       -- Take a list of comment lines. If empty, delete them, else
       -- put a newline after the comment to separate them.
       addBlanks = concatMap (\x -> if x == "" then [] else [x, ""])

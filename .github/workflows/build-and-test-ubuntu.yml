@@ -76,7 +76,7 @@ jobs:
           # An STP test hangs on the ARM runners
           if [[ "${{ inputs.os }}" == *-arm ]]; then
               export STP_STUB=1
-              printf "package bsc\n  flags: +stp-stub\n" >> cabal.project.local
+              printf "package bsc-stp\n  flags: +stp-stub\n" >> cabal.project.local
             fi
 
           make GHCJOBS="${GHCJOBS}" GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src

@@ -23,6 +23,7 @@ FlexibleInstances is necessary.
 --
 module RSchedule(rSchedule, RAT, ratToNestedLists) where
 
+import Warmup ()
 import Data.List((\\),partition,sortBy)
 import Data.Maybe(maybeToList)
 import Control.Monad(when)
@@ -36,7 +37,8 @@ import AUses(RuleId, MethodId, UniqueUse, MethodUsesMap, MethodUsers,
 import ErrorMonad(ErrorMonad(..))
 import Error(internalError, EMsg, ErrMsg(..))
 import Util(ordPair, mapFst)
-import Flags(ResourceFlag(..))
+import FlagTypes(ResourceFlag(..))
+import RScheduleTypes (RAT, ratToNestedLists)
 import PFPrint(pfpString)
 import Id(Id)
 import Position(prPosition,getPosition)
@@ -55,19 +57,6 @@ trace_uugraph = "-trace-uugraph" `elem` progArgs
 
 -- ==============================
 -- Data types
-
-type RAT = M.Map MethodId (M.Map UniqueUse Integer) -- resource allocation table
-
--- hack to avoid sorting order differences after switching from a list to a map
-sortRatList :: [(MethodId, [(UniqueUse, Integer)])] -> [(MethodId, [(UniqueUse, Integer)])]
-sortRatList = sortBy cmp
-    where cmp x y = compare (ppString x) (ppString y)
-
-ratToNestedLists :: RAT -> [(MethodId, [(UniqueUse, Integer)])]
-ratToNestedLists = sortRatList . M.toList . M.map M.toList
-
-instance PPrint RAT where
-  pPrint d p = pPrint d p . ratToNestedLists
 
 -- ---------------
 

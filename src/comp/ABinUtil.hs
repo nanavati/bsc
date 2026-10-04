@@ -1,11 +1,12 @@
 module ABinUtil (
-                 HierMap, InstModMap, ABinMap,
+                 HierMap, InstModMap, ABinMap, ArtifactReader,
                  getABIHierarchy, assertNoSchedErr,
                  readAndCheckABin,
                  readAndCheckABinPath,
                  readAndCheckABinPathCatch,
                  ) where
 
+import Warmup ()
 import Data.List(nub, partition)
 import Data.Maybe(isJust, fromJust)
 import Control.Monad(when)
@@ -29,7 +30,7 @@ import ASyntaxUtil(getForeignCallNames)
 import VModInfo(vName, getVNameString)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap)
 import ABin
-import GenABin(readABinFile)
+import ArtifactHierarchy(HierMap, InstModMap, ABinMap)
 
 import qualified Data.Map as M
 
@@ -44,19 +45,9 @@ import qualified Data.Map as M
 -- ---------------
 -- Data types
 
--- a map from a module name to pairs of (inst,mod) for each
--- non-prim submodule instantiation.  thus, by following from the top,
--- the entire hierarchy can be reconstructed.
--- (one list for normal modules and one list for no-inline modules)
-type HierMap = M.Map String ([(String, String)], [(String, String)])
-
--- map from hierarchical instance name ("" for topmod, "foo" for
--- submod instance foo, "foo.bar" for instance bar inside foo, etc)
--- to name of the module of which it is an instance
-type InstModMap = M.Map String String
-
--- map from module name to the name of the file it was read from
-type ABinMap = M.Map String FilePath
+-- The driver selects the wire format; hierarchy resolution sees only the
+-- compiler's neutral in-memory module view.
+type ArtifactReader = ErrorHandle -> FilePath -> BS.ByteString -> IO (ABin, String)
 
 -- ---------------
 
@@ -73,6 +64,7 @@ type M = StateT MState (ExceptT EMsgs IO)
 -- monad state
 data MState = MState {
          m_errHandle :: ErrorHandle
+       , m_reader :: ArtifactReader
        , m_verbose :: Bool
        , m_ifc_path :: [String]
        , m_backend :: Maybe Backend
@@ -125,12 +117,12 @@ putHierMap m = get >>= \s -> put (s { m_foundmod_map = m })
 
 -- prim_names = list of primtives which don't need .ba files
 getABIHierarchy ::
-    ErrorHandle -> Bool -> [String] -> (Maybe Backend) ->
+    ArtifactReader -> ErrorHandle -> Bool -> [String] -> (Maybe Backend) ->
     [String] -> String -> [(String, ABin)] ->
     ExceptT EMsgs IO
         (Id, HierMap, InstModMap, ForeignFuncMap, ABinMap, [String],
          [(String, (ABinEitherModInfo, String))])
-getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
+getABIHierarchy reader errh be_verbose ifc_path backend prim_names topname fabis = do
     -- pair the abis with their module name
     let
         pair_with_name (f,abi) = (getIdString (getABIName abi), (f,abi))
@@ -139,6 +131,7 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
     -- create the initial state
     let state0 = MState {
                      m_errHandle = errh,
+                     m_reader = reader,
                      m_verbose = be_verbose,
                      m_ifc_path = ifc_path,
                      m_backend = backend,
@@ -412,7 +405,7 @@ findABI isMod mparent lookup_name = do
                          Nothing -> internalError "findABI: ffunc mparent"
             (file, abi) <-
                 fromMaybeM (throwError (EMsgs [err])) $
-                lift $ readAndCheckABinPath errh be_verbose ifc_path backend
+                lift $ readAndCheckABinPath (m_reader s) errh be_verbose ifc_path backend
                            lookup_name
             recordFile lookup_name file
             return abi
@@ -462,25 +455,26 @@ getABIName (ABinForeignFunc funcinfo _) =
 
 -- given a relative filename for an ABin file,
 -- returns the filename and the contents
-readAndCheckABin :: ErrorHandle -> Maybe Backend -> String -> IO (String, ABin)
-readAndCheckABin errh backend filename = do
+readAndCheckABin :: ArtifactReader -> ErrorHandle -> Maybe Backend -> String -> IO (String, ABin)
+readAndCheckABin reader errh backend filename = do
     contents <- readBinaryFileCatch errh noPosition filename
-    abin <- either (bsError errh) return $
-                decodeABin errh backend filename contents
+    decoded <- decodeABin reader errh backend filename contents
+    abin <- either (bsError errh) return decoded
     return (filename,abin)
 
 -- given a module name, looks through the path for the ABin file,
 -- returns the filename and the contents
-readAndCheckABinPath :: ErrorHandle ->
+readAndCheckABinPath :: ArtifactReader -> ErrorHandle ->
                         Bool -> [String] -> (Maybe Backend) -> String ->
                         (ExceptT EMsgs IO) (Maybe (String, ABin))
-readAndCheckABinPath errh be_verbose path backend mod_name = do
+readAndCheckABinPath reader errh be_verbose path backend mod_name = do
     let binname = mod_name ++ "." ++ abinSuffix
     mread <- lift $ readBinFilePath errh noPosition be_verbose binname path
     case mread of
       Nothing -> return Nothing
       Just (contents, filename) -> do
-          case (decodeABin errh backend binname contents) of
+          decoded <- lift $ decodeABin reader errh backend binname contents
+          case decoded of
             Left msgs -> throwError (EMsgs msgs)
             Right abi -> do
                 -- check that the file contains the module of the expected name
@@ -492,20 +486,20 @@ readAndCheckABinPath errh be_verbose path backend mod_name = do
                                    EABinNameMismatch mod_name filename file_mod_name)])
 
 readAndCheckABinPathCatch ::
-    ErrorHandle -> Bool -> [String] -> (Maybe Backend) -> String -> EMsg ->
+    ArtifactReader -> ErrorHandle -> Bool -> [String] -> (Maybe Backend) -> String -> EMsg ->
     IO (String, ABin)
-readAndCheckABinPathCatch errh be_verbose path backend mod_name errmsg = do
+readAndCheckABinPathCatch reader errh be_verbose path backend mod_name errmsg = do
     mabi <- convExceptTToIO errh $
-            readAndCheckABinPath errh be_verbose path backend mod_name
+            readAndCheckABinPath reader errh be_verbose path backend mod_name
     case mabi of
       Nothing -> bsError errh [errmsg]
       Just abi -> return abi
 
-decodeABin :: ErrorHandle -> Maybe Backend -> String -> BS.ByteString ->
-              Either [EMsg] ABin
-decodeABin errh backend filename contents =
-    let (abi, _) = readABinFile errh filename contents
-    in
+decodeABin :: ArtifactReader -> ErrorHandle -> Maybe Backend -> String -> BS.ByteString ->
+              IO (Either [EMsg] ABin)
+decodeABin reader errh backend filename contents = do
+    (abi, _) <- reader errh filename contents
+    return $
       -- XXX do something to check the sig?
       -- XXX check that each module has the signature of the others?
       -- does the ABI BSC version match?

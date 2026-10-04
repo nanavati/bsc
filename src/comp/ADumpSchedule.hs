@@ -13,6 +13,7 @@ module ADumpSchedule(
                     ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
+import Warmup ()
 import Prelude hiding ((<>))
 #endif
 
@@ -23,6 +24,7 @@ import Data.List(delete, find)
 import qualified Data.Set as S
 
 import ASyntax
+import StaticSchedule
 import Error(internalError, showWarningList, getErrMsgTag, ErrMsg(..),
              ErrorHandle, bsWarning, emptyContext)
 import Id
@@ -31,7 +33,8 @@ import VModInfo(VSchedInfo)
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import AScheduleInfo
 import ADumpScheduleInfo
-import Flags(Flags, quiet, showSchedule, removeStarvedRules, infoDir, hasDump, DumpFlag(..))
+import PhaseConfig
+import FlagTypes (DumpFlag(..), ResourceFlag(..))
 import Position
 import Pragma
 import PFPrint
@@ -51,10 +54,10 @@ list_or_none l doc =
 ruleBlockers :: AScheduler -> [(ARuleId, [ARuleId])]
 ruleBlockers (ASchedEsposito espositoSch) = espositoSch
 
-dumpRule :: Flags -> [ADef] -> (ARuleId, AExpr, Maybe [ARuleId]) -> Doc
+dumpRule :: ScheduleConfig -> [ADef] -> (ARuleId, AExpr, Maybe [ARuleId]) -> Doc
 dumpRule flags ds (rid, predicate, maybe_blockers) =
   text ("Rule:") <+> text (dropRulePrefix rid) $$
-  text ("Predicate:") <+> (pPrintExpandFlags flags ds PDReadable bContext predicate) $$
+  text ("Predicate:") <+> (pPrintExpandFlags (schedExpandATSlimit (phaseFlags flags)) ds PDReadable bContext predicate) $$
   (case maybe_blockers of
      Just blockers ->
          text ("Blocking rules:") <+> (list_or_none
@@ -66,11 +69,11 @@ dumpRule flags ds (rid, predicate, maybe_blockers) =
   space -- insert blank line
 
 -- flags aren't really necessary, but dumpMethod wants them
-dumpMethodInfo :: Flags -> MethodDumpInfo -> [Doc]
+dumpMethodInfo :: ScheduleConfig -> MethodDumpInfo -> [Doc]
 dumpMethodInfo flags [] = [text str_none] -- show that there is no information
 dumpMethodInfo flags mdis = map (dumpMethod flags False []) mdis
 
-dumpMethod :: Flags -> Bool -> [ADef] -> (AMethodId, AExpr, [(AMethodId, RuleConflictType)]) -> Doc
+dumpMethod :: ScheduleConfig -> Bool -> [ADef] -> (AMethodId, AExpr, [(AMethodId, RuleConflictType)]) -> Doc
 dumpMethod flags dumpRdy ds (mid, p, clist) =
   let cf_lst        = [rid | (rid, cftype) <- clist, cftype == ConflictFree]
       scbefore_lst  = [rid | (rid, cftype) <- clist, cftype == SCBefore]
@@ -85,7 +88,7 @@ dumpMethod flags dumpRdy ds (mid, p, clist) =
   in
     text ("Method:") <+> text (getFromReady mid) $$
     (if dumpRdy
-     then text ("Ready signal:") <+> (pPrintExpandFlags flags ds PDReadable bContext p)
+     then text ("Ready signal:") <+> (pPrintExpandFlags (schedExpandATSlimit (phaseFlags flags)) ds PDReadable bContext p)
      else empty
     ) $$
     plist "Conflict-free:" cf_lst $$
@@ -116,7 +119,7 @@ dumpMethodBVI (mid, p, clist) =
     plist " C (" ");"   conflict_lst $$
     space -- insert blank line
 
-aDumpSchedule :: ErrorHandle -> Flags -> [PProp] -> String ->
+aDumpSchedule :: ErrorHandle -> ScheduleConfig -> [PProp] -> String ->
                  APackage -> AScheduleInfo
               -> IO (APackage, AScheduleInfo, MethodDumpInfo)
 aDumpSchedule errh flags pps prefix pkg aschedinfo = do
@@ -147,7 +150,7 @@ aDumpSchedule errh flags pps prefix pkg aschedinfo = do
    -- (rule or method will never fire)
    --
    let str = "dumpsched_" ++ ppString (apkg_name pkg)
-   sat_state0 <- initSATState str errh flags True ds ss
+   sat_state0 <- initSATState str errh (schedSatBackend (phaseFlags flags)) True ds ss
 
    -- function to fold over a list of pairs of a rule/method Id and
    -- its condition, returning a list of the bad Ids, threading the state
@@ -206,7 +209,7 @@ aDumpSchedule errh flags pps prefix pkg aschedinfo = do
    return (new_pkg, new_aschedinfo, methodDumpMap)
 
 
-aDumpScheduleErr :: ErrorHandle -> Flags -> String -> APackage ->
+aDumpScheduleErr :: ErrorHandle -> ScheduleConfig -> String -> APackage ->
                     AScheduleErrInfo -> IO ()
 aDumpScheduleErr errh flags prefix pkg aschedinfo = do
 
@@ -229,7 +232,7 @@ aDumpScheduleErr errh flags prefix pkg aschedinfo = do
            maybe_methodDumpMap rulePredMap
 
 
-doShowSchedule :: ErrorHandle -> Flags -> String -> APackage ->
+doShowSchedule :: ErrorHandle -> ScheduleConfig -> String -> APackage ->
                   Either AScheduleErrInfo AScheduleInfo ->
                   Maybe MethodDumpInfo -> [(ARuleId, APred)] -> IO ()
 doShowSchedule errh flags prefix pkg
@@ -400,3 +403,10 @@ removeADefMethodPredsByRuleId dropped_rule_ids ds =
             (isForDroppedRule ps)
     in
         filter (not . dropDef) ds
+
+-- Local projections keep this phase independent of invocation-wide options.
+
+type ScheduleConfig = PhaseConfig SchedFlags
+infoDir cfg = runInfoDir (phaseRunOptions cfg)
+removeStarvedRules cfg = schedRemoveStarvedRules (phaseFlags cfg)
+showSchedule cfg = runShowSchedule (phaseRunOptions cfg)

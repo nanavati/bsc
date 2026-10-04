@@ -19,7 +19,7 @@ import Error(ErrorHandle, internalError)
 import Pretty
 import PPrint(PPrint(..), ppReadable)
 
-import Flags
+import FlagTypes (SATFlag(..))
 import ASyntax
 import ASyntaxUtil(AExprs(..), aAnd)
 import Pragma
@@ -46,17 +46,17 @@ data DisjointTestState = DTS_Yices DSupportMap Yices.YState
 -- -------------------------
 
 initDisjointTestState ::
-    String -> ErrorHandle -> Flags ->
+    String -> ErrorHandle -> SATFlag ->
     [ADef] -> [AVInst] -> [(ARuleId, [AExpr], Maybe ARuleId)] ->
     IO DisjointTestState
 initDisjointTestState str errh flags ds avis rs = do
     let supportMap = buildSupportMap ds avis rs
-    case (satBackend flags) of
+    case flags of
       SAT_Yices -> do
-          yices_state <- Yices.initYState str flags True ds avis rs
+          yices_state <- Yices.initYState str True ds avis rs
           return (DTS_Yices supportMap yices_state)
       SAT_STP -> do
-          stp_state <- STP.initSState str flags True ds avis rs
+          stp_state <- STP.initSState str True ds avis rs
           return (DTS_STP supportMap stp_state)
 
 

@@ -1,11 +1,12 @@
 module ACleanup(aCleanup) where
+import Warmup ()
 import ASyntax
 import ASyntaxUtil
 import Prim
 import DisjointTest(DisjointTestState, initDisjointTestState,
                     addADefToDisjointTestState, checkDisjointExprWithCtx)
 import Data.Maybe
-import Flags(Flags)
+import FlagTypes(SATFlag)
 import Control.Monad(when, zipWithM)
 import Control.Monad.State(StateT, evalStateT, liftIO, get, put)
 import FStringCompat(mkFString)
@@ -66,7 +67,7 @@ newName = do
     return $ mkId noPosition (mkFString (acleanupPref ++ itos i))
 
 
-aCleanup :: ErrorHandle -> Flags -> APackage -> IO APackage
+aCleanup :: ErrorHandle -> SATFlag -> APackage -> IO APackage
 aCleanup errh flags apkg = do
   let userDefs = apkg_local_defs apkg
       state = apkg_state_instances apkg
@@ -79,8 +80,8 @@ aCleanup errh flags apkg = do
   dts <- initDisjointTestState str errh flags (userDefs ++ ifcDefs) state []
   let initstate = initCState dts
   evalStateT (do
-                userARules' <- mapM (cleanupRule flags Nothing) userARules
-                ifs' <- mapM (cleanupIfc flags) ifs
+                userARules' <- mapM (cleanupRule Nothing) userARules
+                ifs' <- mapM cleanupIfc ifs
                 newDefs <- getDefs
 --              traceM (show newDefs)
                 let defs' = userDefs ++ newDefs
@@ -88,32 +89,32 @@ aCleanup errh flags apkg = do
             initstate
 
 
-cleanupRule :: Flags -> Maybe AExpr -> ARule -> CMonad ARule
-cleanupRule flags mrdy (ARule id rps descr wp pred actions asmps splitorig) =
+cleanupRule :: Maybe AExpr -> ARule -> CMonad ARule
+cleanupRule mrdy (ARule id rps descr wp pred actions asmps splitorig) =
   do -- if the rule is the Action part of a method (possible a split method)
      -- then we need to include the method's ready condiion
      let pred' = case mrdy of
                    Nothing -> pred
                    Just rdy -> aAnd rdy pred
-     actions' <- cleanupActions flags pred' actions
+     actions' <- cleanupActions pred' actions
      -- don't cleanup assumption actions because they include no methods
      return (ARule id rps descr wp pred actions' asmps splitorig)
 
-cleanupIfc :: Flags -> AIFace -> CMonad AIFace
-cleanupIfc flags a@(AIAction { aif_pred = rdy, aif_body = rs }) =
-  do rs' <- mapM (cleanupRule flags (Just rdy)) rs
+cleanupIfc :: AIFace -> CMonad AIFace
+cleanupIfc a@(AIAction { aif_pred = rdy, aif_body = rs }) =
+  do rs' <- mapM (cleanupRule (Just rdy)) rs
      return a { aif_body = rs' }
 
-cleanupIfc flags a@(AIActionValue { aif_pred = rdy, aif_body = rs }) =
-  do rs' <- mapM (cleanupRule flags (Just rdy)) rs
+cleanupIfc a@(AIActionValue { aif_pred = rdy, aif_body = rs }) =
+  do rs' <- mapM (cleanupRule (Just rdy)) rs
      return a { aif_body = rs' }
 
-cleanupIfc _ ifc = return ifc
+cleanupIfc ifc = return ifc
 
 -- merge mutually exclusive calls to the same action method
 -- really a later pass lifting (so I suppose no-lift no longer breaks anything)
-cleanupActions :: Flags -> AExpr -> [AAction] -> CMonad [AAction]
-cleanupActions flags pred as =
+cleanupActions :: AExpr -> [AAction] -> CMonad [AAction]
+cleanupActions pred as =
   let
       loop :: [AAction] -> [AAction] -> CMonad [AAction]
       loop merged [] = return (reverse merged)

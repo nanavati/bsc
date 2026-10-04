@@ -7,10 +7,10 @@ module IfcBetterInfo(
                     ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
+import Warmup ()
 import Prelude hiding ((<>))
 #endif
 
-import Flags(Flags)
 import SymTab
 import Id
 import Pragma
@@ -68,11 +68,11 @@ printMaybe d i str x =  text str <> pPrint d i x
 
 
 -- this function pulls the method info from an interface
-extractMethodInfo :: Flags -> SymTab -> Id  -> [BetterInfo]
+extractMethodInfo :: SymTab -> Id  -> [BetterInfo]
 extractMethodInfo = genBetterInfoFromIfc
 
-genBetterInfoFromIfc :: Flags -> SymTab -> Id -> [BetterInfo]
-genBetterInfoFromIfc flags symbolTable ifcId =
+genBetterInfoFromIfc :: SymTab -> Id -> [BetterInfo]
+genBetterInfoFromIfc symbolTable ifcId =
     -- traces("GBN ifcId: " ++ ppReadable ifcId) $
     -- traces("GBN methFields: " ++ ppReadable methFields) $
     -- traces("GBN result: " ++ ppReadable props) $
@@ -84,11 +84,11 @@ genBetterInfoFromIfc flags symbolTable ifcId =
     methFields = zip methIds $ map (findFieldInfo symbolTable ifcId) methIds
     --
     -- covert the information to to IfcBetterName
-    props = map (fieldInfoToBetterInfo flags symbolTable) methFields
+    props = map (fieldInfoToBetterInfo symbolTable) methFields
 
-fieldInfoToBetterInfo :: Flags -> SymTab -> (Id,Maybe FieldInfo) -> BetterInfo
-fieldInfoToBetterInfo flags symTab (fieldId, Nothing) = noMethodInfo fieldId
-fieldInfoToBetterInfo flags symTab (fieldId, Just fi) =
+fieldInfoToBetterInfo :: SymTab -> (Id,Maybe FieldInfo) -> BetterInfo
+fieldInfoToBetterInfo symTab (fieldId, Nothing) = noMethodInfo fieldId
+fieldInfoToBetterInfo symTab (fieldId, Just fi) =
     BetterMethodInfo {mi_id = fieldId,
                       mi_ready  = maybe (id_to_vPort $ mkRdyId fieldId) str_to_vPort mrdy,
                       mi_enable = maybe (id_to_vPort $ mkEnableId fieldId) str_to_vPort  men,

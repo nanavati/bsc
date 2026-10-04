@@ -1,16 +1,14 @@
 module GenForeign (genForeign) where
 
+import Warmup ()
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import Util(headOrErr, findSame)
-import Flags
+import PhaseConfig
 import Pragma
 import Id
 import CSyntax
 import PPrint
-import ABin (ABin(..), ABinForeignFuncInfo(..))
-import GenABin(genABinFile)
 import ForeignFunctions(ForeignFunction(..), mkForeignFunction)
-import Version(bscVersionStr)
 import FileNameUtil(mkAName, getRelativeFilePath)
 import TopUtils(putStrLnF)
 
@@ -18,9 +16,10 @@ import Control.Monad(unless)
 
 -- For dumping purposes, this returns a list of
 -- the foreign src IDs, and their corresponding ForeignFunctions
-genForeign :: ErrorHandle -> Flags -> String -> CPackage ->
+genForeign :: ErrorHandle -> PhaseConfig InternalFlags ->
+              (FilePath -> Id -> ForeignFunction -> IO ()) -> String -> CPackage ->
               IO [(Id, ForeignFunction)]
-genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
+genForeign errh flags writeForeign prefix (CPackage pkg_id _ _ _ _ defs _) =
     let
         isPPforeignImport (PPforeignImport {}) = True
         isPPforeignImport _ = False
@@ -32,17 +31,15 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
         foreignInfos = map extractForeignFuncInfo foreignDefs
 
         genABin info@(src_id, foreign_func) =
-            let ffinfo = ABinForeignFuncInfo src_id foreign_func
-                abin = ABinForeignFunc ffinfo (bscVersionStr True)
-                -- generate the filename
+            let -- generate the filename
                 afilename_base = getIdString (ff_name foreign_func)
-                afilename = mkAName (bdir flags) prefix afilename_base
+                afilename = mkAName (internalBdir (phaseFlags flags)) prefix afilename_base
                 afilename_rel = getRelativeFilePath afilename
                 -- user message
                 abinPrintPrefix = "Foreign import file created: "
             in  do
                    -- write the file with full path
-                   genABinFile errh afilename abin
+                   writeForeign afilename src_id foreign_func
                    -- report the file to the user with relative path
                    -- (typically just the filename, for current directory)
                    unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel

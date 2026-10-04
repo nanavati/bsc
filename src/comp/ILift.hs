@@ -1,7 +1,7 @@
 {-# LANGUAGE PatternGuards #-}
 module ILift(iLift) where
 import PPrint(ppReadable)
-import Flags(Flags, ifLift)
+import PhaseConfig
 import Error(ErrorHandle)
 import ISyntax
 import ISyntaxUtil(ieNot,
@@ -23,7 +23,7 @@ import Util(tracep)
 trace_lift :: Bool
 trace_lift = "-trace-lift" `elem` progArgs
 
-iLift :: ErrorHandle -> Flags -> IModule a -> IModule a
+iLift :: ErrorHandle -> PhaseConfig ElabFlags -> IModule a -> IModule a
 iLift errh flags imod@(IModule { imod_local_defs = ds,
                                  imod_rules      = rs,
                                  imod_interface  = ifc }) =
@@ -34,18 +34,18 @@ iLift errh flags imod@(IModule { imod_local_defs = ds,
 --      itvs'? do we need to go into state vars?
 
 -- just lift the expression inside
-iLiftDef :: ErrorHandle -> Flags -> IDef a -> IDef a
+iLiftDef :: ErrorHandle -> PhaseConfig ElabFlags -> IDef a -> IDef a
 iLiftDef errh flags def = iDefMap (iLiftExpr errh flags) def
 
 -- just lift the def inside
-iLiftIfc :: ErrorHandle -> Flags -> IEFace a -> IEFace a
+iLiftIfc :: ErrorHandle -> PhaseConfig ElabFlags -> IEFace a -> IEFace a
 iLiftIfc errh flags (IEFace i x maybe_e maybe_rs wp fi) =
   IEFace i x (do { (e,t) <- maybe_e ; return ((iLiftExpr errh flags e),t) })
              (do { rs <- maybe_rs ; return (iLiftRules errh flags rs) })
              wp fi
 
 -- try lifting on action expressions
-iLiftExpr :: ErrorHandle -> Flags -> IExpr a -> IExpr a
+iLiftExpr :: ErrorHandle -> PhaseConfig ElabFlags -> IExpr a -> IExpr a
 iLiftExpr errh flags e | (isTAction (iGetType e)) = iLiftActionExpr errh flags e
 -- also lift on the action part of actionvalue structs
 iLiftExpr errh flags (IAps f@(ICon av (ICTuple {})) ts [val_expr, act_expr])
@@ -53,10 +53,10 @@ iLiftExpr errh flags (IAps f@(ICon av (ICTuple {})) ts [val_expr, act_expr])
     = IAps f ts [val_expr, iLiftExpr errh flags act_expr]
 iLiftExpr errh flags e = e
 
-iLiftRules :: ErrorHandle -> Flags -> IRules a -> IRules a
+iLiftRules :: ErrorHandle -> PhaseConfig ElabFlags -> IRules a -> IRules a
 iLiftRules errh flags (IRules sps rs) = IRules sps (map (iLiftRule errh flags) rs)
 
-iLiftRule :: ErrorHandle -> Flags -> IRule a -> IRule a
+iLiftRule :: ErrorHandle -> PhaseConfig ElabFlags -> IRule a -> IRule a
 iLiftRule errh flags r =
     r { irule_body = iLiftExpr errh flags $ irule_body r }
 
@@ -71,16 +71,16 @@ data IActionCond a = IActionCond {
                   }
 
 -- adds an additional condition to an ActionCond
-addCond :: Flags -> IExpr a -> IActionCond a -> IActionCond a
+addCond :: PhaseConfig ElabFlags -> IExpr a -> IActionCond a -> IActionCond a
 addCond flags newcond (IActionCond { action = ac, condition = c}) =
   IActionCond { action = ac, condition = (iTransBoolExpr flags) (newcond `ieAndOpt` c)}
 
 -- transform an action expression into a list of conditional actions (i.e. pushing all the ifs into conditions)
-condActions :: Flags -> IExpr a -> [IActionCond a]
+condActions :: PhaseConfig ElabFlags -> IExpr a -> [IActionCond a]
 
 condActions flags e = concatMap (condActions1 flags) (flatAction e)
 
-condActions1 :: Flags -> IExpr a -> [IActionCond a]
+condActions1 :: PhaseConfig ElabFlags -> IExpr a -> [IActionCond a]
 
 -- if case (recurses using condActions to handle action lists)
 condActions1 flags (IAps (ICon i (ICPrim _ PrimIf)) _ [c,t,f]) =
@@ -92,15 +92,15 @@ condActions1 flags (IAps (ICon i (ICPrim _ PrimIf)) _ [c,t,f]) =
 condActions1 flags e = [IActionCond { action = e, condition = iTrue }]
 
 -- convert an actionCond back into an action expression
-actionCondToIExpr :: ErrorHandle -> Flags -> IActionCond a -> IExpr a
+actionCondToIExpr :: ErrorHandle -> PhaseConfig ElabFlags -> IActionCond a -> IExpr a
 actionCondToIExpr errh flags (IActionCond { action = ac, condition = c}) =
   (fst (iTransExpr errh (ieIfx itAction ((iTransBoolExpr flags) c) ac icNoActions)))
 
 -- implicitly assuming action list
 -- and flattens out
-iLiftActionExpr :: ErrorHandle -> Flags -> IExpr a -> IExpr a
+iLiftActionExpr :: ErrorHandle -> PhaseConfig ElabFlags -> IExpr a -> IExpr a
 iLiftActionExpr errh flags e =
-    if (ifLift flags)
+    if (elabIfLift (phaseFlags flags))
     then (joinActions (concatMap (lift1 errh flags) (flatAction e)))
     else (joinActions (flatAction e))
 
@@ -108,7 +108,7 @@ iLiftActionExpr errh flags e =
 -- expressions where possible e.g. if p r:=5 else r:=7 --> r:= if p then 7 else 5
 -- now implements "power lifting" - combining the same method calls together if they are in
 -- mutually exclusive if branches even if the methods are not always called
-lift1 :: ErrorHandle -> Flags -> IExpr a -> [IExpr a]
+lift1 :: ErrorHandle -> PhaseConfig ElabFlags -> IExpr a -> [IExpr a]
 
 -- bulk of interesting lifting happens when we find an if expression
 lift1 errh flags ifexp@(IAps (ICon id (ICPrim {primOp = PrimIf, iConType = contyp})) [typ] [cunsimp, t, f]) | (isTAction typ) =
@@ -269,7 +269,7 @@ lift1 errh flags e = tracep trace_lift ("default: " ++ (showTypeless e)) $ [e]
 
 -- build the expression cond && otrue || ~cond && ofalse
 -- in an optimized manner
-genLiftCond :: Flags -> IExpr a -> IExpr a -> IExpr a -> IExpr a
+genLiftCond :: PhaseConfig ElabFlags -> IExpr a -> IExpr a -> IExpr a -> IExpr a
 genLiftCond flags cond otrue ofalse | isTrue otrue, isTrue ofalse = iTrue
                                     | isTrue otrue                = cond  `ieOrOpt` ofalse
                                     | isTrue ofalse               = otrue `ieOrOpt` (ieNot cond)

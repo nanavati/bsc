@@ -8,7 +8,7 @@ import PPrint
 import IntLit
 import ErrorUtil(internalError)
 import Position
-import Flags(Flags, keepAddSize, removePrimModules, useNegate, readableMux)
+import PhaseConfig
 import Id
 import PreIds(idUnsigned)
 import FStringCompat(mkFString)
@@ -18,6 +18,8 @@ import qualified Data.Map as M
 import Prim
 import Pragma(defPropsHasNoCSE)
 import ASyntax
+import AVerilogSyntax
+import AVerilogSyntaxUtil ()
 import ASyntaxUtil
 import ForeignFunctions(isAVId, fromAVId)
 -- import AOpt(aOptBoolExpr)
@@ -100,16 +102,16 @@ addExpr t e = do
 
 -- Top Level  operations
 -- Deal with various quirks in the Verilog syntax & semantics.
-aVeriQuirks :: Flags -> ASPackage -> ASPackage
+aVeriQuirks :: (PhaseConfig VerilogGenFlags) -> ASPackage -> ASPackage
 aVeriQuirks flags pkg =
         evalState action initState
   where
         initState =
             QState {
-                qs_keepAddSize = keepAddSize flags,
-                qs_rmPrimModules = removePrimModules flags,
-                qs_useNegate = useNegate flags,
-                qs_readableMux = readableMux flags,
+                qs_keepAddSize = (verilogGenKeepAddSize . phaseFlags) flags,
+                qs_rmPrimModules = (verilogGenRemovePrimModules . phaseFlags) flags,
+                qs_useNegate = (verilogGenUseNegate . phaseFlags) flags,
+                qs_readableMux = (verilogGenReadableMux . phaseFlags) flags,
                 uniqueId = 1,
                 defs = [],
                 rlookup = M.empty

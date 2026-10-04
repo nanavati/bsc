@@ -19,7 +19,8 @@ import Data.Char(toLower)
 import Util(snd3, fst2of3, itos, concatMapM, map_deleteMany, makePairs)
 
 import Error(internalError, ErrorHandle, bsWarning)
-import Flags
+import PhaseConfig
+import FlagTypes(DumpFlag(..))
 import Eval
 import PPrint
 import Id
@@ -38,7 +39,7 @@ import LambdaCalcUtil
 
 -- requires that task splicing has already happened
 --
-convAPackageToLambdaCalc :: ErrorHandle -> Flags -> APackage -> IO SPackage
+convAPackageToLambdaCalc :: ErrorHandle -> (PhaseConfig ElabFlags) -> APackage -> IO SPackage
 
 -- avoid work if a dump wasn't requested
 convAPackageToLambdaCalc errh flags apkg

@@ -11,8 +11,8 @@ Preprocessor for SystemVerilog
 > import Position
 > import Error(internalError, ErrMsg(..), ErrorHandle, bsError, bsErrorUnsafe)
 > import FileIOUtil(readFilePathOrAbs)
-> import Version(versionname)
-> import Flags(Flags, backend, defines, verbose, ifcPath, cpp, vpp)
+> import CompilerVersion(CompilerVersion, compilerVersionName)
+> import PhaseConfig
 > import Backend
 > import Util(isWhitespace, fromMaybeM)
 > import CPPLineDirectives
@@ -35,18 +35,22 @@ The state contains
  * error handle
  * flags
 
-> newtype PreState = PreState ([String], Position, String, [EnvVal], ErrorHandle, Flags)
+> newtype PreState = PreState ([String], Position, String, [EnvVal], ErrorHandle, PhaseConfig ParseFlags)
 
 > type PreProcessor = PreState -> IO (String, [EnvVal])
 
-> emptyEnv :: [EnvVal]
-> emptyEnv = [EnvVal{ env_def = "bluespec",
+The predefined version macros affect source semantics. Their driver-supplied
+value is an input to preprocessing and its result key, just as the language's
+compilerVersion and buildVersion constants are inputs to elaboration.
+
+> emptyEnv :: CompilerVersion -> [EnvVal]
+> emptyEnv identity = [EnvVal{ env_def = "bluespec",
 >                      env_operands = [],
->                      env_value = versionname,
+>                      env_value = compilerVersionName identity,
 >                      env_pos =initialPosition "Prelude"},
 >             EnvVal{ env_def ="BLUESPEC",
 >                      env_operands = [],
->                      env_value = versionname,
+>                      env_value = compilerVersionName identity,
 >                      env_pos = initialPosition "Prelude"}]
 
 > emptyOutput :: [String]
@@ -55,20 +59,20 @@ The state contains
 Scan is not in a monad because of laziness requirements (space efficiency)
 
 > preprocess :: ErrorHandle
->            -> Flags
+>            -> PhaseConfig ParseFlags
 >            -> Position  -- initial position
 >            -> String    -- input
 >            -> IO (String,[String])
 > preprocess errh flags initPos file0 = do
 >     -- perform cpp if requested
->     let file1 = if (cpp flags)
+>     let file1 = if (parseCpp (phaseFlags flags))
 >                 then unlines (map cppLine_to_svLine (lines file0))
 >                 else file0
 >     -- perform vpp if requested
 >     let flagsEnv = populateEnvFromFlags flags
 >         state0 = PreState (emptyOutput, initPos, file1,
->                            flagsEnv ++ emptyEnv, errh, flags)
->     (file2, eis) <- if (vpp flags)
+>                            flagsEnv ++ emptyEnv (phaseCompilerVersion flags), errh, flags)
+>     (file2, eis) <- if (parseVpp (phaseFlags flags))
 >                     then prescanMain state0
 >                     else return (file1, [])
 >     let include_files = map env_inc [ei | ei@(EnvInclude {} ) <- eis ]
@@ -76,15 +80,15 @@ Scan is not in a monad because of laziness requirements (space efficiency)
 >     -- and a list of the included files (for dependency checking)
 >     return (file2, include_files)
 
-> populateEnvFromFlags :: Flags ->  [EnvVal]
+> populateEnvFromFlags :: PhaseConfig ParseFlags ->  [EnvVal]
 > populateEnvFromFlags  flags = map processFlagString (splitStrings ++ extras)
 >     where
->     extras = case (backend flags) of
+>     extras = case (parseBackend (phaseFlags flags)) of
 >                Just Bluesim -> [("__GENC__","")]
 >                Just Verilog -> [("__GENVERILOG__","")]
 >                Nothing -> []
 >     position = newPosition "CommandLine" (-2) (-1)
->     splitStrings = map (break (== '=')) (defines flags)
+>     splitStrings = map (break (== '=')) (parseDefines (phaseFlags flags))
 >     processFlagString :: (String,String) -> EnvVal
 >     processFlagString (def1,[])   = EnvVal{ env_def = def1, env_operands = [], env_value = "", env_pos = position}
 >     processFlagString (def1,def2) = EnvVal{ env_def = def1, env_operands = [], env_value = (tail def2), env_pos = position}
@@ -193,7 +197,7 @@ Toplevel scanner function
 >           do
 >               (fileContents, fileName) <-
 >                   fromMaybeM missingFileErr $
->                       readFilePathOrAbs errh pos (verbose flgs) filestr (ifcPath flgs)
+>                       readFilePathOrAbs errh pos (verbose flgs) filestr (parseIfcPath (phaseFlags flgs))
 >               let env' = (EnvInclude fileName):env
 >               (str,newEnv) <- prescanMain (PreState(emptyOutput, initialPosition fileName,
 >                                                     fileContents, env', errh, flgs))
@@ -207,7 +211,7 @@ Toplevel scanner function
 >                           (PreState (_,p,i,_,_,f)) = (eatChars 10 state)
 >                           includes = [ei | ei@(EnvInclude {}) <- env]
 >                         in
->                           prescanMain(PreState (outp, p, i, emptyEnv ++ includes, errh, f))
+>                           prescanMain(PreState (outp, p, i, emptyEnv (phaseCompilerVersion f) ++ includes, errh, f))
 > prescanMain state@(PreState (outp, pos, ('`':'u':'n':'d':'e':'f':
 >                                          c:restOfInput), env, errh, flgs))
 >     | isWhitespace c = let

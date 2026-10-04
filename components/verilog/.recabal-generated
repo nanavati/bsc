@@ -1,0 +1,36 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+ADropDefs.hs
+AExpand.hs
+AOpt.hs
+APrims.hs
+ARenameIO.hs
+AState.hs
+AVeriQuirks.hs
+AVerilog.hs
+AVerilogCheck.hs
+AVerilogSyntax.hs
+AVerilogSyntaxUtil.hs
+AVerilogUtil.hs
+BackendNamingConventions.hs
+DPIWrappers.hs
+IOProperties.hs
+InlineCReg.hs
+InlineReg.hs
+InlineWires.hs
+LambdaCalc.hs
+LambdaCalcUtil.hs
+SAL.hs
+SetupHooks.hs
+Synthesize.hs
+VFinalCleanup.hs
+VIOProps.hs
+VPIWrappers.hs
+VPrims.hs
+VVerilogDollar.hs
+VerilogAssumptions.hs
+VerilogForeignFunctions.hs
+VerilogNoInline.hs
+VerilogScheduleChecks.hs
+VerilogUndet.hs
+bsc-verilog.cabal
