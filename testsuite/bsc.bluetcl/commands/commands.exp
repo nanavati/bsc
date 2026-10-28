@@ -51,6 +51,7 @@ bluetcl_run_compare_pass module.tcl
 
 # Test "module wiretypemap" (VCD type-correlation map)
 bluetcl_run_compare_pass wiretypemap.tcl
+bluetcl_run_compare_pass wiretypemap_order.tcl
 
 # Evaluated pack/unpack source types survive .ba serialization. Multiple
 # interpretations from CSE/repack are explicit in wiretypecandidates; the
