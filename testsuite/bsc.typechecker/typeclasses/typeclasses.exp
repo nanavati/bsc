@@ -114,6 +114,23 @@ compile_verilog_pass ATFPolyStructIfc.bs
 compile_verilog_pass ATFPolyStructLog.bs
 compile_verilog_pass ATFPolyStructMultiParam.bs
 
+# Test that a user-defined ATF cache miss is resolved by normTFun
+compile_verilog_pass ATFPolyCacheMiss.bs {} "-dexpanded=expanded_%m.out"
+find_n_strings expanded_sysATFPolyCacheMiss.out "EncSize" 0
+
+# Test that a ground ATF resolution recorded at typecheck time HITS
+# the cache during iExpand (same package)
+compile_backend_pass ATFCacheHit.bs {-trace-atf-cache}
+find_regexp ATFCacheHit.bs.bsc-out {ATF cache hit: .*EncSize.*PrimPair}
+find_n_strings ATFCacheHit.bs.bsc-out {ATF cache miss: ATFCacheHit.EncSize} 0
+
+# Test that a ground ATF resolution recorded in an imported package
+# is delivered through its .bo file and HITS in the importer's iExpand
+compile_pass ATFCacheHitDef.bs
+compile_backend_pass ATFCacheHitUse.bs {-trace-atf-cache} 1
+find_regexp ATFCacheHitUse.bs.bsc-out {ATF cache hit: .*EncSize.*PrimPair}
+find_n_strings ATFCacheHitUse.bs.bsc-out {ATF cache miss: ATFCacheHitDef.EncSize} 0
+
 # Test ATF error cases
 
 compile_fail_error ATFWrongArity.bs T0025
@@ -134,6 +151,12 @@ compile_fail_error ATFUnifyError.bs T0030
 compare_file ATFUnifyError.bs.bsc-out
 compile_fail_error ATFUnifyHKError.bs T0030
 compare_file ATFUnifyHKError.bs.bsc-out
+# Same checks as ATFUnify{,HK}Error, but forcing the unification via struct
+# field access instead of via 'id'
+compile_fail_error ATFFieldUnifyError.bs T0030
+compare_file ATFFieldUnifyError.bs.bsc-out
+compile_fail_error ATFFieldUnifyHKError.bs T0030
+compare_file ATFFieldUnifyHKError.bs.bsc-out
 compile_fail_error ATFAmbig.bs T0079
 compare_file ATFAmbig.bs.bsc-out
 compile_fail_error ATFNameClashTwoClasses.bs T0011

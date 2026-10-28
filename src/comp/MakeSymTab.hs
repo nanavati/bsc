@@ -752,10 +752,10 @@ mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
         (cls, errss) =
             unzip $
-              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ifs qts
-                    | Cclass  incoh ps ik vs fds _ ifs <- defs ] ++
-              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds []  qts
-                    | CIclass incoh ps ik vs fds _ _   <- defs ]
+              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats ifs qts
+                    | Cclass  incoh ps ik vs fds ats ifs <- defs ] ++
+              [ getCls errh maybePackageName src_pkg iks r incoh ps ik vs fds ats []  qts
+                    | CIclass incoh ps ik vs fds ats _   <- defs ]
         r = addClasses mkQuals (addTypes mkQuals s importedTypeInfos) cls
     in  (r, concat errss)
 
@@ -865,11 +865,15 @@ mkATFTIs mi src_pkg classId vs ks ats =
           result_k = M.findWithDefault KStar ca_rhs vs_kind_map
           atf_k    = foldr Kfun result_k param_ks
           atf_i    = qual mi ca_name
-          p_idxs   = [ M.findWithDefault (-1) p vs_idx_map | p <- ca_params ]
-          t_idx    = M.findWithDefault (-1) ca_rhs vs_idx_map
+          p_idxs   = [ get_idx p | p <- ca_params ]
+          t_idx    = get_idx ca_rhs
     ]
   where vs_kind_map = M.fromList (zip vs ks)
         vs_idx_map  = M.fromList (zip vs [0..])
+        get_idx v = fromJustOrErr
+          ("mkATFTIs: variable " ++ ppReadable v ++
+           " not found in class " ++ ppReadable classId)
+          (M.lookup v vs_idx_map)
 
 qual :: Maybe Id -> Id -> Id
 qual Nothing i = i
@@ -930,23 +934,27 @@ genBss vs fds = [ map (`elem` rs) vs | (_, rs) <- fds ]
 
 -- Check for overlap errors using the shared instance trie.
 -- Variable positions in the instance key become Free in the probe query
--- so cross-branch overlaps are correctly found.  j /= i avoids self-comparison.
-overlapErrors :: [[Bool]] -> [(Int, QInst, Inst)] -> PredTrie (Int, QInst, Inst) -> [EMsg]
-overlapErrors bss tagged trie = nub errs
+-- so cross-branch overlaps are correctly found.  j > i avoids self-comparison
+-- and processes each unordered pair only once, in the canonical (low, high)
+-- direction that the memo table (see getCls) stores.
+overlapErrors :: (Int -> Int -> Either EMsg (Maybe Ordering)) ->
+                 [(Int, QInst, Inst)] -> PredTrie (Int, QInst, Inst) -> [EMsg]
+overlapErrors pairCmp tagged trie = nub errs
   where
     probeQuery (_, _, Inst _ _ (_ :=> p) _) = overlapProbeQuery p
-    errs = [ e | item@(i, qi, _) <- tagged
-               , (j, qj, _)      <- lookupPredTrie (probeQuery item) trie
-               , j > i           -- process each unordered pair only once
-               , Left e          <- [cmpQInsts bss qi qj] ]
+    errs = [ e | item@(i, _, _) <- tagged
+               , (j, _, _)      <- lookupPredTrie (probeQuery item) trie
+               , j > i
+               , Left e         <- [pairCmp i j] ]
 
 -- ---------------
 
 getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
           -- class components
-          Maybe Bool -> [CPred] -> IdK -> [Id] -> CFunDeps -> CFields ->
+          Maybe Bool -> [CPred] -> IdK -> [Id] -> CFunDeps -> [CAssocDepFun] ->
+          CFields ->
           QInsts -> (Class, [EMsg])
-getCls errh mi src_pkg iks r incoh ps ik vs fds ifs qts =
+getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs qts =
     let k = getK iks ik
         i = iKName ik
         ks = getNK (genericLength vs) k
@@ -965,6 +973,26 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ifs qts =
         -- a list of all False leads to useless work.
         bss2 = [ map (mkFunDep2 rs1 rs2) vs | (rs1, rs2) <- fds ]
         qi = qual mi i
+        vs_kind_map = M.fromList (zip vs ks)
+        vs_idx_map  = M.fromList (zip vs [0 :: Int ..])
+        atf_infos =
+          [ (TyCon atf_i (Just atf_k)
+                 (TIatf { atf_class_id   = qi
+                        , atf_param_idxs = p_idxs
+                        , atf_target_idx = t_idx }),
+             p_idxs, t_idx)
+          | CAssocDepFun ca_name ca_params ca_rhs <- ats
+          , let param_ks = [ M.findWithDefault KStar p vs_kind_map | p <- ca_params ]
+                result_k = M.findWithDefault KStar ca_rhs vs_kind_map
+                atf_k    = foldr Kfun result_k param_ks
+                atf_i    = qual mi ca_name
+                p_idxs   = [ get_idx p | p <- ca_params ]
+                t_idx    = get_idx ca_rhs
+          ]
+        get_idx v = fromJustOrErr
+          ("getTI CIclass: variable " ++ ppReadable v ++
+           " not found in class " ++ ppReadable qi)
+          (M.lookup v vs_idx_map)
         mkClass genInsts' getInsts' =
           Class {
             name = CTypeclass qi,
@@ -980,7 +1008,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ifs qts =
             inputPositions = pureInputPositions bss (length tvs),
             allowIncoherent = incoh,
             isComm = False,
-            pkg_src = src_pkg
+            pkg_src = src_pkg,
+            assocTypes = atf_infos
           }
     in if useLegacyInstIndex
        then let (qinsts, errs) = getQInstsLegacy qi bss qts
@@ -994,17 +1023,59 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ifs qts =
                 -- identity for the overlap self-check; QInst is needed by
                 -- cmpQInsts; Inst is what genInsts returns.
                 tagged = zip3 [0 :: Int ..] qinsts all_insts
-                -- cmpQInsts freshens type variables before comparing, so
-                -- specificity is correctly detected even when instances share
-                -- variable names (e.g. both use 'a' and 'b').
-                cmpForSort (_, qi1, _) (_, qi2, _) =
-                    case cmpQInsts bss qi1 qi2 of
-                        Right (Just LT) -> LT  -- qi1 more specific, try first
-                        Right (Just GT) -> GT  -- qi1 less specific, try last
-                        _               -> EQ
-                trie   = buildPredTrie cmpForSort
+                -- Pairwise instance comparisons, memoized in a lazy Map
+                -- keyed on the canonical (low, high) index pair, so that
+                -- the overlap check and the leaf sort below each force a
+                -- given pair's cmpQInsts at most once between them.
+                -- (cmpQInsts freshens type variables before comparing, so
+                -- specificity is correctly detected even when instances
+                -- share variable names.)
+                cmpMemo = M.fromList
+                    [ ((i, j), cmpQInsts bss qi qj)
+                      | ((i, qi, _) : rest) <- tails tagged
+                      , (j, qj, _) <- rest ]
+                pairCmp i j
+                  | i == j = internalError "MakeSymTab.getCls: pairCmp i i"
+                  | i < j = find_cmp (i, j)
+                  | otherwise = fmap (fmap flipOrd) (find_cmp (j, i))
+                  where find_cmp k = fromJustOrErr "MakeSymTab.getCls: pairCmp"
+                                         (M.lookup k cmpMemo)
+                        flipOrd LT = GT
+                        flipOrd GT = LT
+                        flipOrd EQ = EQ
+                -- Order each trie leaf most-specific-first.  cmpQInsts
+                -- yields only a partial order: non-overlapping instances
+                -- are incomparable.  A comparison sort is not sound for a
+                -- partial order — an incomparable instance between two
+                -- comparable ones can keep the sort from ever comparing
+                -- them, leaving a less-specific instance ahead of a
+                -- strictly-more-specific one (which byInst would then
+                -- select, with no incoherence flagged).  So topologically
+                -- sort the strict specificity edges, as getQInstsLegacy
+                -- does for the whole instance list.  Instances share a
+                -- leaf only when they agree on the head constructor at
+                -- every pure-input position, and the leaf's pairs have
+                -- already been compared by the overlap check, so this
+                -- costs no additional cmpQInsts calls.
+                sortLeaf items@(_:_:_) =
+                    let g = [ (i, [ j | (j, _, _) <- items, i /= j,
+                                        pairCmp j i == Right (Just LT) ])
+                            | (i, _, _) <- items ]
+                        im = M.fromList [ (idx, item) | item@(idx, _, _) <- items ]
+                    in  case tsort g of
+                          Right is ->
+                              [ map_lookupOrErr
+                                    ("MakeSymTab.sortLeaf: tsort returned " ++
+                                     "an index not in the leaf: " ++ show i)
+                                    i im
+                              | i <- is ]
+                          Left cycles ->
+                              internalError ("MakeSymTab.sortLeaf cycles? " ++
+                                             ppReadable cycles)
+                sortLeaf items = items
+                trie   = buildPredTrie sortLeaf
                              (\(_, _, Inst _ _ (_ :=> p) _) -> p) tagged
-                errs   = overlapErrors bss tagged trie
+                errs   = overlapErrors pairCmp tagged trie
                 -- S.empty suppresses Bound: for overlapping classes like
                 -- AppendTuple''/Has_tpl_n, a non-matching concrete instance
                 -- must be visible to trigger the incoherent path in

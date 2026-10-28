@@ -3,7 +3,6 @@
 module GenBin(genBinFile, readBinFile) where
 
 import Control.Monad(when)
-import Data.Word
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
@@ -27,21 +26,25 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260704-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20261028-1"
+
+headerBS :: B.ByteString
+headerBS = B.pack header
 
 genBinFile :: ErrorHandle ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh fn bi_sig bo_sig ipkg =
     writeBinaryFileCatch errh fn (header ++ encode (bi_sig, bo_sig, ipkg))
 
-readBinFile :: ErrorHandle -> String -> [Word8] ->
+readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String)
 readBinFile errh nm s =
-    if take (length header) s == header
-    then let ((bi_sig, bo_sig, ipkg), hash) =
-                 decodeWithHash $ drop (length header) s
-         in return (bi_sig, bo_sig, ipkg, hash)
-    else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+    let hlen = B.length headerBS
+    in if B.take hlen s == headerBS
+       then let ((bi_sig, bo_sig, ipkg), hash) =
+                    decodeWithHash $ B.drop hlen s
+            in return (bi_sig, bo_sig, ipkg, hash)
+       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 -- ----------
 -- Bin CSignature
@@ -535,15 +538,18 @@ instance Bin (IPackage a) where
            toBin (ipkg_depends pkg)
            toBin (ipkg_pragmas pkg)
            toBin (ipkg_defs pkg)
+           toBin (ipkg_atf_cache pkg)
     readBytes = do when doTrace $ traceM("read IPackage")
-                   name    <- fromBin
-                   depends <- fromBin
-                   pragmas <- fromBin
-                   defs    <- fromBin
-                   return $ IPackage { ipkg_name    = name
-                                     , ipkg_depends = depends
-                                     , ipkg_pragmas = pragmas
-                                     , ipkg_defs    = defs
+                   name      <- fromBin
+                   depends   <- fromBin
+                   pragmas   <- fromBin
+                   defs      <- fromBin
+                   atfCache  <- fromBin
+                   return $ IPackage { ipkg_name      = name
+                                     , ipkg_depends   = depends
+                                     , ipkg_pragmas   = pragmas
+                                     , ipkg_defs      = defs
+                                     , ipkg_atf_cache = atfCache
                                      }
 
 -- ----------
@@ -569,7 +575,7 @@ instance Bin (IExpr a) where
     writeBytes (IVar i)       = do putI 2; toBin i
     writeBytes (ILAM i k e)   = do putI 3; toBin i; toBin k; toBin e
     writeBytes (ICon i ic)    = do putI 4; toBin i; toBin ic
-    writeBytes (IRefT _ _ _)  = internalError "GenBin.Bin(IExpr).writeBytes: IRefT"
+    writeBytes (IRefT _ _ _ _) = internalError "GenBin.Bin(IExpr).writeBytes: IRefT"
     readBytes = do tag <- getI
                    case tag of
                      0 -> do i <- fromBin

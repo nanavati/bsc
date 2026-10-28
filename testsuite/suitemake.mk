@@ -44,6 +44,7 @@ TEST_SHOWRULES ?= $(TEST_RELEASE)/bin/showrules
 # These only need to exist when DO_INTERNAL_CHECKS=1
 TEST_BSC2BSV  ?= $(TEST_RELEASE)/bin/bsc2bsv
 TEST_DUMPBO   ?= $(TEST_RELEASE)/bin/dumpbo
+TEST_DUMPBA   ?= $(TEST_RELEASE)/bin/dumpba
 TEST_VCDCHECK ?= $(TEST_RELEASE)/bin/vcdcheck
 
 TEST_CONFIG ?= $(CONFDIR)/config
@@ -61,7 +62,7 @@ TEST_BSC_OPTIONS ?=
 
 RUNTESTENV = MAKEFLAGS= BSCTEST=1 \
 	BSC=$(TEST_BSC) BSC_OPTIONS="${TEST_BSC_OPTIONS}" BSDIR=$(TEST_BSDIR) \
-	DUMPBO=$(TEST_DUMPBO) BSC2BSV=$(TEST_BSC2BSV) \
+	DUMPBO=$(TEST_DUMPBO) DUMPBA=$(TEST_DUMPBA) BSC2BSV=$(TEST_BSC2BSV) \
 	VCDCHECK=$(TEST_VCDCHECK) SHOWRULES=$(TEST_SHOWRULES) \
 	BLUESPECDIR=$(BLUESPECDIR) \
 	BSC_VERILOG_SIM=$(TEST_BSC_VERILOG_SIM) \
@@ -92,14 +93,11 @@ RUNTESTFLAGS += --objdir .
 ## insert the user-specified flags at the end
 RUNTESTFLAGS += --status $(RTFLAGS)
 
-# standard targets
-.PHONY:	check localcheck
-
-
 CHECKPREREQUISITES	?= clean localcheck
 
 
 # run tests in current directory and recurse through subdirs
+.PHONY: check
 check:	$(CHECKPREREQUISITES)
 	$(RUNTESTENV) $(RUNTEST) $(RUNTESTFLAGS)
 
@@ -118,12 +116,14 @@ LOCALCHECKPREREQUISITES ?= localclean
 LOCALCHKCMD ?= $(RUNTESTENV) $(RUNTEST) $(RUNTESTFLAGS) *.exp
 
 # run tests in this directory only
+.PHONY: localcheck
 localcheck: $(LOCALCHECKPREREQUISITES)
 	$(LOCALCHKCMD)
 
 # This creates the file 'all_tests.mk', that is used by the 'run-tests'
 # target in the 'parallel.mk' file.  It also checks for duplicates
 # which can cause problems.
+.PHONY: run-tests-setup
 run-tests-setup:
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
 		| awk '{t=t " " $$0} END{print "ALL_TESTS :=" t}' \

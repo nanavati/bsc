@@ -21,13 +21,14 @@ propagateArgumentMuxTypes pkg = pkg { aspkg_expr_types = propagated }
     seeds =
         [(ASDef t i, S.singleton sourceType) |
           inst <- aspkg_state_instances pkg,
-          Method { vf_name = method, vf_mult = mult, vf_inputs = ports }
+          Method { vf_name = method, vf_mult = mult, vf_inputs = groups }
               <- vFields (avi_vmi inst),
           copy <- if mult > 1 then map Just [0 .. mult - 1] else [Nothing],
-          (argN, (portName, _)) <- zip [1..] ports,
+          (argN, ports) <- zip [1..] groups,
+          (portM, (portName, _)) <- zip (splitPortNums ports) ports,
           Just sourceType <- [M.lookup portName (avi_port_types inst)],
           not (isBareBit sourceType),
-          let i = mkMethId (avi_vname inst) method copy (MethodArg argN),
+          let i = mkMethId (avi_vname inst) method copy (MethodArg argN portM),
           Just t <- [M.lookup i defmap]]
     propagated = propagateSourceTypes muxDataChildren defs
                       (aspkg_expr_types pkg ++ seeds)

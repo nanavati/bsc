@@ -65,6 +65,7 @@ data PrimOp =
         | PrimInoutUncast
 
         | PrimMethod
+        | PrimNoInline
 
         | PrimIf
         | PrimMux
@@ -369,6 +370,7 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primInoutCast" = PrimInoutCast
         tp "primInoutUncast" = PrimInoutUncast
         tp "primMethod" = PrimMethod
+        tp "primNoInline" = PrimNoInline
         tp "primIntegerToBit" = PrimIntegerToBit
         tp "primIntegerToUIntBits" = PrimIntegerToUIntBits
         tp "primIntegerToIntBits"  = PrimIntegerToIntBits
@@ -692,6 +694,7 @@ instance NFData PrimOp where
     rnf PrimInoutCast = ()
     rnf PrimInoutUncast = ()
     rnf PrimMethod = ()
+    rnf PrimNoInline = ()
     rnf PrimIf = ()
     rnf PrimMux = ()
     rnf PrimPriMux = ()

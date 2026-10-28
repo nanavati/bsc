@@ -39,10 +39,10 @@ inst methods portTypes = AVInst (name "child") (ATBit 1) False []
         (SchedInfo (MethodConflictInfo [(vf_name a,vf_name b) | a <- methods, b <- methods] [] [] [] [] [] []) [] [] []) (VPathInfo [])) [] []
 
 method n mult inputs enable = Method (name n) Nothing Nothing mult
-    [(VName p,[]) | p <- inputs] Nothing (fmap (\p -> (VName p,[])) enable)
+    [[(VName p,[]) | p <- ps] | ps <- inputs] [] (fmap (\p -> (VName p,[])) enable)
 
-argument methodName copy argN = mkMethId (name "child") (name methodName) copy (MethodArg argN)
-argdef methodName copy argN w rhs = ADef (argument methodName copy argN) (ATBit w) rhs []
+argument methodName copy argN portM = mkMethId (name "child") (name methodName) copy (MethodArg argN portM)
+argdef methodName copy argN portM w rhs = ADef (argument methodName copy argN portM) (ATBit w) rhs []
 
 types pkg expression = S.unions [ts | (e,ts) <- aspkg_expr_types pkg, e == expression]
 expect label pkg expression wanted = unless (types pkg expression == S.fromList wanted) $
@@ -50,14 +50,14 @@ expect label pkg expression wanted = unless (types pkg expression == S.fromList 
 
 main :: IO ()
 main = do
-    let sink = inst [method "putA" 1 ["A"] (Just "EN"), method "putB" 1 ["B"] Nothing,
-                     method "bits" 1 ["BITS"] Nothing]
+    let sink = inst [method "putA" 1 [["A"]] (Just "EN"), method "putB" 1 [["B"]] Nothing,
+                     method "bits" 1 [["BITS"]] Nothing]
                     [("A", payload), ("B", nibbles), ("BITS", itBitN 8), ("EN", payload)]
         raw = port 8 "sharedRaw"
         sumExpr = APrim defaultAId (ATBit 8) PrimAdd [port 8 "arithmeticInput", port 8 "offset"]
-        ds = [argdef "putA" Nothing 1 8 (mux 8 PrimMux (ref 8 "shared") sumExpr),
-              argdef "putB" Nothing 1 8 (mux 8 PrimPriMux (ref 8 "shared") (port 8 "other")),
-              argdef "bits" Nothing 1 8 (port 8 "bitsOnly"),
+        ds = [argdef "putA" Nothing 1 Nothing 8 (mux 8 PrimMux (ref 8 "shared") sumExpr),
+              argdef "putB" Nothing 1 Nothing 8 (mux 8 PrimPriMux (ref 8 "shared") (port 8 "other")),
+              argdef "bits" Nothing 1 Nothing 8 (port 8 "bitsOnly"),
               ADef (mkMethId (name "child") (name "putA") Nothing MethodEnable) (ATBit 1) (port 1 "enable") [],
               def "shared" 8 raw]
         original = package [sink] ds
@@ -71,19 +71,30 @@ main = do
     unless (result { aspkg_expr_types = [] } == original) $ error "changed hardware fields"
     putStrLn "PASS: mux/priority mux data arms, CSE union, and hardware/control boundaries"
 
-    let multiple = inst [method "multiple" 2 ["LOW","HIGH"] Nothing]
+    let multiple = inst [method "multiple" 2 [["LOW"],["HIGH"]] Nothing]
                         [("LOW",narrow),("HIGH",payload)]
-        multiDefs = [argdef "multiple" copy argN width (port width leaf) |
+        multiDefs = [argdef "multiple" copy argN Nothing width (port width leaf) |
                      (copy, suffix) <- [(Just 0,"0"),(Just 1,"1")],
-                     (argN,width,leaf) <- [(1,4,"low" ++ suffix),(2,8,"high" ++ suffix)]]
+                     (argN,width,leaf) <- [(1,4,"argLow" ++ suffix),(2,8,"argHigh" ++ suffix)]]
         multiResult = propagateArgumentMuxTypes (package [multiple] multiDefs)
     mapM_ (\suffix -> do
-        expect "first argument has its own type" multiResult (port 4 ("low" ++ suffix)) [narrow]
-        expect "second argument has its own type" multiResult (port 8 ("high" ++ suffix)) [payload]) ["0","1"]
+        expect "first argument has its own type" multiResult (port 4 ("argLow" ++ suffix)) [narrow]
+        expect "second argument has its own type" multiResult (port 8 ("argHigh" ++ suffix)) [payload]) ["0","1"]
     putStrLn "PASS: distinct argument types and method multiplicity"
 
+    let split = inst [method "split" 2 [["LOW","HIGH"]] Nothing]
+                     [("LOW",narrow),("HIGH",payload)]
+        splitDefs = [argdef "split" copy 1 index width (port width leaf) |
+                     (copy, suffix) <- [(Just 0,"0"),(Just 1,"1")],
+                     (index,width,leaf) <- [(Just 1,4,"low" ++ suffix),(Just 2,8,"high" ++ suffix)]]
+        splitResult = propagateArgumentMuxTypes (package [split] splitDefs)
+    mapM_ (\suffix -> do
+        expect "split lower port has its own type" splitResult (port 4 ("low" ++ suffix)) [narrow]
+        expect "split upper port has its own type" splitResult (port 8 ("high" ++ suffix)) [payload]) ["0","1"]
+    putStrLn "PASS: split argument ports and method multiplicity"
+
     let unknown = ASAny (ATBit 8) Nothing
-        unknownDefs = [argdef "putA" Nothing 1 8 (mux 8 PrimMux (port 8 "known") unknown),
+        unknownDefs = [argdef "putA" Nothing 1 Nothing 8 (mux 8 PrimMux (port 8 "known") unknown),
                        def "unrelatedUndefined" 8 unknown]
         unknownResult = propagateArgumentMuxTypes (package [sink] unknownDefs)
         named = namedSourceTypes unknownDefs (aspkg_expr_types unknownResult)

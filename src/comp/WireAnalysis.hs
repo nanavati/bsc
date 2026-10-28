@@ -25,7 +25,8 @@
 --
 -- Over-emission is intentional: a correlator building a name -> type
 -- dict can index by VCD wire name and match whichever form appears.
-module WireAnalysis (getWireTypeMap, getWireTypeCandidates, getFinalWireTypeCandidates) where
+module WireAnalysis (getWireTypeMap, getWireTypeCandidates,
+                     getFinalWireTypeCandidates) where
 
 import qualified Data.Map as M
 import qualified Data.Map.Strict as MS
@@ -89,7 +90,7 @@ observedWireTypes apkg = MS.unionWith S.union boundary mapped
     declaredNames = S.fromList (map fst (declaredWireTypeMap apkg))
     -- Established boundary aliases are useful for both Verilog and Bluesim.
     -- Internal observations require a binding to an emitted signal: retaining
-    -- an old name can otherwise refer to a wire removed before codegen.
+    -- the old name can silently alias a DIFFERENT wire after stable renaming.
     boundary = M.filterWithKey (\n _ -> n `S.member` declaredNames && safeAlias n) raw
     safeAlias = case apkg_final_wire_names apkg of
         Nothing -> const True
@@ -100,7 +101,7 @@ observedWireTypes apkg = MS.unionWith S.union boundary mapped
     mapped = case apkg_final_wire_types apkg of
         Just ts -> ts
         Nothing -> case apkg_final_wire_names apkg of
-            -- Preserve the pre-codegen/Bluesim APackage query behavior.
+            -- Preserve the upstream pre-codegen/Bluesim query fallback.
             Nothing -> raw
             Just names -> MS.fromListWith S.union
                 [(final, ts) | (n, ts) <- M.toList raw,
@@ -141,31 +142,42 @@ sourceObservedWireTypes wanted apkg = MS.fromListWith S.union
         [(canonical e, ts) | (e,ts0) <- apkg_expr_types apkg,
                              let ts = S.filter (not . isBitType) ts0,
                              not (S.null ts)]
-    defs = apkg_local_defs apkg ++
-           [d | AIDef { aif_value = d } <- apkg_interface apkg] ++
-           [d | AIActionValue { aif_value = d } <- apkg_interface apkg]
+    ifcDefs = [(d, fi) | AIDef { aif_value = d, aif_fieldinfo = fi } <- apkg_interface apkg] ++
+              [(d, fi) | AIActionValue { aif_value = d, aif_fieldinfo = fi } <- apkg_interface apkg]
+    -- A method result can be split across several physical ports. Match
+    -- each element to its own port; the aggregate method is not a wire.
+    outputDefs (ADef _ (ATTuple ts) (ATuple _ es) _, fi) =
+        zipWith3 (\i t e -> ADef i t e []) (mkNamedOutputs fi) ts es
+    outputDefs (ADef _ t e _, fi) =
+        [ADef i t e [] | [i] <- [mkNamedOutputs fi]]
+    namedDefs = apkg_local_defs apkg ++ concatMap outputDefs ifcDefs
+    defs = namedDefs ++ map fst ifcDefs
     canonical = canonicalSourceExpr defs
     nameIndex = MS.fromListWith S.union
         [(canonical (ASDef t i), S.singleton name) |
-          ADef i t _ _ <- defs, let name = getIdString i, wantedName name]
+          ADef i t _ _ <- namedDefs, let name = getIdString i, wantedName name]
     wantedName n = maybe True (S.member n) wanted
     names e = M.findWithDefault S.empty e nameIndex `S.union`
               S.filter wantedName (leafNames e)
     leafNames (ASPort _ i) = S.singleton (getIdString i)
-    leafNames (AMethValue _ i m) = methodNames i m
-    leafNames (AMethCall _ i m []) = methodNames i m
+    leafNames (AMethValue _ i m) = methodNames i m Nothing
+    leafNames (AMethCall _ i m []) = methodNames i m Nothing
+    leafNames (ATupleSel _ (AMethValue _ i m) idx) = methodNames i m (Just idx)
+    leafNames (ATupleSel _ (AMethCall _ i m []) idx) = methodNames i m (Just idx)
     leafNames _ = S.empty
     -- A wide interface can have many observed methods. Index the fields once
     -- rather than scanning the whole interface for every observation.
     methodIndex = MS.fromListWith S.union
-        [((avi_vname v,m), S.fromList $
+        [((avi_vname v,m,index), S.fromList $
             [inst ++ "$" ++ port, inst ++ "." ++ port] ++
             [inst | isRegInst v && port == qoutPortStr]) |
           v <- apkg_state_instances apkg,
-          Method { vf_name = m, vf_output = Just (vn,_) } <- vFields (avi_vmi v),
+          Method { vf_name = m, vf_outputs = outs } <- vFields (avi_vmi v),
+          (idx, (vn,_)) <- zip [1..] outs,
+          index <- Just idx : [Nothing | [_] <- [outs]],
           let inst = getIdString (avi_vname v)
               port = getVNameString vn]
-    methodNames i m = M.findWithDefault S.empty (i, unQualId m) methodIndex
+    methodNames i m idx = M.findWithDefault S.empty (i, unQualId m, idx) methodIndex
 
 declaredWireTypeMap :: APackage -> [(String, IType)]
 declaredWireTypeMap apkg =
@@ -271,8 +283,8 @@ declaredWireTypeMap apkg =
             enOf (Method { vf_enable = Just (vn, props) })
                 | VPinhigh `notElem` props = emit vn
             enOf _ = []
-            rdyOf (Method { vf_name = n, vf_output = mout })
-                | isRdyId n = maybe [] (emit . fst) mout
+            rdyOf (Method { vf_name = n, vf_outputs = outs })
+                | isRdyId n = concatMap (emit . fst) outs
             rdyOf _ = []
         in  concatMap (\f -> enOf f ++ rdyOf f) (vFields vmi)
 

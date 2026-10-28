@@ -20,6 +20,8 @@ sourceTypeKey (ASInt _ t v) = ASInt defaultAId t v
 sourceTypeKey (ASReal _ t v) = ASReal defaultAId t v
 sourceTypeKey (ASStr _ t v) = ASStr defaultAId t v
 sourceTypeKey (AMethCall t i m es) = AMethCall t i m (map sourceTypeKey es)
+sourceTypeKey (ATuple t es) = ATuple t (map sourceTypeKey es)
+sourceTypeKey (ATupleSel t e n) = ATupleSel t (sourceTypeKey e) n
 sourceTypeKey (ANoInlineFunCall t i f es) =
     ANoInlineFunCall t i f (map sourceTypeKey es)
 sourceTypeKey (AFunCall t i f c es) = AFunCall t i f c (map sourceTypeKey es)
@@ -48,6 +50,8 @@ containsAny :: AExpr -> Bool
 containsAny (ASAny {}) = True
 containsAny (APrim _ _ _ es) = any containsAny es
 containsAny (AMethCall _ _ _ es) = any containsAny es
+containsAny (ATuple _ es) = any containsAny es
+containsAny (ATupleSel _ e _) = containsAny e
 containsAny (ANoInlineFunCall _ _ _ es) = any containsAny es
 containsAny (AFunCall _ _ _ _ es) = any containsAny es
 containsAny (ASClock _ (AClock osc gate)) = containsAny osc || containsAny gate
