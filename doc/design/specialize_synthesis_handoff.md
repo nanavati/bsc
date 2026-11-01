@@ -28,7 +28,8 @@ FIRST read `DEVELOP.md` (compiler stages, Bluesim `-c` byte-identity mode,
 conventions), `testsuite/README.md`, and section 3 of
 `doc/design/size_polymorphic_synthesis.md` (the design this prompt
 implements, with `file:line` citations; line numbers may have drifted, so
-search by the function names given below).
+search by the function names given below; that document's 3.x subsection
+numbers do not line up with this prompt's 3.x numbers).
 
 Why this fork and not upstream: the files this feature touches have diverged
 from upstream by about 2000 lines (`git diff --stat upstream/main -- src/comp/
@@ -121,48 +122,67 @@ mkDictBuckets binmods`, `internalSymt <- mkSymTab errh mint`) → `fixupDefs
 dictBuckets imod binmods` giving `imodf` and `alldefsList` → `iSimpDicts` →
 `iSimplify` → `orderGens` → the `gen` fold over `ordgens :: [WrapInfo]`, which
 for each module calls `genModule errh wi fwrapper flags dumpnames' prefix
-pkgname internalSymt alldefs elabATFCache (getDef im wrapped_mod)`, then
-`compileCDefToIDef errh flags dumpnames' symt imods def` on the returned
-wrapper `CDefn`, then `updDef dictBuckets idef im binmods` → `genUserSign` /
-`genEverythingSign` over `mctx` (the pre-loop `CPackage`) → `genBinFile`.
+(getIdBaseString pkgId) internalSymt alldefs elabATFCache (getDef im i')`
+(this `getDef :: IPackage a -> Id -> IDef a` is a local closure inside
+`compilePackage`, distinct from `GenWrap.getDef`), then `compileCDefToIDef
+errh flags dumpnames' symt imods def` on the returned wrapper `CDefn`, then
+`updDef dictBuckets idef im binmods` → `genUserSign errh symt mctx` /
+`genEverythingSign errh symt mctx` (`mctx` is the pre-loop `CPackage`) →
+`genBinFile`. Between `cTypeCheck` and `simplify` sit `genForeign` and
+`genVPIWrappers`; `iConvPackage` also takes a `CATFCache`; `internalSymt <-
+mkSymTab errh mint` where `mint = replaceImportedSignatures mctx impsigs'`.
 `genModule` runs `iExpand errh flags symt alldefs atf_cache fwrapper pps def`
 and the whole backend for one module, writes the `.v` and `.ba`, and returns
 the wrapper `CDefn` built by `WrapInfo.deffun`. `compileCDefToIDef` wraps one
 `CDefn` in a synthetic `CPackage`, context-reduces, typechecks against the
-frozen `symt`, simplifies and `iConvDef`s it. Note the driver comment: the
-`gen` loop does not update `alldefs`, and `internalSymt`/`symt` are fixed
-before the loop.
+frozen `symt`, simplifies and `iConvDef`s it against the `IPackage` it is
+handed: `iConvDef` builds its environment from that package's defs, and a
+`CVar` found neither there nor in the symbol table becomes a bare `IVar`,
+which `fixupDefs` cannot re-tie and the evaluator rejects with an internal
+error. So any wrapper you compile for a specialization must be given the
+extended symbol table *and* an `IPackage` that already contains the alias and
+inner defs. Note the driver comment: the `gen` loop does not update
+`alldefs`, and `internalSymt`/`symt` are fixed before the loop.
 
-GenWrap, `src/comp/GenWrap.hs`: `genWrap errh flgs genNames generating cpack
-symt` builds `ppmap :: Map Id [PProp]` from the package's `CPragma
-(Pproperties i pps)` plus `-g` names (`makeCmdLineGenPragmas`, which exist
-only in this map and never reach the `.bo`), then `genWrapE`. `getDef`
-(finds the def among the current package's `CValueSign (CDef ..)` only,
-`EUnboundVar` otherwise), runs `cCtxReduceDef` and `checkModuleArgPragmas`
+GenWrap, `src/comp/GenWrap.hs` (exports only `genWrap` and `WrapInfo(..)`):
+`genWrap errh flgs genNames generating cpack symt` builds `ppmap :: Map Id
+[PProp]` with `makePPropMap genNames pragmas` from the package's `CPragma
+(Pproperties i pps)` plus `-g` names (`makeCmdLineGenPragmas`; `-g` names
+exist only in this map and never reach the `.bo`), then runs `genWrapE` in
+`GWMonad` (`runGWMonad ... (GenState errh symt flgs)`). `GenWrap.getDef`
+finds the def among the current package's `CValueSign (CDef ..)` only
+(`EUnboundVar` otherwise), runs `cCtxReduceDef` and `checkModuleArgPragmas`
 on every def with pragmas, and for `generating && PPverilog` applies
 `fixupPolyModType` (ties a *single* remaining `IsModule m c` predicate to
 `Module`). `procDef`/`chkType` are the gate: proviso left → "It has a
 proviso." (Classic: "context"); free type variables → "Its interface is
-polymorphic."; polymorphic interface field, non-interface, non-module →
-other T0043 messages. Per generated def GenWrap emits a flattened interface
-struct whose id is built from the interface *type* (`flatTypeIdQual` /
-`flatTypeId` plus always-ready tags, with a soft-hyphen `genSuffix` from
-`src/comp/GenWrapUtils.hs`), `to_`/`from_` defs, a `Generic` instance
-(`mkTo_`, `mkFrom_`, `mkInstances`), an inner def `mkFoo<suffix>` of type
-`Module Foo_` whose body let-binds the user's def and applies it (`mkNewModDef`,
-`mexp = cApply 10 (CVar i) exprs`), a placeholder `mkFoo = mkFoo` (`fixDef`),
-and a `WrapInfo { mod_nm, orig_cqt, wrapper_ifc, wrapped_mod, wi_prags,
-deffun }`. `deffun` (type `DefFun`, built by `mkDef`) later produces the
-wrapper `CDef mkFoo orig_cqt [clause]` whose body is `liftModule
-(xWrapperModuleVerilog fmod pps (CLit (LString (getIdBaseString i))) ...)`,
-i.e. a `CmoduleVerilog` with `is_user_import = False`, keeping the def's
-original (possibly `IsModule`-polymorphic) `CQType`. Argument port and
-parameter names come from the clause binders (`getDefArgs` in
-`GenWrapUtils.hs`; falls back to `a1000...` for a point-free def) and
-argument-naming pragmas are checked against those names
-(`src/comp/PragmaCheck.hs`, `EAttributeNoSuchArg`). `genFuncWrap`
-(`src/comp/GenFuncWrap.hs`) is the precedent for fabricating defs plus a
-`CPragma (Pproperties modId [PPverilog])` before GenWrap runs.
+polymorphic."; "It is not a module."; polymorphic interface field; "not an
+interface" (all T0043). Separately, `fixDef` replaces the body of every def
+for which `isGenDef ppmap defid` holds (that is, `PPverilog` in the map) with
+the placeholder `mkFoo = mkFoo`; it is keyed on the map, not on `getDef`'s
+result. Per generated def GenWrap emits a flattened interface struct whose
+id is built from the interface *type* (`flatTypeIdQual`/`flatTypeId`:
+constructor and number names concatenated with no separator, `Q 8` → `Q8`,
+`FIFO (Bit 32)` → `FIFOBit32`, plus always-ready tags and a soft-hyphen
+`genSuffix` from `src/comp/GenWrapUtils.hs`; the function runs in `GWMonad`
+over `CType` and is not exported), `to_`/`from_` defs, a `Generic` instance
+(`mkTo_`, `mkFrom_`, `mkInstances`), an inner def `mkFoo<suffix>`
+(`modIdRename`) of type `Bit n -> ... -> Module Foo_` under `Bits` provisos
+whose body let-binds the user's def and applies it (`mkNewModDef`, `mexp =
+cApply 10 (CVar i) exprs`), and a `WrapInfo { mod_nm, orig_cqt, wrapper_ifc,
+wrapped_mod, wi_prags, deffun }` (the driver pattern-matches it positionally
+with six fields; do not add fields). `deffun` (type `DefFun`, built by
+`mkDef`) later produces the wrapper `CDef mkFoo orig_cqt [clause]` whose body
+is `liftModule (xWrapperModuleVerilog fmod pps (CLit (LString
+(getIdBaseString i))) ...)`, i.e. a `CmoduleVerilog` with `is_user_import =
+False`, keeping the def's original (possibly `IsModule`-polymorphic)
+`CQType`. Argument port and parameter names come from the clause binders
+(`getDefArgs` in `GenWrapUtils.hs`, which keeps names only when there is one
+clause with `CPVar` patterns and otherwise invents `_a1000`, `_a1001`, ...)
+and argument-naming pragmas are checked against those names
+(`src/comp/PragmaCheck.hs`, `checkArgName`, `EAttributeNoSuchArg`).
+`genFuncWrap` (`src/comp/GenFuncWrap.hs`) is the precedent for fabricating
+defs plus a `CPragma (Pproperties modId [PPverilog])` before GenWrap runs.
 
 Evaluator, `src/comp/IExpand.hs` / `src/comp/IExpandUtils.hs`: `iExpand`
 calls `runG errh flags symt alldefs atf_cache mi is_noinlined_func pps
@@ -171,18 +191,25 @@ symtab, defenv, checkMaxStep, maxStep, stepWarnInterval, flags }` is the
 read-only part, `GState` the mutable part (`stateNo`, `stateNameMap`,
 `stateLocMap`, heap pointer `hp`, `vars`, `portTypeMap`, `rules`, clock and
 reset state, `defCache`), both fresh per `runG`; there is no global mutable
-state beyond per-heap `IORef`s. After typecheck a variable use is `CApply
+state beyond per-heap `IORef`s and the process-global `FString` and `IType`
+intern tables (which only affect `Ord`, see 3.8). Pragmas are read inside the
+evaluator with `getPragmas` (`IExpandUtils.hs`), a state field seeded from the
+`[PProp]` passed to `iExpand`. After typecheck a variable use is `CApply
 (CTApply f types) dictVars` applied to values (`tiVar` and `iAPs` in
 `src/comp/TCheck.hs`), so an application's argument stack is type args (`T`),
 then dictionary args (`E`, binders carry `IdPDict`, `isDictId` in
-`src/comp/Id.hs`), then value args; `evalAp' (IAps f tys es) as = evalAp f
-(map T tys ++ map E es ++ as)`. `evalAp' (ICon i (ICDef t e)) as = evalDef i
-t e as` (`cacheDef` then `evalAp` on the body); `evalAp' (ICon i ic) as =
-conAp i ic e as`; `conAp'` is the big per-`IConInfo` dispatcher. Type
-application is beta-reduction (`evalAp' (ILAM i k e) (T t:as)` via
-`evalApAccum`). `toHeap`/`toHeapCon` (in `IExpandUtils.hs`) turn a bare `ICon
-i (ICDef t' e)` into its cached body before heaping, so an unapplied module
-constructor passed as a value loses its `ICDef` node. `handlePrim` for
+`src/comp/Id.hs`), then value args; `evalAp' (IAps f tys es) as = evalAp
+"IAps" f (map T tys ++ map E es ++ as)`. `evalAp' (ICon i (ICDef t e)) as =
+evalDef i t e as` (`step`, `cacheDef`, then `evalAp "ICDef"` on the body);
+`evalAp' (ICon i ic) as = conAp i ic e as`; `conAp'` is the big
+per-`IConInfo` dispatcher whose final clause is an `internalError`, so an
+unhandled constructor fails loudly. Type application is beta-reduction
+(`evalAp' (ILAM i k e) (T t:as)` via `evalApAccum`). `toHeap`/`toHeapCon`
+(in `IExpandUtils.hs`) turn a bare `ICon i (ICDef t' e)` into its cached body
+before heaping, so an unapplied module constructor passed as a value loses
+its `ICDef` node. Type normalization inside `G` goes through `norm <-
+getTypeNormalizerC` (over `fullTypeNormalizer :: Flags -> SymTab ->
+IATFCache -> IType -> Changed IType`). `handlePrim` for
 `ICVerilog` evaluates the module-name String expression (`evalString`) and
 sets `vName` before `newState` creates the `IStateVar`; `PrimModuleBind`
 names instances from the parent's binder through `IStateLoc`. `GOutput`
@@ -224,9 +251,10 @@ comment about DPI wrappers explains). `src/comp/ABinUtil.hs`
 `getABIHierarchy`/`followABMIHierarchy` partition submodule instances by
 `avi_user_import`: a non-user-import instance is followed by name and
 `<name>.ba` is read from the `-p`/`-bdir` path (`findABI`,
-`readAndCheckABinPath`, which checks the file name equals `apkg_name`); a
-user import whose name is not a Bluesim primitive is `EBSimForeignImport`
-regardless of `.ba` presence. Bluesim, bluetcl and the LambdaCalc/SAL
+`readAndCheckABinPath`, which looks for `<name>.ba` and checks that the
+`apkg_name` stored in it equals the name it was looked up by,
+`EABinNameMismatch` otherwise); a user import whose name is not a Bluesim
+primitive is `EBSimForeignImport` regardless of `.ba` presence. Bluesim, bluetcl and the LambdaCalc/SAL
 backends match primitives by exact `vName` string
 (`src/comp/SimPrimitiveModules.hs`, `src/comp/LambdaCalcUtil.hs`).
 
@@ -249,18 +277,23 @@ including today's T0043 errors.
 
 ### 3.2 GenWrap
 
-In `getDef`/`chkType`, for a specializable def when `generating`: do not
-create a `WrapInfo`, do not `fixDef` the body, leave the def exactly as
-written. Before classifying, strip `IsModule` from a multi-predicate context
+In `GenWrap.getDef`/`chkType`, for a specializable def when `generating`:
+do not create a `WrapInfo`, and exclude the def from `isGenDef` as well (or
+guard `fixDef` with `PPspecialize` absent) so its body is not replaced by the
+`mkFoo = mkFoo` placeholder; the def stays exactly as written. Before
+classifying, strip `IsModule` from a multi-predicate context
 (`fixupPolyModType` only handles a single predicate). Keep erroring on the
 gates that type arguments cannot fix: polymorphic interface *fields*,
 non-interface result, non-module type, interface or function arguments.
 `-g mkFoo` on a specializable def is a new error: "`mkFoo` is specialized per
 instantiation; instantiate it from a synthesized module or give it a
-monomorphic alias." Since the pragma is a source `CPragma`, it reaches
-`ipkg_pragmas` with a package-qualified id and importers can find it; the
-registry scan over all loaded packages must dedupe (each `.bo` repeats its
-imports' pragmas).
+monomorphic alias." The merged `[PProp]` does not record whether `PPverilog`
+came from `-g` or from source, so detect this by checking the def's name
+against `genNames` (thread `genNames` into `genWrapE`, or test in `genWrap`
+before `makePPropMap`). Since the `specialize` pragma is a source `CPragma`,
+it reaches `ipkg_pragmas` with a package-qualified id and importers can find
+it; the registry scan over all loaded packages must dedupe (each `.bo`
+repeats its imports' pragmas).
 
 `Depend.hs` `getPkgInfo`: exclude specializable defs from `gens`.
 `bluetcl.hs` `defs module`: exclude them too (search for the `PPverilog`
@@ -280,11 +313,24 @@ Add to `data IConInfo a` in `src/comp/ISyntax.hs`:
 ```
 
 `fixupDefs` installs it (instead of `ICDef`) for every reference to a def in
-the specializable set, derived from the merged pragma list. Give it a `Bin`
-instance (type-only like `ICDef`, re-tied on load), handle it in
-`ISyntaxUtil`/`ISyntaxCheck`/pretty printers wherever `ICDef` is handled,
-and make `ISimplify.expDef` and `toHeap`/`toHeapCon` leave it alone (an
-`ICon` with `ICSpecDef` must be heaped as itself, never as its body).
+the specializable set, derived from the merged pragma list (the install and
+re-tie point is `FixupDefs.fixUp`'s `ICon i (ICDef t _)` clause; add the
+`ICSpecDef` case there and re-tie `specBody` for nodes read from a `.bo`).
+The build uses `-Wall`, so every exhaustive `IConInfo` dispatcher needs a
+clause. Sites that must gain one: `ISyntax.hs` `ordC` (new number), `cmpC`,
+the `rnf` instance (same no-descent treatment as `ICDef`, bodies are
+cyclic), `showTypelessCI`, `fdVars'` (return the id, as for `ICDef`; the
+driver's `orderGens` and `ISimplify` depend on it), the `PDReadable`
+`pPrint` case; `GenBin.hs` `Bin IConInfo` (`ICDef` is tag 0, written
+type-only and read back as an undetermined body; use the next free tag,
+currently 20, writing type, key, arities and static positions); `IExpand.hs`
+`rmConInfo`; `ISyntaxSubst.hs` `etSubstIConInfo` (an explicit no-op clause
+like `ICDef`'s); `ISimplify.hs` `isTriv`, `dVars'` and its local `fixUp`.
+Sites that must *not* gain one, because matching only `ICDef` is the point:
+`ISimplify.expDef` (never inlined), `toHeap`/`toHeapCon` (an `ICon` with
+`ICSpecDef` falls to the generic `ICon` clause and is heaped as itself, never
+as its body), `evalAp'` (so it reaches `conAp'`). `ISyntaxUtil.hs` and
+`ISyntaxCheck.hs` contain no `ICDef`-specific code and need nothing.
 
 In `conAp'`: treat `ICSpecDef` as a fixed-arity primitive. Accumulate `T`
 and `E` arguments into a WHNF partial application (`IAps (ICon i info) tys
@@ -293,9 +339,10 @@ position in `specStat` are present. Only then:
 
 1. Partition the type arguments. Those bound by the def's `IsModule m c`
    proviso (identify them from the scheme: the predicate's type variables)
-   are *not* part of the key. Normalize the others with
-   `fullTypeNormalizer`; any that is not fully concrete (`ITVar` or an
-   unevaluated type function) is a user error at the application position:
+   are *not* part of the key. Normalize the others with the `G`-monad
+   normalizer (`norm <- getTypeNormalizerC`); any that is not fully concrete
+   (`ITVar` or an unevaluated type function) is a user error at the
+   application position:
    "type arguments of specializable module `mkFoo` could not be
    determined". Evaluate each static argument to a literal with
    `evalInteger` / `evalString` (add a small `ICReal` case for `Real`); a
@@ -311,13 +358,22 @@ position in `specStat` are present. Only then:
    (`g_spec_stack :: [SpecKey]`) but is not the current one, it is a cycle:
    error naming the chain. No fixed depth limit.
 4. Look the name up in the registry (`g_registry :: IORef (Map String
-   HExpr)`, holding the wrapper defs). On a miss, call `g_specialize key`
-   (a callback in `GStateRO`, `SpecKey -> IO HExpr`) which compiles the
-   child (3.5), inserts the wrapper and returns it.
-5. Redirect: evaluate the wrapper applied to `T m`, `T c`, `E isModuleDict`
-   (the wrapper is `liftModule`-based and keeps the def's `IsModule`
-   polymorphism) followed by the remaining value arguments with the static
-   positions removed, then continue with the rest of the stack.
+   (IDef HeapData))`, holding each wrapper's fixed-up *top-level* def as it
+   sits in `ipkg_defs`/`alldefs` after `fixupDefs`; such a body is heap-free
+   by construction). Never store a heaped value: `HExpr` may contain `IRefT`
+   heap pointers that are only valid inside one `runG`, and each child
+   compile is its own `genModule`/`runG` with its own heap. On a miss, call
+   `g_specialize key` (a callback in `GStateRO`, `SpecKey -> IO (IDef
+   HeapData)`) which compiles the child (3.5), inserts the wrapper and
+   returns it.
+5. Redirect: read the wrapper def's type and apply one `T` argument per
+   leading `ITForAll` binder (`m` and `c` when the def was
+   `IsModule`-polymorphic, none when its type was already `Module ...`) and
+   one `E` argument per leading dictionary arrow, taken from the saturated
+   stack in order; then the remaining value arguments with the static
+   positions removed; then continue with the rest of the stack. Do not
+   hard-code the arity: the wrapper keeps `orig_cqt`, so its binder order is
+   whatever the scheme says after context reduction and typecheck.
    `clocked_by`/`reset_by` wrap the *result* of the module expression, so
    nothing special is needed; instance naming comes from the parent's binder
    as for any submodule.
@@ -343,41 +399,56 @@ interface, function or `Module` type are a definition-site error.
    def's own `ILam` binder names for the non-static arguments
    (`mkQ_32 guarded = mkQ guarded`; never point-free: `getDefArgs` would
    invent names and every argument pragma would fail
-   `EAttributeNoSuchArg`). Its `CQType` is the def's scheme (from the symbol
-   table, `findVar`) with the kept type variables substituted by `iToCT` of
-   the key's types, the specialized provisos dropped, and the static
-   argument positions removed. Its body applies `CVar mkFoo` to literals at
-   the static positions and to the binders elsewhere. Copy the def's
+   `EAttributeNoSuchArg`). Its `CQType` is built from the def's scheme
+   (`findVar :: SymTab -> Id -> Maybe VarInfo` yields an `Assump` `i :>:
+   Scheme`, not a `CQType`; instantiate the scheme's quantified variables)
+   with the kept type variables substituted by `iToCT` of the key's types
+   (`iToCT :: IType -> CType` in `IType.hs`; it internal-errors on
+   `ITForAll`, so apply it to the concrete argument types only), the
+   specialized provisos dropped, and the static argument positions removed.
+   Its body applies `CVar mkFoo` to literals at the static positions and to
+   the binders elsewhere. Copy the def's
    module-level `Pproperties` onto the alias minus `PPspecialize` and
    `PPdeprecate`; this single list is what GenWrap's `ppmap`,
    `WrapInfo.wi_prags`, IExpand's `getPragmas`, AConv and `abmi_pps` all
    read.
 2. **Round pipeline.** Put the alias and its pragma into a synthetic
    `CPackage` that also holds the current package's type, class and
-   instance declarations and its import signatures, and run the same
-   sequence the driver runs: `genWrapE` → `mkSymTab` → `derive` →
-   `mkSymTab` → `cCtxReduceIO` → `mkSymTab` → `cConvInst` → `cTypeCheck`
-   → `simplify` → (`liftDictsPkg` if enabled) → `iConvPackage`; merge the
+   instance declarations, the value signatures the alias needs (`mkFoo`'s
+   type, so the alias typechecks against it) and the import signatures, and
+   run the same sequence the driver runs: GenWrap → `mkSymTab` → `derive` →
+   `mkSymTab` → `cCtxReduceIO` → `mkSymTab` → `cConvInst` → `cTypeCheck` →
+   `simplify` → (`liftDictsPkg` if enabled) → `iConvPackage`; merge the
    resulting `IDef`s and declarations into the current `IPackage`; run
-   `fixupDefs`. `compileCDefToIDef` alone is not enough: GenWrap adds a
+   `fixupDefs`. `genWrapE` is not exported and runs in `GWMonad`, and the
+   `IfcTRec` list it builds (`trs`/`finalIfcTRecs`) is internal: add an
+   exported IO entry point to `GenWrap.hs`, for example
+   `genWrapWithPPropMap :: ErrorHandle -> Flags -> M.Map Id [PProp] -> (Id
+   -> Bool) -> CPackage -> SymTab -> IO (CPackage, [WrapInfo])`, whose
+   predicate says "this flattened-interface id already exists" and is
+   applied to the `IfcTRec`s before `genTDef`/`mkTo_`/`mkFrom_`/
+   `mkInstances`. `compileCDefToIDef` alone is not enough: GenWrap adds a
    struct, a `Generic` instance and conversion defs that the symbol table
-   must know before the inner def typechecks (the wrapper's method types
-   are computed from the symbol-table entry of the flattened interface in
+   must know before the inner def typechecks (the wrapper's method types are
+   computed from the symbol-table entry of the flattened interface in
    `IConv.hs`). Batch every key demanded in one round into one synthetic
    package, and skip `IfcTRec`s whose flattened-interface id already exists
    in the package or symbol table: those artifacts are named from the
    interface *type*, so two specializations with the same result type would
    otherwise collide (`EMultipleDecl`, `EDuplicateInstance` in
-   `MakeSymTab.hs`). From then on thread the extended symbol table and
-   `alldefs` into every later `genModule` and `compileCDefToIDef` call
-   (store them in `IORef`s owned by the driver; today both are fixed before
-   the `gen` loop).
+   `MakeSymTab.hs`). From then on thread the extended symbol table, the
+   extended `IPackage` and `alldefs` into every later `genModule` and
+   `compileCDefToIDef` call (store them in `IORef`s owned by the driver;
+   today all are fixed before the `gen` loop).
 3. **Generate.** Run `genModule` on the inner def with `g_current_spec =
    Just key` and the key pushed on `g_spec_stack`; it recursively
    specializes grandchildren through the same callback, writes the child's
    `.v` and `.ba`, and returns the wrapper `CDefn`. `compileCDefToIDef` the
-   wrapper, tag its id `IdPSpecialization` (new `IdProp`, `Bin IdProp` tag
-   39), `updDef` it into the package, insert it into the registry.
+   wrapper with the extended symbol table and the `IPackage` that already
+   contains the alias and inner defs (see CURRENT STATE on `iConvDef`'s
+   environment), tag its id `IdPSpecialization` (new `IdProp`, `Bin IdProp`
+   tag 39), `updDef` it into the package, insert its fixed-up def into the
+   registry.
 4. **Visibility.** The new defs are created after the signatures were
    computed, so they are in neither `bi_sig` nor `bo_sig` and reach
    importers only through `ipkg_defs`/`alldefs`. Extend `defExport` in
@@ -389,8 +460,11 @@ interface, function or `Module` type are a definition-site error.
 
 `mangle :: Id -> [IType] -> [static value] -> String`. Base = `verilog_name`
 if present, else the def's base name. Append `_<arg>` per kept type argument
-and static value, reusing GenWrap's type flattening (`flatTypeIdQual`) with
-`_` separators: `ITNum n` → decimal; `Bit 32` → `Bit32`; `Bool` → `Bool`;
+and static value, flattening each `IType` the way GenWrap's `flatTypeIdQual`
+flattens a `CType` (constructor and number names concatenated) but as a
+small pure function over `IType` in `Specialize.hs` (`flatTypeIdQual` is not
+exported, runs in `GWMonad` and takes `CType`): `ITNum n` → decimal; `Bit
+32` → `Bit32`; `Bool` → `Bool`;
 `Integer` static → decimal (negative as `m<n>`); `String` static → the string
 if it is a legal identifier fragment, else hashed. If the result exceeds 64
 characters or any argument needed character replacement, use `<base>__h<16
@@ -425,9 +499,11 @@ not tracked by `Depend.hs`.
 
 ### 3.8 Determinism
 
-`Ord` on `Id`/`FString`/`IType`/`IExpr` is intern-order based, so map-ordered
-intermediate structures can differ between "child compiled during the
-parent" and "child reused from a `.bo`". The invariant to test is "same
+`Ord FString` compares intern ids, `Ord Id` compares `FString`s, and `Ord
+IType`/`Ord IExpr` are structural over those `Id`s (the `IType` hash-cons
+uniques are never used for ordering), so map-ordered intermediate structures
+can differ between "child compiled during the parent" and "child reused from
+a `.bo`". The invariant to test is "same
 result as compiling the child before the parent in the same process", the
 property today's multi-module `gen` loop already has: add a test that diffs
 the child's `.v` and `.ba` between a compile that generates it and a compile
@@ -444,9 +520,13 @@ that reuses it from an import.
   task.
 - Any `.bo`/`.ba` format change (new `IdProp`/`PProp`/`IConInfo` tags) bumps
   both header tags in `GenBin.hs` and `GenABin.hs`.
-- Keep `testsuite/bsc.bluesim/block_codegen*` (`-c` byte-identity) and
+- Keep `testsuite/bsc.bluesim/block_codegen`, `testsuite/bsc.bluesim/
+  block_codegen_sweep` (`-c` byte-identity) and
   `testsuite/bsc.bluetcl/vcd_correlation` green; specialized modules are
   ordinary submodules to both.
+- The compiler builds with `-Wall` (`src/comp/Makefile`), so incomplete
+  pattern matches on `IConInfo` are warnings you must clear, not ignore; see
+  the site list in 3.3.
 - New logic lives in `src/comp/Specialize.hs` (key, `mangle`, alias
   construction, round pipeline driver, registry); hooks in `IExpand.hs`,
   `IExpandUtils.hs`, `GenWrap.hs`, `FixupDefs.hs`, `bsc.hs`, `Depend.hs`,
@@ -492,12 +572,16 @@ that reuses it from an import.
      determinism diff test.
    - M5 batching and flattened-interface dedup, nested and recursive
      specializations, cycle detection, zero width.
-   - M6 diagnostics, user-guide text (`doc/user_guide`, the section on
-     `synthesize`), `verilog_name`.
-4. Tests, in `testsuite/bsc.synthesize/specialize/` with a `specialize.exp`
+   - M6 diagnostics, user-guide text (`doc/user_guide/user_guide.tex`, the
+     `synthesize` attribute section, LaTeX), `verilog_name`.
+4. Tests, in a new `testsuite/bsc.verilog/specialize/` (a sibling of
+   `noinline/` and `parameters/`; `testsuite/bsc.synthesize/` is the suite
+   for the unrelated `-synthesize` gate-level flag) with a `Makefile` copied
+   from `testsuite/bsc.verilog/noinline/Makefile` and a `specialize.exp`
    using the suite's existing procedures (`compile_verilog_pass`,
    `test_c_veri_bsv_modules`, `find_regexp` on generated `.v`,
-   `compile_fail_error` with the new error numbers): the two-width example
+   `compile_fail_error` or `compile_verilog_fail_error` with the new error
+   numbers): the two-width example
    (expected `.v` names and instantiations, no `width` parameter); BSV
    `module`-syntax and `ModuleContext` parents; higher-order uses; static
    argument interleaved with a `Clock` argument, and the dynamic / parent-
@@ -509,7 +593,7 @@ that reuses it from an import.
    with and without the transitive import; `verilog_name`; Bluesim
    co-simulation with `-keep-fires`; `-c` byte-identity over the generated
    specializations; `-g` on a specializable def; unresolved type argument;
-   the existing `noinline` polymorphic error still fires
+   the existing `noinline` polymorphic error (T0111) still fires
    (`testsuite/bsc.verilog/noinline/`).
 5. Verify: `make install-src`; `make localcheck` in the new directory and
    in `testsuite/bsc.verilog/parameters`, `testsuite/bsc.verilog/noinline`,
