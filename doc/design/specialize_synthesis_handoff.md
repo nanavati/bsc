@@ -15,10 +15,26 @@ parent's elaboration.
 
 ## WHERE
 
-Repository: the MatX line of bsc (`nanavati/bsc`, mirrored to
-`matx-inc/bsc`), not upstream `B-Lang-org/bsc`. Work on a fresh branch off
-the repository's default branch (or the branch you are told to use). Build
-and install with `make install-src` from the repository root (see
+Repository: the MatX fork of bsc, `matx-inc/bsc`, not upstream
+`B-Lang-org/bsc`. This prompt was written against `matx-inc/bsc` branch
+`main` at commit `99677cb` (2026-10-02, "CI: take the release GHC as a
+dispatch input", the `release-2026.07.rc8` lineage; `.bo`/`.ba` format tags
+`bsc-bo-20260715-6` / `bsc-ba-20260715-6`); `nanavati/bsc` `main`
+(`941eecf`) is an ancestor of it. Work on a fresh branch off that commit,
+or off the branch you are told to use. If you are told to target the
+`release-frozen-A0` line instead (`fdd13b8`, 2026-10-20, the source of build
+tag `build-20261023-1`), everything below still applies with one relocation:
+the driver `src/comp/bsc.hs` lives at `src/comp/app/bsc.hs` there (program
+entry modules moved under `src/comp/app`), the format tags are
+`bsc-bo-20260715-14` / `bsc-ba-20260715-14`, and you must re-derive the next
+free `Bin IdProp`/`Bin PProp`/`Bin IConInfo` tags from that tree's
+`BinData.hs` and `GenBin.hs` rather than using the numbers quoted below.
+Every other function, type and field named in this prompt exists on both
+lines, and both carry the same fork features (lazy pack/unpack, `IATFCache`,
+hash-consed `IType`, dictionary lifting, Integer module parameters, DPI
+monomorphization, `-keep-inlined-boundaries`, `wiretypemap`).
+
+Build and install with `make install-src` from the repository root (see
 `INSTALL.md`; the result lands in `inst/`). Run tests from a testsuite
 subdirectory with `make localcheck` (`testsuite/README.md`, "Running tests
 in a subdirectory"); the suite picks up `inst/` automatically, or set
