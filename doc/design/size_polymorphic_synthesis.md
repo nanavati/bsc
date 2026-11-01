@@ -150,7 +150,28 @@ pinning, memory-file loading, parameterized shells).
 * Bluesim `$display` supports `%m` (`src/bluesim/dollar_display.cxx:949`),
   so the Verilog-style warnings can be reproduced verbatim.
 
-### 1.5 Upstream context
+### 1.5 Formal backends see boundaries as opaque constructors
+
+The LambdaCalc/SAL paths run once per synthesized module inside `genModule`
+(`src/comp/bsc.hs:854-860`) with no link step. They have their own
+name-keyed primitive table "similar to the one in SimPrimitiveModules"
+(`src/comp/LambdaCalcUtil.hs:1247-1296`), and any non-primitive submodule
+is emitted as an opaque constructor call named by `vName`
+(`src/comp/LambdaCalc.hs:682-686, 721-722`) with the comment "synthesized
+user modules are not polymorphic". Two consequences for this plan:
+
+* A per-size reference module is a separately dumped unit for formal, which
+  is what compositional work wants (prove `FIFO2_32` against `FIFO2
+  #(.width(32))` once, then treat it as a black box), but the MatX formal
+  flow must compose those dumps itself; bsc will not inline them. A design
+  that wants the reference *inlined* into the module under analysis uses the
+  un-synthesized reference module (any polymorphic module instantiates
+  inline when it is not marked `synthesize`), which is the same source.
+* LambdaCalcUtil's table, like Bluesim's, matches by Verilog name, so a
+  reference module must not reuse a primitive's exact name while the table
+  still lists it (see risk 7 in section 8).
+
+### 1.6 Upstream context
 
 * The BSV reference guide states the limitation and its cause: "Since the
   bsc compiler does not create 'parameterized' Verilog, in order for a module
@@ -193,7 +214,7 @@ pinning, memory-file loading, parameterized shells).
 |---|---|---|
 | A. Demand-driven monomorphic specialization: `synthesize` on a polymorphic module generates `mkFoo_<args>` per distinct instantiation, from the parent's elaboration | GenWrap gate; one evaluator hook; worklist in the driver; naming; cross-package registry | **Chosen.** Reuses the whole existing pipeline; Bluesim and formal get real boundaries; names are stable and tool-friendly |
 | B. Emit `parameter width` Verilog from one elaboration | Symbolic `ASize` through AConv, AState, AOpt, AVeriQuirks, ASchedule/SAT, AVerilog, BinData, Bluesim | Rejected for the minimum. Multi-month rewrite with loss of SAT on width-dependent logic; Bluesim still needs per-width classes |
-| C. Library-only: explicit per-width aliases, `mkUCount`-style ladders, computed `module verilog` names plus a hand-maintained `-g` list | No compiler change | Useful as the Phase 0 prototype only. Does not scale, and the alias list must be maintained by hand per design |
+| C. Library-only: explicit per-width aliases, `mkUCount`-style ladders, computed `module verilog` names plus a hand-maintained `-g` list or `InstSynth.tcl` (`util/bluetcl-scripts/InstSynth.tcl`) | No compiler change | Useful as the Phase 0 prototype only. Does not scale, the alias list must be maintained by hand per design, the computed-name import is Classic-only (BSV `import "BVI"` takes an identifier, `src/comp/Parser/BSV/CVParser.lhs:4645-4654`), and nothing checks a hand-written BVI schedule against the module it names |
 | D. Witness elaboration: elaborate at two template widths, fit `a*n+b`, substitute a parameter name in AVerilog | AVerilog-only post-pass | Fragile (AOpt folds differ by width, zero-width elision). Possible follow-on for a parameterized *shell* around A's output, see 7.3 |
 
 Why A is the minimum: every piece except the hook and the worklist exists
@@ -407,9 +428,24 @@ Depend.hs:230-241`): regenerated whenever the generating package compiles.
 
 Cost: a parent that discovers at least one new specialization is elaborated
 twice. Second and later compiles of the same package, and all packages whose
-demands are already in imported registries, elaborate once. If the double
-elaboration ever matters, the follow-on is to compile the child re-entrantly
-from the hook (the `G` monad is over `IO`), which this design does not need.
+demands are already in imported registries, elaborate once. Two ways to
+avoid the second elaboration, neither needed for the first version:
+
+* **Static pre-scan.** After IConv, `IAps` nodes carry explicit type
+  arguments (`src/comp/ISyntax.hs:446`) and numeric type functions are
+  already folded when their arguments are literals (`src/comp/IType.hs:
+  458-473`). A scan of the parent's `IDef` for applications of specializable
+  ids with all-literal type arguments and literal static arguments finds
+  most library demands (a monomorphic parent instantiating `mkFIFO2` at
+  `Bit 32`) before elaboration; the hook then only catches demands that
+  depend on elaboration (polymorphic parents, sizes computed from `Integer`
+  arguments, loops).
+* **Re-entrant child compile.** `G` is `StateT GState IO` with a fresh
+  `GState` per `runG` and no global mutable state beyond per-heap `IORef`s
+  (`src/comp/IExpandUtils.hs:492, 690-696`), so the hook could `lift` a
+  nested `genModule` for the child and continue the parent with the real
+  wrapper in hand. This is the "stop, elaborate the submodule, come back"
+  design quark17 describes in issue #921.
 
 ### 3.7 Flags and compatibility
 
@@ -736,11 +772,13 @@ default off.
    specialization. Specializations are generated from a `verilog_name` or
    def name plus a suffix; document the convention and let the registry
    error on a clash with a non-specialization module of the same name.
-   Separately, Bluesim matches primitives by `vName` string
-   (`src/comp/SimPrimitiveModules.hs:354-355`), so a `verilog_name` equal
-   to a `primMap` entry (`FIFO2` without suffix, on a monomorphic module)
-   would silently select the C++ model; reject `verilog_name` values that
-   are current `primMap` names while those entries still exist.
+   Separately, Bluesim (`src/comp/SimPrimitiveModules.hs:354-355`,
+   `src/comp/ABinUtil.hs:351-353`) and the formal backends
+   (`src/comp/LambdaCalcUtil.hs:1247-1296`) match primitives by `vName`
+   string, so a `verilog_name` equal to a `primMap` entry (`FIFO2` without
+   suffix, on a monomorphic module) would silently select the C++ model or
+   misparse the instance arguments; reject `verilog_name` values that are
+   current primitive names while those entries still exist.
 8. **`Vector`/struct type arguments** fall to the hashed name form (3.5);
    library cores avoid this by taking numeric parameters only.
 9. **Not verified by execution**: this plan was written from reading the
