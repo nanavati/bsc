@@ -1,7 +1,50 @@
 name: CI
 
-# Trigger the workflow on push or pull request
-on: [ push, pull_request ]
+# Trigger the workflow on push or pull request,
+# or by hand to build and test one configuration of any ref
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or full commit SHA to test (empty for the branch this runs on)"
+        type: string
+        default: ''
+      os:
+        description: "Runner label (for macos-*-intel, also tick timeout_override and untick brew_update)"
+        type: string
+        default: ubuntu-24.04
+      # reminder: keep ghc_version and hls_version in step with the release builds below
+      ghc_version:
+        type: string
+        default: 9.6.7
+      hls_version:
+        description: "HLS version (empty to skip the HLS test)"
+        type: string
+        default: 2.13.0.0
+      test_parallel:
+        type: boolean
+        default: true
+      timeout_override:
+        type: boolean
+        default: false
+      brew_update:
+        description: "Run brew update (macOS only)"
+        type: boolean
+        default: true
+      test_suite:
+        type: boolean
+        default: true
+      test_toooba:
+        type: boolean
+        default: true
+      test_contrib:
+        type: boolean
+        default: true
+      test_bdw:
+        type: boolean
+        default: true
 
 concurrency:
   # When changes to a PR trigger a new run, cancel in-progress runs fro that PR;
@@ -16,6 +59,7 @@ jobs:
   # Basic linting requirements for new commits
 
   build-check-src:
+    if: github.event_name != 'workflow_dispatch'
     name: "Check: code cleanliness"
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -26,6 +70,7 @@ jobs:
         run: ".github/workflows/check_whitespace.sh"
 
   build-check-testsuite:
+    if: github.event_name != 'workflow_dispatch'
     name: "Check: testsuite lint"
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -41,13 +86,14 @@ jobs:
   # Builds for release, using a reliable and stable version of GHC
 
   build-and-test-ubuntu:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       matrix:
         os: [ ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, ubuntu-26.04, ubuntu-26.04-arm ]
         timeout_override: [ false ]
       fail-fast: false
     name: "Build/Test: ${{ matrix.os }}"
-    uses: ./.github/workflows/build-and-test-ubuntu.yml
+    uses: ./.github/workflows/build-and-test.yml
     with:
       os: ${{ matrix.os }}
       # reminder: update INSTALL.md to match this ghc_version
@@ -61,6 +107,7 @@ jobs:
     secrets: inherit
 
   build-and-test-macos:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       matrix:
         os: [ macos-15, macos-26 ]
@@ -76,7 +123,7 @@ jobs:
             brew_update: false
       fail-fast: false
     name: "Build/Test: ${{ matrix.os }}"
-    uses: ./.github/workflows/build-and-test-macos.yml
+    uses: ./.github/workflows/build-and-test.yml
     with:
       os: ${{ matrix.os }}
       ghc_version: 9.6.7
@@ -90,6 +137,7 @@ jobs:
   # in anticipation of upgrading the release builds to that version
 
   build-and-test-ghc-ubuntu:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       matrix:
         ghc:
@@ -103,7 +151,7 @@ jobs:
             hls:
       fail-fast: false
     name: "Build/Test: GHC Ubuntu"
-    uses: ./.github/workflows/build-and-test-ubuntu.yml
+    uses: ./.github/workflows/build-and-test.yml
     with:
       os: ubuntu-24.04
       ghc_version: ${{ matrix.ghc.version }}
@@ -111,6 +159,7 @@ jobs:
     secrets: inherit
 
   build-and-test-ghc-macos:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       matrix:
         ghc:
@@ -124,7 +173,7 @@ jobs:
             hls:
       fail-fast: false
     name: "Build/Test: GHC macOS"
-    uses: ./.github/workflows/build-and-test-macos.yml
+    uses: ./.github/workflows/build-and-test.yml
     with:
       os: macos-15
       ghc_version: ${{ matrix.ghc.version }}
@@ -132,9 +181,35 @@ jobs:
     secrets: inherit
 
   # ------------------------------
+  # Build and test the configuration and ref given to workflow_dispatch
+
+  build-and-test-dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    name: "Build/Test: dispatch"
+    # The ref may be unreviewed: give it a read-only token, and let it
+    # restore caches but not save any that other branches would restore
+    permissions:
+      contents: read
+    cache-mode: read
+    uses: ./.github/workflows/build-and-test.yml
+    with:
+      ref: ${{ inputs.ref || github.ref_name }}
+      os: ${{ inputs.os }}
+      ghc_version: ${{ inputs.ghc_version }}
+      hls_version: ${{ inputs.hls_version }}
+      test_parallel: ${{ inputs.test_parallel }}
+      timeout_override: ${{ inputs.timeout_override }}
+      brew_update: ${{ inputs.brew_update }}
+      test_suite: ${{ inputs.test_suite }}
+      test_toooba: ${{ inputs.test_toooba }}
+      test_contrib: ${{ inputs.test_contrib }}
+      test_bdw: ${{ inputs.test_bdw }}
+
+  # ------------------------------
   # Test the building of documentation
 
   build-doc-ubuntu:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       matrix:
         os: [ ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, ubuntu-26.04, ubuntu-26.04-arm ]
@@ -173,6 +248,7 @@ jobs:
           path: inst/doc
 
   build-doc-macOS:
+    if: github.event_name != 'workflow_dispatch'
     strategy:
       matrix:
         os: [ macos-15, macos-26 ]
@@ -228,6 +304,7 @@ jobs:
   # Build platform-generic documents for releases
 
   build-releasenotes-ubuntu:
+    if: github.event_name != 'workflow_dispatch'
     # Release Notes only need to be built once, so we build on recent
     # Ubuntu, not Mac OS.  Later, the release script will copy the
     # generated release notes to all release tarballs.

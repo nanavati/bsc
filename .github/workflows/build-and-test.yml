@@ -1,7 +1,8 @@
-name: Build and Test macOS
+name: Build and Test
 
-# This file defines a workflow parameterized by OS and GHC version,
-# that is called from the top-level CI workflow
+# This file defines a workflow parameterized by ref, OS and GHC version,
+# that is called from the top-level CI workflow.
+# Where Linux and macOS differ, the steps test RUNNER_OS.
 
 on:
   workflow_call:
@@ -27,22 +28,53 @@ on:
         required: false
         default: true
         type: boolean
+      ref:
+        description: "Branch, tag or full commit SHA to test (empty for the commit that triggered the caller)"
+        required: false
+        default: ''
+        type: string
+      test_suite:
+        required: false
+        default: true
+        type: boolean
+      test_toooba:
+        required: false
+        default: true
+        type: boolean
+      test_contrib:
+        required: false
+        default: true
+        type: boolean
+      test_bdw:
+        required: false
+        default: true
+        type: boolean
 
 jobs:
-  build-macOS:
+  build:
     name: "Build: ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
     runs-on: ${{ inputs.os }}
-    timeout-minutes: ${{ inputs.timeout_override && 360 || 45 }}
+    timeout-minutes: ${{ inputs.timeout_override && 360 || (startsWith(inputs.os, 'macos') && 45 || 30) }}
+    # The test jobs check out the commit built here, even if ref is a
+    # branch that moves while the workflow runs
+    outputs:
+      sha: ${{ steps.checkout.outputs.commit }}
     steps:
       - uses: actions/checkout@v6
+        id: checkout
         with:
+          ref: ${{ inputs.ref }}
           submodules: true
       - name: Install dependencies
         shell: bash
         env:
           BREW_UPDATE: ${{ inputs.brew_update }}
         run: |
-          .github/workflows/install_dependencies_macos.sh
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              .github/workflows/install_dependencies_macos.sh
+            else
+              sudo .github/workflows/install_dependencies_ubuntu.sh
+            fi
       # Don't rely on the VM to pick the GHC version
       # (and don't assume that GHCup is already installed on the runner)
       - name: Install GHC
@@ -63,7 +95,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ GITHUB.WORKSPACE }}/ccache
-          key: build-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ github.sha }}
+          key: build-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ steps.checkout.outputs.commit }}
           restore-keys: |
             build-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-
       - name: Build
@@ -71,24 +103,37 @@ jobs:
           CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
         run: |
           ccache --zero-stats --max-size 250M
-          export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
 
-          # Hack: Remove incompatible TCL header that something has installed
-          # in /usr/local/include in the GitHub CI image. This dir is at the
-          # start of the compiler's default search path, and overrides the
-          # system tcl.h, and causes a linker failure (because of a macro that
-          # renames Tcl_Main to Tcl_MainEx). We want to build against the
-          # system TCL so we don't introduce any extra deps for the bluetcl
-          # binary.
-          rm -f /usr/local/include/tcl.h
+              # Hack: Remove incompatible TCL header that something has installed
+              # in /usr/local/include in the GitHub CI image. This dir is at the
+              # start of the compiler's default search path, and overrides the
+              # system tcl.h, and causes a linker failure (because of a macro that
+              # renames Tcl_Main to Tcl_MainEx). We want to build against the
+              # system TCL so we don't introduce any extra deps for the bluetcl
+              # binary.
+              rm -f /usr/local/include/tcl.h
 
-          CORES=$(sysctl -n hw.ncpu)
+              CORES=$(sysctl -n hw.ncpu)
+              GHC_MAX_HEAP=4500M
+            else
+              export PATH=/usr/lib/ccache:$PATH
+
+              CORES=$(nproc)
+              GHC_MAX_HEAP=5G
+            fi
           echo "Cores: ${CORES}"
 
           # Generate package info
           export BSC_BUILD_PKGINFO=1
 
-          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M4500M -A128m -RTS' install-src
+          # An STP test hangs on the ARM runners
+          if [[ "${{ inputs.os }}" == *-arm ]]; then
+              export STP_STUB=1
+            fi
+
+          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS="+RTS -M${GHC_MAX_HEAP} -A128m -RTS" install-src
           tar czf inst.tar.gz inst
       - name: CCache stats
         env:
@@ -103,13 +148,23 @@ jobs:
         if: ${{ inputs.hls_version != '' }}
         run: |
           ghcup install hls ${{ inputs.hls_version }}
-          macos_ver=$(sw_vers -productVersion | cut -d '.' -f 1)
-          if [ "$macos_ver" -ge "14" ]; then
-              python3 -m venv ./venv
-              source ./venv/bin/activate
-              python3 -m pip install pyyaml
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              macos_ver=$(sw_vers -productVersion | cut -d '.' -f 1)
+              if [ "$macos_ver" -ge "14" ]; then
+                  python3 -m venv ./venv
+                  source ./venv/bin/activate
+                  python3 -m pip install pyyaml
+                else
+                  pip3 install pyyaml
+                fi
             else
-              pip3 install pyyaml
+              ubuntu_ver=$(lsb_release -rs | cut -d '.' -f 1)
+              if [ "$ubuntu_ver" -ge "24" ]; then
+                  sudo apt-get update
+                  sudo apt-get install -y python3-yaml
+                else
+                  pip3 install pyyaml
+                fi
             fi
           python3 util/haskell-language-server/gen_hie.py
           pushd src/comp
@@ -140,19 +195,27 @@ jobs:
           name: ${{ inputs.os }} ghc-${{ inputs.ghc_version }} build
           path: inst.tar.gz
 
-  test-macOS:
+  test:
     name: "Test ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
+    if: inputs.test_suite
     runs-on: ${{ inputs.os }}
-    timeout-minutes: ${{ inputs.timeout_override && 360 || 240 }}
-    needs: build-macos
+    timeout-minutes: ${{ inputs.timeout_override && 360 || (startsWith(inputs.os, 'macos') && 240 || 120) }}
+    needs: build
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build.outputs.sha }}
 
       - name: Install dependencies
         shell: bash
         env:
           BREW_UPDATE: ${{ inputs.brew_update }}
-        run: ".github/workflows/install_dependencies_testsuite_macos.sh"
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              .github/workflows/install_dependencies_testsuite_macos.sh
+            else
+              sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh
+            fi
 
       - name: Download bsc
         uses: actions/download-artifact@v8
@@ -168,7 +231,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ GITHUB.WORKSPACE }}/ccache
-          key: test-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ github.sha }}
+          key: test-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ needs.build.outputs.sha }}
           restore-keys: |
             test-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-
 
@@ -178,7 +241,18 @@ jobs:
         run: |
           # Use ccache to avoid recompiling generated .cxx every run.
           ccache --zero-stats --max-size 500M
-          export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+              CORES=$(sysctl -n hw.ncpu)
+            else
+              export PATH=/usr/lib/ccache:$PATH
+              CORES=$(nproc)
+
+              # Use the LLVM linker as the C++ linker
+              # for a moderate build-time speedup over ld.bfd
+              export LINKER=lld
+              export LDFLAGS="-Wl,-fuse-ld=$LINKER"
+            fi
 
           # Use -O0 for significantly faster C++ compiles (which more
           # than make up for slower simulations)
@@ -188,11 +262,7 @@ jobs:
           # because it's invoked with :set -eo pipefile)
           trap ./testsuite/archive_logs.sh EXIT
 
-          # Identify the C++ standard for linking with the SystemC library
-          SYSTEMC_CXXSTD=`nm --demangle $(brew --prefix systemc)/lib/libsystemc.dylib | grep sc_api_version_ | sed -E 's/.*_cxx20([0-9][0-9]).*/\1/' | head -1`
-
           if [[ "${{ inputs.test_parallel }}" == "true" ]]; then
-              CORES=$(sysctl -n hw.ncpu)
               echo "Cores: ${CORES}"
               MK_JFLAG="-j ${CORES}"
               MK_TARGET=checkparallel
@@ -201,10 +271,17 @@ jobs:
               MK_TARGET=check
             fi
 
-          make ${MK_JFLAG} -C testsuite ${MK_TARGET} \
-               TEST_SYSTEMC_INC=$(brew --prefix systemc)/include \
-               TEST_SYSTEMC_LIB=$(brew --prefix systemc)/lib \
-               TEST_SYSTEMC_CXXFLAGS=-std=c++${SYSTEMC_CXXSTD}
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              # Identify the C++ standard for linking with the SystemC library
+              SYSTEMC_CXXSTD=`nm --demangle $(brew --prefix systemc)/lib/libsystemc.dylib | grep sc_api_version_ | sed -E 's/.*_cxx20([0-9][0-9]).*/\1/' | head -1`
+
+              make ${MK_JFLAG} -C testsuite ${MK_TARGET} \
+                   TEST_SYSTEMC_INC=$(brew --prefix systemc)/include \
+                   TEST_SYSTEMC_LIB=$(brew --prefix systemc)/lib \
+                   TEST_SYSTEMC_CXXFLAGS=-std=c++${SYSTEMC_CXXSTD}
+            else
+              make ${MK_JFLAG} -C testsuite ${MK_TARGET}
+            fi
 
       # Show ccache stats so we can see what the hit-rate is like.
       - name: CCache stats
@@ -220,20 +297,28 @@ jobs:
           name: test-logs-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}
           path: logs.tar.gz
 
-  test-toooba-macOS:
+  test-toooba:
     name: "Test Toooba ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
+    if: inputs.test_toooba
     runs-on: ${{ inputs.os }}
-    timeout-minutes: ${{ inputs.timeout_override && 360 || 60 }}
-    needs: build-macos
+    timeout-minutes: ${{ inputs.timeout_override && 360 || (startsWith(inputs.os, 'macos') && 60 || 30) }}
+    needs: build
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build.outputs.sha }}
 
       - name: Install dependencies
         run: |
-          if [ "${{ inputs.brew_update }}" != "false" ]; then
-              brew update
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              if [ "${{ inputs.brew_update }}" != "false" ]; then
+                  brew update
+                fi
+              brew install ccache libelf
+            else
+              sudo apt-get update
+              sudo apt-get install -y ccache libelf-dev
             fi
-          brew install ccache libelf
 
       - name: Download bsc
         uses: actions/download-artifact@v8
@@ -242,10 +327,39 @@ jobs:
       - name: Install bsc
         run: "tar xzf inst.tar.gz"
 
+      # Inline, so the lookup follows this workflow's revision and not the tested ref's
       - name: Download Toooba
         env:
           HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
-        run: .github/workflows/checkout_possible_branch.sh bluespec Toooba
+          COMPANION_BRANCH: ${{ inputs.ref }}
+          UPSTREAM: bluespec
+          REPO: Toooba
+        run: |
+          OWNER=$GITHUB_REPOSITORY_OWNER BRANCH= FOUND=
+          if [ -n "$COMPANION_BRANCH" ]; then
+              BRANCH=${COMPANION_BRANCH#refs/heads/}
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              if [ -z "$HEAD_OWNER" ]; then
+                  echo "HEAD_OWNER not defined in environment; set it to the PR head repo owner"
+                  exit 1
+              fi
+              OWNER=$HEAD_OWNER BRANCH=$GITHUB_HEAD_REF
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              BRANCH=$GITHUB_REF_NAME
+          fi
+          if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ]; then
+              echo "Trying: git ls-remote --heads https://github.com/$OWNER/$REPO refs/heads/$BRANCH"
+              FOUND=$(git ls-remote --heads "https://github.com/$OWNER/$REPO" "refs/heads/$BRANCH" || true)
+              echo "Result: $FOUND"
+          fi
+          if [ -n "$FOUND" ]; then
+              echo "Checking out user's branch"
+              git clone --recursive "https://github.com/$OWNER/$REPO" "../$REPO"
+              git -C "../$REPO" checkout "$BRANCH"
+          else
+              echo "Checkout default"
+              git clone --recursive "https://github.com/$UPSTREAM/$REPO" "../$REPO"
+          fi
 
       # Restore previous ccache cache of compiled object files. Use a SHA
       # in the key so that a new cache file is generated after every
@@ -254,7 +368,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ GITHUB.WORKSPACE }}/ccache
-          key: test-toooba-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ github.sha }}
+          key: test-toooba-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ needs.build.outputs.sha }}
           restore-keys: |
             test-toooba-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-
 
@@ -264,7 +378,13 @@ jobs:
         run: |
           # Use ccache to avoid recompiling generated .cxx every run.
           ccache --zero-stats --max-size 500M
-          export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+              CORES=$(sysctl -n hw.ncpu)
+            else
+              export PATH=/usr/lib/ccache:$PATH
+              CORES=$(nproc)
+            fi
 
           export PATH=$PWD/../bsc/inst/bin:$PATH
 
@@ -274,7 +394,6 @@ jobs:
           # than make up for slower simulations)
           export CXXFLAGS="-O0"
 
-          CORES=$(sysctl -n hw.ncpu)
           echo "Cores: ${CORES}"
 
           # Workaround hardcoded parallelism
@@ -287,8 +406,10 @@ jobs:
         run: |
           export PATH=$PWD/../bsc/inst/bin:$PATH
 
-          # Workaround limitation in the Makefile for Homebrew on older macOS
-          export CPATH=/usr/local/include/libelf
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              # Workaround limitation in the Makefile for Homebrew on older macOS
+              export CPATH=/usr/local/include/libelf
+            fi
 
           cd ../Toooba/builds/RV64ACDFIMSU_Toooba_bluesim/
 
@@ -304,19 +425,27 @@ jobs:
           CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
         run: ccache --show-stats
 
-  test-contrib-macOS:
+  test-contrib:
     name: "Test bsc-contrib ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
+    if: inputs.test_contrib
     runs-on: ${{ inputs.os }}
     timeout-minutes: ${{ inputs.timeout_override && 360 || 30 }}
-    needs: build-macos
+    needs: build
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build.outputs.sha }}
 
       - name: Install dependencies
         shell: bash
         env:
           BREW_UPDATE: ${{ inputs.brew_update }}
-        run: ".github/workflows/install_dependencies_testsuite_macos.sh"
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              .github/workflows/install_dependencies_testsuite_macos.sh
+            else
+              sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh
+            fi
 
       - name: Download bsc
         uses: actions/download-artifact@v8
@@ -325,10 +454,39 @@ jobs:
       - name: Install bsc
         run: "tar xzf inst.tar.gz"
 
+      # Inline, so the lookup follows this workflow's revision and not the tested ref's
       - name: Download bsc-contrib
         env:
           HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
-        run: .github/workflows/checkout_possible_branch.sh B-Lang-org bsc-contrib
+          COMPANION_BRANCH: ${{ inputs.ref }}
+          UPSTREAM: B-Lang-org
+          REPO: bsc-contrib
+        run: |
+          OWNER=$GITHUB_REPOSITORY_OWNER BRANCH= FOUND=
+          if [ -n "$COMPANION_BRANCH" ]; then
+              BRANCH=${COMPANION_BRANCH#refs/heads/}
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              if [ -z "$HEAD_OWNER" ]; then
+                  echo "HEAD_OWNER not defined in environment; set it to the PR head repo owner"
+                  exit 1
+              fi
+              OWNER=$HEAD_OWNER BRANCH=$GITHUB_HEAD_REF
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              BRANCH=$GITHUB_REF_NAME
+          fi
+          if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ]; then
+              echo "Trying: git ls-remote --heads https://github.com/$OWNER/$REPO refs/heads/$BRANCH"
+              FOUND=$(git ls-remote --heads "https://github.com/$OWNER/$REPO" "refs/heads/$BRANCH" || true)
+              echo "Result: $FOUND"
+          fi
+          if [ -n "$FOUND" ]; then
+              echo "Checking out user's branch"
+              git clone --recursive "https://github.com/$OWNER/$REPO" "../$REPO"
+              git -C "../$REPO" checkout "$BRANCH"
+          else
+              echo "Checkout default"
+              git clone --recursive "https://github.com/$UPSTREAM/$REPO" "../$REPO"
+          fi
 
       - name: Build and install bsc-contrib
         run: |
@@ -342,7 +500,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ GITHUB.WORKSPACE }}/ccache
-          key: test-contrib-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ github.sha }}
+          key: test-contrib-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ needs.build.outputs.sha }}
           restore-keys: |
             test-contrib-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-
 
@@ -352,7 +510,16 @@ jobs:
         run: |
           # Use ccache to avoid recompiling generated .cxx every run.
           ccache --zero-stats --max-size 500M
-          export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+            else
+              export PATH=/usr/lib/ccache:$PATH
+
+              # Use the LLVM linker as the C++ linker
+              # for a moderate build-time speedup over ld.bfd
+              export LINKER=lld
+              export LDFLAGS="-Wl,-fuse-ld=$LINKER"
+            fi
 
           # Use -O0 for significantly faster C++ compiles (which more
           # than make up for slower simulations)
@@ -384,13 +551,16 @@ jobs:
           name: test-contrib-logs-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}
           path: logs.tar.gz
 
-  test-bdw-macOS:
+  test-bdw:
     name: "Test bdw ${{ inputs.os }} ghc-${{ inputs.ghc_version }}"
+    if: inputs.test_bdw
     runs-on: ${{ inputs.os }}
     timeout-minutes: ${{ inputs.timeout_override && 360 || 30 }}
-    needs: build-macos
+    needs: build
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build.outputs.sha }}
 
       - name: Download bsc
         uses: actions/download-artifact@v8
@@ -399,10 +569,39 @@ jobs:
       - name: Install bsc
         run: "tar xzf inst.tar.gz"
 
+      # Inline, so the lookup follows this workflow's revision and not the tested ref's
       - name: Download bdw
         env:
           HEAD_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
-        run: .github/workflows/checkout_possible_branch.sh B-Lang-org bdw
+          COMPANION_BRANCH: ${{ inputs.ref }}
+          UPSTREAM: B-Lang-org
+          REPO: bdw
+        run: |
+          OWNER=$GITHUB_REPOSITORY_OWNER BRANCH= FOUND=
+          if [ -n "$COMPANION_BRANCH" ]; then
+              BRANCH=${COMPANION_BRANCH#refs/heads/}
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              if [ -z "$HEAD_OWNER" ]; then
+                  echo "HEAD_OWNER not defined in environment; set it to the PR head repo owner"
+                  exit 1
+              fi
+              OWNER=$HEAD_OWNER BRANCH=$GITHUB_HEAD_REF
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              BRANCH=$GITHUB_REF_NAME
+          fi
+          if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ]; then
+              echo "Trying: git ls-remote --heads https://github.com/$OWNER/$REPO refs/heads/$BRANCH"
+              FOUND=$(git ls-remote --heads "https://github.com/$OWNER/$REPO" "refs/heads/$BRANCH" || true)
+              echo "Result: $FOUND"
+          fi
+          if [ -n "$FOUND" ]; then
+              echo "Checking out user's branch"
+              git clone --recursive "https://github.com/$OWNER/$REPO" "../$REPO"
+              git -C "../$REPO" checkout "$BRANCH"
+          else
+              echo "Checkout default"
+              git clone --recursive "https://github.com/$UPSTREAM/$REPO" "../$REPO"
+          fi
 
       - name: Build and install bdw
         run: |
@@ -413,7 +612,12 @@ jobs:
         shell: bash
         env:
           BREW_UPDATE: ${{ inputs.brew_update }}
-        run: "../bdw/.github/workflows/install_dependencies_testsuite_macos.sh"
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              ../bdw/.github/workflows/install_dependencies_testsuite_macos.sh
+            else
+              sudo ../bdw/.github/workflows/install_dependencies_testsuite_ubuntu.sh
+            fi
 
       # Restore previous ccache cache of compiled object files. Use a SHA
       # in the key so that a new cache file is generated after every
@@ -422,7 +626,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ GITHUB.WORKSPACE }}/ccache
-          key: test-bdw-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ github.sha }}
+          key: test-bdw-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-${{ needs.build.outputs.sha }}
           restore-keys: |
             test-bdw-${{ inputs.os }}-ghc-${{ inputs.ghc_version }}-ccache-
 
@@ -432,7 +636,16 @@ jobs:
         run: |
           # Use ccache to avoid recompiling generated .cxx every run.
           ccache --zero-stats --max-size 500M
-          export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              export PATH=$(brew --prefix)/opt/ccache/libexec:$PATH
+            else
+              export PATH=/usr/lib/ccache:$PATH
+
+              # Use the LLVM linker as the C++ linker
+              # for a moderate build-time speedup over ld.bfd
+              export LINKER=lld
+              export LDFLAGS="-Wl,-fuse-ld=$LINKER"
+            fi
 
           # Use -O0 for significantly faster C++ compiles (which more
           # than make up for slower simulations)
@@ -448,7 +661,11 @@ jobs:
           # because it's invoked with :set -eo pipefile)
           trap ./testsuite/archive_logs.sh EXIT
 
-          make -C testsuite/bsc.bdw check
+          if [ "$RUNNER_OS" = "macOS" ]; then
+              make -C testsuite/bsc.bdw check
+            else
+              xvfb-run -a make -C testsuite/bsc.bdw check
+            fi
 
       # Show ccache stats so we can see what the hit-rate is like.
       - name: CCache stats
