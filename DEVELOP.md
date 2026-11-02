@@ -43,7 +43,7 @@ The following is a running list of those writings.
   in `src/comp/PreIds.hs`
 * For Haskell Language Server (HLS) setup see the dedicated [README file](./util/haskell-language-server/README.md)
 * The [GitHub CI](./.github/workflows/) can serve as an example of building and working with the source.
-  See, for example, [build-and-test-ubuntu.yml](./.github/workflows/build-and-test-ubuntu.yml) which contains steps for:
+  See, for example, [build-and-test.yml](./.github/workflows/build-and-test.yml) which contains steps for:
   * Installing dependencies
   * Running the Haskell Language Server (HLS)
   * Running GHC's interactive environment (GHCi)

@@ -34,7 +34,10 @@ user_branch_checkout () {
     fi
 }
 
-if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+# A caller testing a named ref looks for a branch of that name
+if [ -n "${COMPANION_BRANCH}" ]; then
+    user_branch_checkout "${GITHUB_REPOSITORY_OWNER}" "${COMPANION_BRANCH#refs/heads/}"
+elif [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
     if [ -z "${HEAD_OWNER}" ] ; then
         echo "HEAD_OWNER not defined in environment"
         echo "use ${{ github.event.pull_request.head.repo.owner.login }}"
