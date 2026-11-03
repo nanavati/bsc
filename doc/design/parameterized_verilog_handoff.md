@@ -59,11 +59,18 @@ AState's size-parameter inputs, `ENotKNum` "Only size polymorphism allowed
 in code generation", GenWrap's `IfcTRec.rec_numargs` "Until we support
 synthesis of size-parameterized modules"). This task revives that path.
 
-Bluesim is explicitly out of the picture for the generated module: Bluesim
-cannot consume symbolic widths, so under the Bluesim backend a parameterized
-module is *inlined* into its parent exactly as a non-synthesized polymorphic
-module is today (the wrapper selects the original body under `genC`). The
-reference Bluespec source is therefore Bluesim's model, which is the point.
+Bluesim consumes the same artifact. The parameterized module also gets a
+`.ba` whose sizes are symbolic, and Bluesim's link step instantiates it per
+distinct parameter set (the way a Verilog simulator elaborates a
+`parameter`ized module): `simExpand` binds `width = 32` from the parent's
+instance arguments, substitutes into a copy of the module, folds, and
+registers a monomorphic module for code generation. One C++ class per width
+is exactly the shape the hand-written primitives have today
+(`MOD_Fifo<tUInt32>`), so this is the mechanism by which reference Bluespec
+implementations will *replace* the Bluesim primitive library: same import
+name, same parameters, `primMap` row deleted, `FIFO2.ba` and `FIFO2.v`
+shipped together. No backend selection by `genC`/`genVerilog` anywhere: one
+`.bo`, one `.ba`, one `.v`, and the wrapper is identical for both backends.
 
 ## WHAT (what done looks like)
 
@@ -99,7 +106,12 @@ module mkPass(CLK, RST_N, D_IN, EN, Q_OUT);
 A parent that does `a :: VPass 8 <- mkPass; b :: VPass 32 <- mkPass`
 produces `mkPass #(.width(32'd8)) a(...)` and `mkPass #(.width(32'd32))
 b(...)` and compiles and simulates with Verilator against `mkPass.v`; under
-`bsc -sim` the same parent simulates with `mkPass` inlined. The reference
+`bsc -sim` the same parent links against `mkPass.ba` (symbolic sizes), and
+the Bluesim link produces two generated classes, `mkPass__width8` and
+`mkPass__width32`, with `a` and `b` as instances of them, VCD scopes `a`
+and `b` showing `r` at 8 and 32 bits, and Bluetcl `sim ls` navigating into
+them. A second link of the same design produces byte-identical C++ for the
+instantiated modules (the `-c` byte-identity harness passes). The reference
 cores for FIFO1, FIFO2, FIFOL1, FIFOL2 and Counter (the hand-written
 `src/Verilog/*.v` transliterated into Bluespec, see the fidelity table in
 `doc/design/size_polymorphic_synthesis.md` section 5.3) generate Verilog
@@ -240,9 +252,20 @@ unused"); `followABMIHierarchy` partitions instances on `avi_user_import`:
 user imports are leaves and never looked up, native submodules need
 `<name>.ba` (`EMissingABinModFile`), and Bluesim errors on a user import
 that is not a primitive (`EBSimForeignImport`). The `.bo` is not
-backend-tagged; `genC`/`genVerilog` are patched into the imported Prelude
-in memory per compile (`adjEnv`), never written, so one `.bo` serves both
-backends as long as its defs evaluate correctly under either. Libraries are
+backend-tagged, so one `.bo` must serve both backends and may contain no
+backend-dependent definition. On the Bluesim side, `simExpand`
+(`src/comp/SimExpand.hs`) builds one `SimPackage` per *module type* from
+each `ABinModInfo` the hierarchy walk found; `simMakeCBlocks` makes one C++
+class per module (`MOD_<name>`); the user-module naming function ignores
+instantiation arguments, so two instances of one module with different
+`parameter` values share a class and receive the values as constructor
+arguments (`PARAM_` members, `mkStateInitList` in `src/comp/SimCCBlock.hs`);
+instantiation arguments must be constants (`EBSimDynamicArg`); `SimExpand`
+canonicalizes an `Integer` parameter to `ATBit 32`; per-module C++ object
+reuse and the fork's `-c` byte-identity mode key on the module name
+(`src/comp/SimFileUtils.hs`, `DEVELOP.md`). The `.ba` stores the APackage
+before `aState` (so before the Verilog-only inlining passes), after
+`Params.iParams` and `aDropUndet`. Libraries are
 built with no backend flag (`src/Libraries/common.mk`, "Only .bo files are
 generated"); the Verilog search path is `vdir` (or `.`), then
 `$BLUESPECDIR/Libraries`, then `$BLUESPECDIR/Verilog` (`FlagsDecode.hs`
@@ -341,9 +364,10 @@ path or error).
    CVParser.lhs`); `Bin PProp` tag (next free; `PPdefault_reset_arg` is 35
    at the base commit); bump the `.bo` and `.ba` headers (`GenBin.hs`,
    `GenABin.hs`).
-2. `Depend.getPkgInfo`: a `PPparameterized` def is a `gen` only under the
-   Verilog backend (its output is a `.v`; it never has a `.ba`). bluetcl
-   `defs module` lists it as a synthesized module.
+2. `Depend.getPkgInfo`/`getGenFs`: a `PPparameterized` def is an ordinary
+   `gen` (a `.v` under Verilog, a `.ba` under Bluesim, both under `-elab`),
+   so no change is needed there. bluetcl `defs module` lists it as a
+   synthesized module.
 3. `GenWrap.getDef`/`chkType`: for a parameterized def, accept `KNum` type
    variables and numeric provisos; reject everything else with T0041; keep
    the interface-shape gates (polymorphic fields, non-interface,
@@ -368,17 +392,16 @@ path or error).
    themselves are kept as `[Pred]` (over `CType`) on the `WrapInfo` (new
    field `wi_size_preds`) for the evaluator (3.5).
 6. `mkDef` (the wrapper): keep the def's original `CQType`; the body is
-   `if primGenC then <the user's original def body, retained under a hidden
-   name> else liftModule (xWrapperModuleVerilog ... name wire_info args
-   ...)`, so one `.bo` serves both backends: under Bluesim the module is
-   inlined, under Verilog it is an import of the generated module. The
-   `wire_info` comes from elaboration and must carry one `Param (VName
-   "width")` per size parameter, ordered first (3.4); `mkDef` supplies the
-   matching argument expression `valueOf width` (a `CVar idValueOf` applied
-   at `TVar width`). Mark this wrapper `is_user_import = True`
-   (`xCmoduleVerilog`'s flag), so every `.ba` hierarchy walk treats the
-   instance as a leaf like today's BVI imports and no `.ba` of the
-   parameterized module is ever looked for. The module name is the def's
+   `liftModule (xWrapperModuleVerilog ... name wire_info args ...)` exactly
+   as for a monomorphic module, with no backend selection of any kind: the
+   same wrapper is an import of `FIFO2.v` under Verilog and of `FIFO2.ba`
+   under Bluesim (3.8). The `wire_info` comes from elaboration and must
+   carry one `Param (VName "width")` per size parameter, ordered first
+   (3.4); `mkDef` supplies the matching argument expression `valueOf width`
+   (a `CVar idValueOf` applied at `TVar width`). Keep `is_user_import =
+   False` (`xCmoduleVerilog`'s flag) so the `.ba` hierarchy walk follows the
+   instance by name and finds `<name>.ba` on the path, as for any
+   synthesized submodule. The module name is the def's
    base name; honor an optional `verilog_name = "FIFO2"` pragma
    (`PPverilogName`) for the module name literal, `apkg_name` and the
    `.v`/`.ba` file names, with the same change set the sibling prompt lists
@@ -548,15 +571,72 @@ mutual-exclusion reasoning); nothing is ever proved through payload bits.
 `getBitType` and the `PrimSignExt` width path must not be reached for
 symbolic types.
 
-Bluesim, formal, bluetcl: `writeABin` skips the `.ba` for a parameterized
-module (nothing consumes it: the wrapper is a user import for link walks,
-and Bluesim inlines); `-elab` likewise; `convAPackageToLambdaCalc`/`SAL`
-and `-synthesize` raise a user error for parameterized modules; bluetcl
-`module load` of the parameterized module itself is unsupported (document
-it); `-show-schedule` and `-show-rule-rel` work since they run in
-`genModule`.
+`.ba`, formal, bluetcl: `writeABin` writes the parameterized module's `.ba`
+under `-sim` and `-elab` as for any module, with symbolic sizes (`Bin
+SizeExpr`, the new `AExpr`/`VExpr` forms); `apkg_size_params` is already
+serialized. `convAPackageToLambdaCalc`/`SAL` and `-synthesize` raise a user
+error for parameterized modules. bluetcl `module load` of the parameterized
+module shows sizes as expressions (`PPrint SizeExpr`); `-show-schedule` and
+`-show-rule-rel` work since they run in `genModule`.
 
-### 3.8 Library build and installation
+### 3.8 Bluesim: link-time instantiation of a parameterized `.ba`
+
+Bluesim code generation stays width-concrete. The new step lives in
+`simExpand`, after the hierarchy walk has loaded every `ABinModInfo` and
+before `SimPackage`s are built:
+
+1. For every `AVInst` in every loaded package whose module's `.ba` has a
+   non-empty `apkg_size_params`, read the parameter binding from the
+   instance: `getInstArgs` zips `vArgs` with `avi_iargs`, and the `Param
+   "width"` entry must be an `ASInt` literal (Bluesim already requires
+   constant instantiation arguments, `EBSimDynamicArg`; a non-literal here
+   is that error).
+2. Key = (module name, [(parameter, value)]); name = module name followed
+   by `__<param><value>` per parameter in declaration order
+   (`FIFO2__width32`, `SizedFIFO__width8__depth16`), a legal C++ and file
+   identifier. Instantiate once per distinct key: copy the APackage,
+   substitute `SEVar width` by `SELit 32` in every `AType` and `ASParam
+   width` by `ASInt 32` in every expression (including `avi_iargs` of
+   nested instances, `avi_meth_types`, `avi_port_types`, interface and
+   rule types; write the substitution as one generic ASyntax traversal in
+   `SimExpand` or `ASyntaxUtil`), fold the residual Integer arithmetic and
+   any `APrim` over now-literal operands with the existing expression
+   folder, re-run `aDropUndet` so no `ASAny` of now-concrete width remains,
+   drop the substituted parameters from `apkg_size_params` and the
+   parameter list, and set `apkg_name` to the mangled name. Value
+   parameters (`guarded`, `init`) stay parameters and keep flowing as
+   constructor arguments as today.
+3. Rewrite the parent's `AVInst` to the mangled module name and remove the
+   size-parameter arguments from its `avi_iargs`/`vArgs`; register the
+   instantiated package in the module map under the mangled name so
+   `SimPackage` construction, `simMakeCBlocks` and the C++ class naming
+   (`MOD_FIFO2__width32`) see an ordinary monomorphic module.
+4. Reuse the stored schedule and path information unchanged: the module
+   was scheduled with every payload-dependent condition treated as an
+   unknown (3.7, scheduling), so the stored `VSchedInfo`/`VPathInfo` hold
+   at every width; the instantiation must not re-schedule.
+5. Nested parameterized modules (`SizedFIFO` instantiating `RegFile` with
+   `.addr_width($clog2(depth))`) are instantiated recursively after
+   substitution turns their arguments into literals; detect and reject
+   cycles.
+6. Per-module object reuse and the `-c` byte-identity harness
+   (`check_block_codegen_modules`) key on module names: an instantiated
+   module is a derived module whose C++ must be byte-identical across links
+   for the same key (deterministic naming and traversal order), and the
+   `-c` mode must generate it from the parameterized `.ba` plus the key.
+   VCD scopes use the instance name and the mangled module name; Bluetcl
+   `sim ls`/`cd` are unaffected.
+
+This is the mechanism that replaces a Bluesim primitive: once a reference
+core ships `FIFO2.ba` and `FIFO2.v` with the same import name and
+parameters as the hand-written primitive, deleting the `FIFO2` row from
+`primMap` (and the name-keyed helpers that assume it) makes the hierarchy
+walk resolve `FIFO2` to the `.ba` instead of the C++ model. Emitting
+width-generic C++ (`template <int width> class MOD_FIFO2`) is a possible
+later refinement of step 3 only; it needs the same `.ba`, so nothing in this
+prompt changes if it is done.
+
+### 3.9 Library build and installation
 
 Packages that define parameterized modules must be compiled with `-verilog
 -vdir $(BUILDDIR)` so the generated `.v` lands in `inst/lib/Libraries`,
@@ -567,7 +647,7 @@ generated file must not share a name with a hand-written one still
 installed in `inst/lib/Verilog` (search-path order would pick the generated
 one first; make the clash a build error in `src/Verilog/common.mk`).
 
-### 3.9 Library structure under this design
+### 3.10 Library structure under this design
 
 The two-layer structure stays: `FIFOF_.bsv`'s `vMk2FIFOF`-style import is
 replaced by the parameterized core `mkFIFO2 :: (Add 1 _ width) => Module
@@ -575,8 +655,8 @@ replaced by the parameterized core `mkFIFO2 :: (Add 1 _ width) => Module
 (`prefix = ""`, `arg_names = [D_IN]`, `enable = "ENQ"`, `result =
 "D_OUT"`, `always_ready`, `reset_prefix = "RST"`, `parameter guarded`),
 and the outer wrapper keeps its `valueOf sa == 0` branch to the zero-width
-variant and its `pack`/`unpack`. Under `-sim` the wrapper's `genC` branch
-inlines the core. The schedule and port-type fidelity items in
+variant and its `pack`/`unpack`. Under `-sim` the core is instantiated at
+link from its `.ba` (3.8). The schedule and port-type fidelity items in
 `doc/design/size_polymorphic_synthesis.md` section 4 apply unchanged and are
 not part of this task.
 
@@ -585,8 +665,12 @@ not part of this task.
 - Monomorphic `synthesize` modules produce byte-identical `.v` and `.ba`
   before and after (the `ASize` change is M0 and must land with zero
   golden changes).
-- No change to `src/bluesim/` or to Bluesim code generation; Bluesim sees
-  parameterized modules only through inlining.
+- No change to `src/bluesim/`; Bluesim code generation (`SimMakeCBlocks`,
+  `SimCCBlock`, `SimBlocksToC`) stays width-concrete and unchanged; the
+  only Bluesim-side addition is the instantiation step in `SimExpand` (3.8)
+  and the derived-module handling in `SimFileUtils`/`-c` mode.
+- No implementation selection by `genC`/`genVerilog` (or any other
+  backend-dependent definition) in compiler-generated code or in the `.bo`.
 - Any `.bo`/`.ba` format change bumps both header tags.
 - `-Wall` is on; `SizeExpr` has no `Ord`/`Integral`/`Enum`, so sites that
   fold sizes fail to compile until audited; do not add those instances to
@@ -618,11 +702,14 @@ not part of this task.
      step; independently valuable; expect 1000 to 2000 lines of mostly
      mechanical diff.)
    - **M1** vertical slice: pragma, GenWrap record path, inner def with
-     `ILAM`, wrapper with `genC` selector and `Param` entries, `imod_type_args`,
+     `ILAM`, wrapper with `Param` entries, `imod_type_args`,
      AState/AVerilog `parameter width = 1;`, APaths unblock, `PrimValueOf`
      to `ICModParam`, the `>= 1` assumption deciding `== 0`/`/= 0` only,
-     `vSize`/port/reg printing of symbolic ranges. Target: `mkPass` above
-     generates and co-simulates at five widths.
+     `vSize`/port/reg printing of symbolic ranges, `.ba` with symbolic
+     sizes, and the Bluesim link-time instantiation of 3.8 for a module
+     with one size parameter and no residual arithmetic. Target: `mkPass`
+     above generates `mkPass.v`, and a parent instantiating it at five
+     widths co-simulates under Verilator and Bluesim with identical output.
    - **M2** evaluator and back end for the FIFO class: residual bit
      primitives, symbolic literals and unknowns, `iToCT`, `chkStateVarTypes`,
      InlineReg/Wires/CReg, AOpt/AVeriQuirks/AExpand/ADropUndet guards, SAT
@@ -632,11 +719,20 @@ not part of this task.
      Verilator lockstep at the widths listed in WHAT.
    - **M3** provisos and the three-valued oracle, residual Integer
      arithmetic, `TLog`/`$clog2`/`+:` with the dialect gate (target:
-     SizedFIFO with `width` and `depth` parameters), `verilog_name`,
-     library build plumbing (3.8), `-elab`/formal/bluetcl behavior, user
+     SizedFIFO with `width` and `depth` parameters), the full Bluesim
+     instantiation (nested parameterized modules, residual arithmetic
+     folding, `-c` byte-identity for derived modules), `verilog_name`,
+     library build plumbing (3.9), `-elab`/formal/bluetcl behavior, user
      guide text (`doc/user_guide/user_guide.tex`, the `synthesize`
      attribute section, and the reference guides' statement that bsc does
      not create parameterized Verilog).
+   - **M4** the first replacement: the reference FIFO2 core with
+     `verilog_name = "FIFO2"` ships `FIFO2.ba` and `FIFO2.v`, the `FIFO2`
+     row leaves `primMap` and the name-keyed helpers, and the FIFO tests in
+     `testsuite/bsc.lib/fifo` run against the reference under both
+     backends. (The remaining families follow the plan in
+     `doc/design/size_polymorphic_synthesis.md` sections 5 to 7 and are not
+     part of this task.)
 4. Tests, in a new `testsuite/bsc.verilog/sizeparams/` (a sibling of
    `parameters/` and `noinline/`; `Makefile` copied from
    `testsuite/bsc.verilog/noinline/Makefile`), with `sizeparams.exp` using
@@ -645,7 +741,11 @@ not part of this task.
    `test_c_veri_bsv_modules`, `compile_verilog_fail_error`): `mkPass`
    header and golden; a parent instantiating it at 1, 8, 32, 64, 128 with
    five `#(.width(32'd...))` matches, co-simulated under Verilator and
-   Bluesim; a core with `parameter guarded` and a `TAdd width 1` field; a
+   Bluesim, with the Bluesim build checked for the five derived classes
+   (`mkPass__width1` ... `mkPass__width128`), a VCD scope per instance, and
+   `-c` byte-identity across two links; two instances at the same width
+   sharing one derived module; a core with `parameter guarded` and a `TAdd
+   width 1` field; a
    `TLog depth` core under the dialect flag and its rejection without it; a
    submodule instantiated with `.width(width)` passed down; `ICLazyPack` at
    symbolic width through a struct wrapper; rejection tests for `Vector
@@ -669,18 +769,26 @@ not part of this task.
 
 ## OUT OF SCOPE (do not do)
 
-Per-instantiation specialization (the sibling design); Bluesim support for
-parameterized modules (C++ templates); payload polymorphism (`Bits a sa`)
-in the generated module; schedule pinning, `savePortType` changes, and the
-library-wide switch of Bluesim to reference primitives; `.ba` output for
-parameterized modules; formal (LambdaCalc/SAL) output for them.
+Per-instantiation specialization at the parent's elaboration (the sibling
+design); width-generic C++ emission (`template <int width>` classes) in
+Bluesim; payload polymorphism (`Bits a sa`) in the generated module;
+schedule pinning and `savePortType` changes; replacing any primitive family
+other than the FIFO2 pilot of M4; formal (LambdaCalc/SAL) output for
+parameterized modules.
 
 ## ESTIMATE
 
-M0 1000 to 2000 lines (mechanical, wide), M1 1500 to 2500, M2 2000 to
-3000, M3 1000 to 2000: 6000 to 9000 lines of Haskell before tests, with the
-risk concentrated in M2 (every width-folding site in the evaluator and the
-Verilog back end must be found and guarded, and the failure mode is silently
-wrong Verilog rather than a crash). The sibling per-instantiation design is
-roughly a third of this; this prompt exists because the parameterized
-artifact is what the Verilog library and its consumers need.
+M0 1000 to 2000 lines (mechanical and wide: the compiler points at every
+site), M1 1000 to 1500, M2 1500 to 2500, M3 1000 to 2000, M4 a few hundred
+plus library source: roughly 5000 to 8000 lines of Haskell before tests.
+Most of that is not design risk: for a width-generic module the symbolic
+widths do stay out of the way semantically, and the evaluator already lets
+them fall through to residual applications; the cost is that `Integer`
+widths are baked into ASyntax and some sixty to eighty back-end sites
+compute with them (masks, extract bounds, concatenation merging, sized
+literal printing, bit-vector sorts, zero-width tests), each needing the
+same one-line "only if concrete" guard, with a missed site producing
+silently wrong Verilog. M0's type change turns that audit into compile
+errors, which is why it comes first. The Bluesim instantiation step is
+self-contained (one substitution traversal plus naming) and adds no risk to
+code generation.
