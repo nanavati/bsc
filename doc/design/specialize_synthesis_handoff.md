@@ -5,6 +5,11 @@ self-contained; the agent needs no other conversation context. The longer
 design document `doc/design/size_polymorphic_synthesis.md` is background
 reading only; where the two differ, this prompt wins.
 
+This prompt describes the *per-instantiation specialization* design (one
+monomorphic module per distinct use). The alternative, one parameterized
+Verilog module with `parameter width`, is a different design with its own
+prompt in `parameterized_verilog_handoff.md`; do not mix the two.
+
 ---
 
 Implement per-instantiation specialization of size-polymorphic `synthesize`
