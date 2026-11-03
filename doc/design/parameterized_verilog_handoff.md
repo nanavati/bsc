@@ -16,6 +16,16 @@ compiled, into a Verilog module whose numeric type variables become Verilog
 today's hand-written `src/Verilog/FIFO2.v` is instantiated through `import
 "BVI"`.
 
+PRIORITY: width-parameterized **Verilog output comes first**. The first
+deliverable is a generated `.v` of the same kind as the hand-written
+primitives in `src/Verilog/`: `parameter width = 1;`, `[width - 1 : 0]`
+ports and registers, instantiable with `#(.width(N))`, and importable by a
+hand-written `import "BVI"` / `module verilog` declaration with `parameter
+width = valueOf(sa)` just as `FIFO2.v` is today. Everything else in this
+prompt (the symbolic `.ba`, Bluesim's link-time instantiation, the SMT
+oracle, the library replacement) comes after that artifact exists and is
+proven against Verilator; the milestones in APPROACH are ordered that way.
+
 ## WHERE
 
 Repository: the MatX fork of bsc, `matx-inc/bsc`, not upstream
@@ -103,6 +113,12 @@ module mkPass(CLK, RST_N, D_IN, EN, Q_OUT);
   ...
 ```
 
+That file is importable the way the library imports its primitives: a
+separate package with `import "BVI" mkPass = module vMkPass (VPassIfc#(a))
+provisos (Bits#(a, sa)); parameter width = valueOf(sa); ...` against
+`mkPass.v` compiles, instantiates `mkPass #(.width(32'd8))`, and
+co-simulates under Verilator; that import is the first acceptance test and
+is what "polymorphic Verilog of the kind we can import" means here.
 A parent that does `a :: VPass 8 <- mkPass; b :: VPass 32 <- mkPass`
 produces `mkPass #(.width(32'd8)) a(...)` and `mkPass #(.width(32'd32))
 b(...)` and compiles and simulates with Verilator against `mkPass.v`; under
@@ -813,32 +829,41 @@ not part of this task.
      conservatively; full testsuite byte-identical. (Largest mechanical
      step; independently valuable; expect 1000 to 2000 lines of mostly
      mechanical diff.)
-   - **M1** vertical slice: pragma, GenWrap record path, inner def with
-     `ILAM`, wrapper with `Param` entries, `imod_type_args`,
-     AState/AVerilog `parameter width = 1;`, APaths unblock, `PrimValueOf`
-     to `ICModParam`, the `>= 1` assumption deciding `== 0`/`/= 0` only,
-     `vSize`/port/reg printing of symbolic ranges, `.ba` with symbolic
-     sizes, and the Bluesim link-time instantiation of 3.8 for a module
-     with one size parameter and no residual arithmetic. Target: `mkPass`
-     above generates `mkPass.v`, and a parent instantiating it at five
-     widths co-simulates under Verilator and Bluesim with identical output.
-   - **M2** evaluator and back end for the FIFO class: residual bit
-     primitives, symbolic literals and unknowns, `iToCT`, `chkStateVarTypes`,
-     InlineReg/Wires/CReg, AOpt/AVeriQuirks/AExpand/ADropUndet guards, SAT
-     intercept, structural-use errors. Target: reference FIFO1, FIFO2,
-     FIFOL1, FIFOL2, Counter cores generate Verilog matching the
-     hand-written files' ports, parameters and register names and pass
-     Verilator lockstep at the widths listed in WHAT.
-   - **M3** provisos and the three-valued oracle, residual Integer
-     arithmetic, `TLog`/`$clog2`/`+:` with the dialect gate (target:
-     SizedFIFO with `width` and `depth` parameters), the full Bluesim
-     instantiation (nested parameterized modules, residual arithmetic
-     folding, `-c` byte-identity for derived modules), `verilog_name`,
-     library build plumbing (3.9), `-elab`/formal/bluetcl behavior, user
-     guide text (`doc/user_guide/user_guide.tex`, the `synthesize`
-     attribute section, and the reference guides' statement that bsc does
-     not create parameterized Verilog).
-   - **M4** the first replacement: the reference FIFO2 core with
+   - **M1** Verilog vertical slice (no Bluesim yet): pragma, GenWrap
+     record path, inner def with `ILAM`, wrapper with `Param` entries,
+     `imod_type_args`, AState/AVerilog `parameter width = 1;`, APaths
+     unblock, `PrimValueOf` to `ICModParam`, the `>= 1` assumption deciding
+     `== 0`/`/= 0` only, `vSize`/port/reg printing of symbolic ranges.
+     Target: `mkPass` above generates `mkPass.v`; a hand-written `import
+     "BVI"` of that file in another package compiles and co-simulates under
+     Verilator; a parent instantiating `mkPass` directly at five widths
+     produces five `#(.width(32'd...))` instantiations and co-simulates
+     under Verilator. Under `-sim` a parent that instantiates a
+     parameterized module fails with a clear "not yet supported" error at
+     this milestone (never a wrong simulation).
+   - **M2** evaluator and back end for the FIFO class, still Verilog only:
+     residual bit primitives, symbolic literals and unknowns, `iToCT`,
+     `chkStateVarTypes`, InlineReg/Wires/CReg, AOpt/AVeriQuirks/AExpand/
+     ADropUndet guards, SAT intercept, structural-use errors. Target:
+     reference FIFO1, FIFO2, FIFOL1, FIFOL2, Counter cores generate Verilog
+     matching the hand-written files' ports, parameters and register names,
+     importable through the existing `FIFOF_.bsv` BVI declarations
+     unchanged, and pass Verilator lockstep against the hand-written files
+     at the widths listed in WHAT.
+   - **M3** Bluesim: the `.ba` with symbolic sizes and the link-time
+     instantiation of 3.8, first for one size parameter and no residual
+     arithmetic (the `mkPass` parent co-simulates under Bluesim with the
+     derived classes, VCD scopes and `-c` byte-identity from WHAT), then
+     nested parameterized modules and residual-arithmetic folding.
+   - **M4** provisos and the three-valued oracle, residual Integer
+     arithmetic in Verilog, `TLog`/`$clog2`/`+:` with the dialect gate
+     (target: SizedFIFO with `width` and `depth` parameters, importable
+     like `SizedFIFO.v`), `verilog_name`, library build plumbing (3.9),
+     `-elab`/formal/bluetcl behavior, user guide text
+     (`doc/user_guide/user_guide.tex`, the `synthesize` attribute section,
+     and the reference guides' statement that bsc does not create
+     parameterized Verilog).
+   - **M5** the first replacement: the reference FIFO2 core with
      `verilog_name = "FIFO2"` ships `FIFO2.ba` and `FIFO2.v`, the `FIFO2`
      row leaves `primMap` and the name-keyed helpers, and the FIFO tests in
      `testsuite/bsc.lib/fifo` run against the reference under both
@@ -852,8 +877,8 @@ not part of this task.
    `compare_verilog`, `find_regexp`, `find_n_regexp`,
    `test_c_veri_bsv_modules`, `compile_verilog_fail_error`): `mkPass`
    header and golden; a parent instantiating it at 1, 8, 32, 64, 128 with
-   five `#(.width(32'd...))` matches, co-simulated under Verilator and
-   Bluesim, with the Bluesim build checked for the five derived classes
+   five `#(.width(32'd...))` matches, co-simulated under Verilator (M1) and,
+   from M3 on, Bluesim, with the Bluesim build checked for the five derived classes
    (`mkPass__width1` ... `mkPass__width128`), a VCD scope per instance, and
    `-c` byte-identity across two links; two instances at the same width
    sharing one derived module; a core with `parameter guarded` and a `TAdd
@@ -885,14 +910,16 @@ Per-instantiation specialization at the parent's elaboration (the sibling
 design); width-generic C++ emission (`template <int width>` classes) in
 Bluesim; payload polymorphism (`Bits a sa`) in the generated module;
 schedule pinning and `savePortType` changes; replacing any primitive family
-other than the FIFO2 pilot of M4; formal (LambdaCalc/SAL) output for
+other than the FIFO2 pilot of M5; formal (LambdaCalc/SAL) output for
 parameterized modules.
 
 ## ESTIMATE
 
 M0 1000 to 2000 lines (mechanical and wide: the compiler points at every
-site), M1 1000 to 1500, M2 1500 to 2500, M3 1000 to 2000, M4 a few hundred
-plus library source: roughly 5000 to 8000 lines of Haskell before tests.
+site), M1 1000 to 1500, M2 1500 to 2500, M3 800 to 1200, M4 1000 to 2000,
+M5 a few hundred plus library source: roughly 5500 to 8500 lines of
+Haskell before tests. M0 to M2 deliver the width-parameterized Verilog on
+their own.
 Most of that is not design risk: for a width-generic module the symbolic
 widths do stay out of the way semantically, and the evaluator already lets
 them fall through to residual applications; the cost is that `Integer`
