@@ -147,8 +147,9 @@ dictionary lambda follows), and an `ILAM` with no type argument is WHNF in
 
 Evaluator. Numeric type functions are folded only by the `ITAp` smart
 constructor `mkITAp` when both arguments are `ITNum` (`src/comp/IType.hs`,
-`opNumT` in `src/comp/TypeOps.hs`); `fullTypeNormalizer` leaves `ITVar`
-unchanged (`canNorm`); `tSubst` never reduces. `TAdd`/`TLog` are
+`opNumT` in `src/comp/TypeOps.hs`); `fullTypeNormalizer` (in
+`src/comp/IExpandUtils.hs`) leaves `ITVar` unchanged (its local `canNorm`);
+`tSubst` never reduces. `TAdd`/`TLog` are
 `TIabstract` constructors, so `TAdd width 1` stays as an interned
 application; `TAdd width 1` and `TAdd 1 width` are different interned types.
 `PrimValueOf` folds only `[T (ITNum n), _]` and internal-errors otherwise.
@@ -158,8 +159,9 @@ residual `bldAp'` path; `doPrimOp` (`src/comp/IPrims.hs`) silently drops
 non-`ITNum` type args (`tints = [i | ITNum i <- ts]`) and then fails its
 arity patterns, so symbolic-width folding is prevented by accident;
 `ITransform.iTrAp` calls `doPrimOp` with unfiltered type args.
-`PrimIntegerToBit`/`UIntBits`/`IntBits` match `[T (ITNum k), E e]` only
-and otherwise become residual applications. `PrimZeroExt` rewrites to
+`PrimIntegerToBit`/`UIntBits`/`IntBits` have clauses only for `[T (ITNum
+k), E e]`; they are not in `strictPrim`, so a non-literal type argument
+falls to `conAp'`'s catch-all internal error. `PrimZeroExt` rewrites to
 `PrimConcat` with a zero literal built as `iMkLitAt ... (aitBit t) 0`, which
 already yields an `ICInt` whose type is `Bit (ITVar k)` when `t` is
 symbolic; `PrimTrunc` rewrites to `PrimSelect`. Integer primitives
@@ -197,9 +199,11 @@ ties a single `IsModule` predicate. The import-BVI path (`fixVerilogIfc` /
 polymorphic type with a `Bits ty sn_#` proviso and a `rec_typemap` entry
 `(ty, Bit n_#)`, sets `rec_kind = Kfun KNum ...` and `rec_numargs`, and
 `genTDef`/`genIfc` declare the flattened struct with those parameters;
-`genIfcFieldFN` rewrites leaf types through `rec_typemap`. `mkTo_`,
-`mkFrom_` and `mkGeneric` only have equations for `rec_numargs = []`
-(they are mapped over the synthesized records only). `mkNewModDef` types
+`genIfcFieldFN` rewrites leaf types through `rec_typemap`. `mkTo_` and
+`mkFrom_` only have equations for `rec_numargs = []` and `rec_typemap =
+[]` (internal error otherwise); `mkGeneric` (called from `mkInstances`) is
+unrestricted but builds the flattened type as `cTCon flat_id` unapplied;
+all three are mapped over the synthesized records only. `mkNewModDef` types
 the inner def as `tmod (cTCon tyId)`; `mkDef` builds the wrapper `CDef i
 cqt [clause]` with the def's original `CQType` (so it is polymorphic for
 free) around `liftModule (xWrapperModuleVerilog fmod pps (CLit (LString
@@ -216,7 +220,12 @@ numeric type variables in quantification order (`MakeSymTab.chkTopDef`
 `src/Verilog/Fork.v` `parameter iw = 1; parameter ow = 2;`).
 
 Back end. `ATBit { atb_size :: ASize }` with `type ASize = Integer`;
-`aSize :: AType -> Integer`. `aTypeConv` (`src/comp/AConv.hs`) converts
+`aSize` is a method of `class ATypeC a where aSize :: a -> Integer` in
+`src/comp/ASyntaxUtil.hs` with instances for `AType` (`ATBit s -> s`) and
+`AExpr`. `AType` derives `Ord` (and `Eq`, `Show`) and is a container key
+(`CSEMap` in AConv, maps keyed on `(AExpr, AType)` in AVeriQuirks and
+ANoInline, `Set AExpr` in AUses); `AExpr`, `ADef`, `AAction`, `AClock`,
+`AReset`, `AInout` derive `Ord` too. `aTypeConv` (`src/comp/AConv.hs`) converts
 only `Bit (ITNum n)` and otherwise falls to an `ATAbstract` case or an
 internal error. Pass order under Verilog (`src/comp/bsc.hs`): `aState`,
 `aInlineWires`, `aInlineCReg`, `aRenameIO`, `aDropDefs`, `aOpt`,
@@ -266,9 +275,11 @@ reuse and the fork's `-c` byte-identity mode key on the module name
 (`src/comp/SimFileUtils.hs`, `DEVELOP.md`). The `.ba` stores the APackage
 before `aState` (so before the Verilog-only inlining passes), after
 `Params.iParams` and `aDropUndet`. Libraries are
-built with no backend flag (`src/Libraries/common.mk`, "Only .bo files are
-generated"); the Verilog search path is `vdir` (or `.`), then
-`$BLUESPECDIR/Libraries`, then `$BLUESPECDIR/Verilog` (`FlagsDecode.hs`
+built with no backend flag (`src/Libraries/common.mk` passes `-bdir
+$(BUILDDIR)` and `-vsearch $(BUILDDIR)`; `src/Libraries/Base1/Makefile`
+says "Only .bo files are generated"); the Verilog search path is `vdir`
+(or `.`), then the `-p` entries, then `$BLUESPECDIR/Libraries`, then
+`$BLUESPECDIR/Verilog` (`FlagsDecode.hs`
 `def_vpath`), and the library install copies `$(BUILDDIR)/*` into
 `inst/lib/Libraries`. `Depend.getPkgInfo` puts every `PPverilog` def into
 `gens` and `getGenFs` expects a `.v` (Verilog) or `.ba` (Bluesim) for each.
@@ -293,7 +304,10 @@ variable names in signature order (the `Fork.bs` convention), so `mkFIFO2
 :: Module (VFIFO2 width)` yields `parameter width`. Non-numeric type
 variables or non-numeric provisos (anything but the numeric classes the
 typechecker's solver knows: `Add`, `Mul`, `Div`, `Max`, `Min`, `Log`,
-`NumEq`) raise T0041 (`ENotKNum`, revived) with a message naming the
+`NumEq`), including `KStr` variables, raise T0041 (`ENotKNum`, revived;
+the parameterized path runs its own kind check *before* `chkType`'s
+proviso and type-variable gates, which would otherwise report T0043
+first) with a message naming the
 variable or proviso. A missing signature is an error. `Bits a sa`-style
 payload polymorphism is deliberately excluded: the core takes `Bit width`
 payloads and the library wrapper does `pack`/`unpack`, which is how the
@@ -333,17 +347,30 @@ sizeToVExpr :: SizeExpr -> VExpr   -- VEConst, VEVar, VEOp with VAdd/VSub/VMul/V
                                    -- SEExp as (1 << x), SELog as VEFctCall "$clog2", SEMax/SEMin as VEIf
 ```
 
-No `Ord`, `Integral`, `Enum` or `Real` instances. Reason: every existing
+Instances: `Eq` (structural over the normalized form), `Ord` (a total
+order over the normalized structure, needed because `AType`, `AExpr`,
+`ADef`, `AAction`, `AClock`, `AReset` and `AInout` derive `Ord` and are
+used as container keys; it is *not* a numeric order), `Show`, `NFData`
+(`rnf (ATBit sz) = rnf sz` in ASyntax), `Bin`, `PPrint`, and `Num` as
+above. No `Integral`, `Enum` or `Real` instance. Change `ATypeC.aSize` to
+return `SizeExpr` (the `ATTuple`/`ATArray`/`ATString`/`ATReal` cases build
+`SELit`/`SEMul`); that, not `atb_size` alone, is what pushes the type
+errors into the `aSize`-heavy files. Reason for the shape: every existing
 `ATBit n`, `ATBit 1`, `ATBit 0` pattern keeps compiling (literal patterns
 desugar to `== fromInteger k` and a symbolic size simply fails them, which
 is the conservative behavior at the 1-bit simplifications in AOpt, at
 `fixupZeroBit`, at `vSize (ATBit 1)`), `sum (map aSize es)` and `n - 1`
 keep type-checking and now build symbolic arithmetic, and every site that
 folds a *value* from a size (`2^n`, `[0..n-1]`, `genericLength`, `div`,
-`<=`, `itos`, `VEConst n`, bit-vector sort creation) becomes a GHC type
-error, so the compiler enumerates exactly the sites to audit instead of a
-new constructor silently falling into wildcards such as `isNotZeroSized _ =
-True`. Only `atb_size` becomes symbolic in this task; `ATArray`,
+`itos`, `VEConst n`, bit-vector sort creation) becomes a GHC type error,
+so the compiler enumerates most of the sites to audit instead of a new
+constructor silently falling into wildcards such as `isNotZeroSized _ =
+True`. Because `Ord` must exist, comparisons are *not* caught by the type
+checker: `<`, `<=`, `>`, `>=`, `compare`, `max`, `min`, `maximum`, `sort`
+on sizes must be found by grep over `aSize`, `atb_size` and `ATBit`
+patterns, starting with `cheap PrimEQ` in `src/comp/AExpand.hs` (`sz <=
+24`) and the sign/zero-extend check in `src/comp/ACheck.hs` (`n <= m`), and
+guarded with `isConcreteSize`. Only `atb_size` becomes symbolic in this task; `ATArray`,
 `ATString`, `ATAbstract` sizes stay `Integer` (structural; a symbolic one
 is an error at AConv). Add `Bin SizeExpr` for `.ba` round-trips and a
 `PPrint` instance.
@@ -361,9 +388,12 @@ path or error).
 1. `src/comp/Pragma.hs`: `PPparameterized`; Classic spelling in
    `pVeriGenProps` (`src/comp/Parser/Classic/CParser.hs`), BSV attribute in
    `attributes2modpprops`/`attribute2modpprop` (`src/comp/Parser/BSV/
-   CVParser.lhs`); `Bin PProp` tag (next free; `PPdefault_reset_arg` is 35
-   at the base commit); bump the `.bo` and `.ba` headers (`GenBin.hs`,
-   `GenABin.hs`).
+   CVParser.lhs`); `Bin PProp` tag in `src/comp/BinData.hs` (use 36;
+   `PPdefault_reset_arg` is 35 at the base commit and 3, 10, 11 are
+   retired gaps, do not reuse them); bump the `.bo` and `.ba` headers
+   (`GenBin.hs`, `GenABin.hs`). Also add `PPverilogName String` (Classic
+   `verilog_name = "..."`, BSV `verilog_name`), which does not exist yet
+   in this tree, with its own tag.
 2. `Depend.getPkgInfo`/`getGenFs`: a `PPparameterized` def is an ordinary
    `gen` (a `.v` under Verilog, a `.ba` under Bluesim, both under `-elab`),
    so no change is needed there. bluetcl `defs module` lists it as a
@@ -381,14 +411,21 @@ path or error).
    width`, is flattened through `WrapField` as today, with the proviso
    carried on the record). `genTDef`/`genIfc` then declare `interface
    VFIFO2_ width`.
-4. `mkTo_`, `mkFrom_`, `mkGeneric`: add equations for non-empty
-   `rec_numargs` (the flattened type is `cTApplys (cTCon tyId) (map TVar
-   rec_numargs)`; the conversion defs are polymorphic in those variables).
+4. `mkTo_`, `mkFrom_`: add equations for non-empty `rec_numargs` and
+   `rec_typemap` (the flattened type is `cTApplys (cTCon tyId) (map TVar
+   rec_numargs)`; the conversion defs are polymorphic in those variables);
+   `mkGeneric` must apply the numeric arguments to `flat_id` instead of
+   using `cTCon flat_id` bare.
 5. `mkNewModDef`: the inner def is `mkFIFO2<suffix> :: Module (VFIFO2_
    width)` keeping the def's `forall` and numeric provisos, so after
    typecheck and `iConvVS` it is `ILAM width IKNum (ILam dAdd ... body)`.
-   Numeric-proviso dictionaries are erased in IConv for these defs the way
-   `foreignPredCount` erases them for foreign functions; the provisos
+   The typechecker inserts a dictionary lambda per proviso into the
+   clauses (`dict_vs` in `TCheck.hs`) and `iConvCs` turns them into leading
+   `ILam d <dictType>` binders under the `ILAM`s (`foreignPredCount` in
+   IConv is a different mechanism: it drops dictionary *arguments* at
+   application sites of `Cforeign` vars, so it does not apply here). The
+   numeric classes have no methods and the body never references these
+   binders, so `extractModuleArgs` strips them (3.4.1). The provisos
    themselves are kept as `[Pred]` (over `CType`) on the `WrapInfo` (new
    field `wi_size_preds`) for the evaluator (3.5).
 6. `mkDef` (the wrapper): keep the def's original `CQType`; the body is
@@ -396,16 +433,24 @@ path or error).
    as for a monomorphic module, with no backend selection of any kind: the
    same wrapper is an import of `FIFO2.v` under Verilog and of `FIFO2.ba`
    under Bluesim (3.8). The `wire_info` comes from elaboration and must
-   carry one `Param (VName "width")` per size parameter, ordered first
-   (3.4); `mkDef` supplies the matching argument expression `valueOf width`
-   (a `CVar idValueOf` applied at `TVar width`). Keep `is_user_import =
-   False` (`xCmoduleVerilog`'s flag) so the `.ba` hierarchy walk follows the
-   instance by name and finds `<name>.ba` on the path, as for any
-   synthesized submodule. The module name is the def's
-   base name; honor an optional `verilog_name = "FIFO2"` pragma
-   (`PPverilogName`) for the module name literal, `apkg_name` and the
-   `.v`/`.ba` file names, with the same change set the sibling prompt lists
-   (GenWrap `mkDef`, `AConv.apkg_name`, `modstr` in `genModule`/
+   carry one `Param (VName "width")` per size parameter at its head (3.4);
+   `mkDef` prepends the matching argument expressions, built the way the
+   parsers build `valueOf`: `cVApply idValueOf [CHasType (anyExprAt pos)
+   (CQType [] (TAp (cTCon idBit) (TVar width)))]` (`TCheck.hs` special-cases
+   exactly that shape). `xWrapperModuleVerilog` and `xCmoduleVerilog` live in
+   `src/comp/CSyntax.hs`; `xWrapperModuleVerilog` appends the default
+   clock/reset arguments *after* `args` and `xCmoduleVerilog` zips the wire
+   info's `VArgInfo` list with the argument expressions positionally
+   (internal error on a length mismatch), so the `Param` entries and their
+   expressions must both be prepended, ahead of the module's own
+   clock/reset/port/parameter arguments. Keep `is_user_import = False` (the
+   `False` that `xWrapperModuleVerilog` already hard-codes) so the `.ba`
+   hierarchy walk follows the instance by name and finds `<name>.ba` on
+   the path, as for any synthesized submodule. The module name is the
+   def's base name; honor the new `verilog_name = "FIFO2"` pragma
+   (`PPverilogName`, 3.3.1) for the module name literal, `apkg_name` and
+   the `.v`/`.ba` file names, with the same change set the sibling prompt
+   lists (GenWrap `mkDef`, `AConv.apkg_name`, `modstr` in `genModule`/
    `writeABin`, `Depend.getGenFs`, bluetcl `defs module`).
 7. `-g mkFoo` on a parameterized def is allowed (it generates the
    parameterized `.v`); `-g` on an ordinary polymorphic def keeps today's
@@ -414,9 +459,19 @@ path or error).
 ### 3.4 Elaboration with symbolic sizes
 
 1. `extractModuleArgs`: strip leading `ILAM i IKNum e` binders, recording
-   `(i, IKNum)`; `ILAM _ IKStar _` → T0041. Thread the list back so
-   `iExpandModuleDef` returns real `iks`; add `Param (VName (getIdBaseString
-   i))` entries to the external wire info before the port/parameter args.
+   `(i, IKNum)`, then strip the leading `ILam` binders whose type is a
+   numeric-class dictionary (`ITCon` of `idAdd`/`idMul`/`idDiv`/`idLog`/
+   `idMax`/`idMin`/`idNumEq` applied); an `ILAM` of kind `IKStar` or
+   `IKStr` → T0041, keeping the existing `EBadIfcType` report when
+   `getNonSynthTypes` identifies a non-bitifiable *argument*. Thread the
+   list back so `iExpandModuleDef` returns real `iks`. Do **not** add
+   entries to `imod_external_wires`: `getAPackageInputs` zips
+   `apkg_external_wires` with `apkg_inputs` and internal-errors on a length
+   mismatch, and AState/APaths consume that zip; the size parameters
+   already travel as `apkg_size_params` (AState's `size_ps`). The wrapper's
+   `VWireInfo` is built separately at the `deffun` call in `bsc.hs`
+   (`wireinfo = apkg_external_wires amod_final`) by prepending one `Param
+   (VName (getIdBaseString i))` per `apkg_size_params` entry.
    Keep each binder as a free `ITVar i` during evaluation; register the set
    of size parameters in `GStateRO` (`g_size_params :: [Id]`) together with
    the provisos (3.5).
@@ -435,9 +490,11 @@ path or error).
    Integer argument of a non-parameterized module) raise the structural-use
    error at the caller's position, never an internal error.
 4. `PrimIntegerToBit`/`UIntBits`/`IntBits` with a symbolic target width or
-   a symbolic Integer: produce `ICon i (ICModParam (Bit k))` for a plain
-   `valueOf` (the fork's `handleInt` shape) and a residual application
-   otherwise; no range check (as the fork already documents for symbolic
+   a symbolic Integer (new `conAp'` clauses for `[T (ITVar k), E e]`; today
+   that shape reaches the catch-all internal error): produce `ICon i
+   (ICModParam (Bit k))` for a plain `valueOf` (the fork's `handleInt`
+   shape) and a residual application otherwise; no range check (as the
+   fork already documents for symbolic
    values). A literal of symbolic width (`0 :: Bit width`, `fromInteger 5`)
    is an `ICInt` whose `iConType` is `Bit (ITVar width)` (the shape
    `PrimZeroExt` already builds); `ilWidth` stays `Nothing`.
@@ -476,7 +533,7 @@ path or error).
 Capture the def's numeric provisos as `[Pred]` over `CType` in GenWrap
 (`wi_size_preds`) and thread them through `genModule` → `iExpand` → `runG`
 into `GStateRO`, together with the implicit `width >= 1` for every size
-parameter (represent it as `Add 1 _ width` with a fresh variable). When an
+parameter (represent it as `Add 1 k width` with a fresh variable `k`). When an
 Integer comparison or equality has a symbolic operand, or `doIf`/`PrimCase`
 sees a condition built from such comparisons, translate the condition to a
 `Pred` (`NumEq`, or an inequality encoded as `Add`) and ask the solver.
@@ -510,9 +567,12 @@ AConv: an `IType -> SizeExpr` converter for `Bit` types over size
 parameters and type functions (`TAdd`→`SEAdd`, ..., `TLog`→`SELog`);
 `primType` for `PrimConcat`/`PrimMul`/`PrimQuot`/`PrimRem` builds symbolic
 sums; `eTrunc` compares only when concrete. `ICModParam` at `Integer`
-type lowers to `ASParam` of a new `ATAbstract idInteger []`-typed parameter
-(so AState and AVerilog declare `parameter width = 1;` unsized, not
-`parameter [31:0] width = 32'd0;`); `ICModParam (Bit k)` lowers to `ASParam
+type already lowers through `aTypeConvE`'s fallback to an `ATAbstract
+idInteger []`-typed `ASParam`, and AVerilog already prints a non-`ATBit`
+parameter without a range; what changes is AState's `param_inputs`, which
+types the size parameters `aTNat` (`ATBit 32`) and would print `parameter
+[31:0] width = 32'd0;`: type them `ATAbstract idInteger []` with default
+`1`, so the module declares `parameter width = 1;`. `ICModParam (Bit k)` lowers to `ASParam
 (ATBit k)`; residual Integer arithmetic lowers to `APrim` over `ATBit 32`
 with `ASParam` leaves, and `PrimIntegerToBit` of such an expression to a
 zero-extension or truncation to the target width.
@@ -525,7 +585,8 @@ internal error; size params need no path handling.
 AVerilog/AVerilogUtil: `vSize (ATBit n)` → `Just (sizeToVExpr (n - 1),
 VEConst 0)` for symbolic `n` (never `Nothing`); module port and instance
 output declarations likewise; `VAParameter` for size params with no range
-and default `VEConst 1`; `vco_def_widths` becomes `Maybe Integer`; the
+and default `VEConst 1`; `vco_def_widths :: M.Map AId Integer` becomes
+`M.Map AId SizeExpr` (or `Maybe Integer`); the
 `-1:0` guard (`nonZero`) must not evaluate a symbolic size. Constants: add
 `VEWConstSym VExpr Integer Integer` (width expression, base, value) and
 `VEUnknownSym VExpr String`, printed as `{W{1'b0}}` for zero, `{W{1'b1}}`
@@ -698,8 +759,9 @@ one first; make the clash a build error in `src/Verilog/common.mk`).
 ### 3.10 Library structure under this design
 
 The two-layer structure stays: `FIFOF_.bsv`'s `vMk2FIFOF`-style import is
-replaced by the parameterized core `mkFIFO2 :: (Add 1 _ width) => Module
-(VFIFO2 width)` written in Classic with the port-naming attributes
+replaced by the parameterized core `mkFIFO2 :: (Add 1 k width) => Module
+(VFIFO2 width)` (Classic has no `_` type wildcard; use a named variable)
+written in Classic with the port-naming attributes
 (`prefix = ""`, `arg_names = [D_IN]`, `enable = "ENQ"`, `result =
 "D_OUT"`, `always_ready`, `reset_prefix = "RST"`, `parameter guarded`),
 and the outer wrapper keeps its `valueOf sa == 0` branch to the zero-width
@@ -720,9 +782,11 @@ not part of this task.
 - No implementation selection by `genC`/`genVerilog` (or any other
   backend-dependent definition) in compiler-generated code or in the `.bo`.
 - Any `.bo`/`.ba` format change bumps both header tags.
-- `-Wall` is on; `SizeExpr` has no `Ord`/`Integral`/`Enum`, so sites that
-  fold sizes fail to compile until audited; do not add those instances to
-  make warnings go away.
+- `-Wall` is on; `SizeExpr` has no `Integral`/`Enum`/`Real`, so sites
+  that fold sizes fail to compile until audited; do not add those
+  instances to make errors go away. `Ord` must exist (container keys), so
+  the comparison sites are audited by grep (3.2); record the grep and its
+  result in the spec.
 - New logic in new modules where possible (`src/comp/SizeExpr.hs` for the
   type, normalizer and printer; `src/comp/SizeDecide.hs` for the oracle);
   hooks in existing modules as small as the design allows.
