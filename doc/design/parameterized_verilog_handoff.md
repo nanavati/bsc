@@ -581,51 +581,99 @@ module shows sizes as expressions (`PPrint SizeExpr`); `-show-schedule` and
 
 ### 3.8 Bluesim: link-time instantiation of a parameterized `.ba`
 
-Bluesim code generation stays width-concrete. The new step lives in
-`simExpand`, after the hierarchy walk has loaded every `ABinModInfo` and
-before `SimPackage`s are built:
+Bluesim code generation stays width-concrete. The new step,
+`instantiateTemplates`, lives in `simExpand` (`src/comp/SimExpand.hs`)
+between `getABIHierarchy` and `simpkgs <- mapM simExpandABin`, where the
+link holds `modinfos_used_by_name :: [(String, (ABinModInfo, String))]`,
+the `HierMap` (keyed by module name string only; `followABMIHierarchy`
+skips a module already in the map, so today two instances with different
+arguments share one entry), the `InstModMap` (hierarchical instance path to
+module name, built by `hierMapToInstModMap`, consumed by `findInstMod`,
+`moveDefsOntoStack`, `doTickCall` and the schedule statement generation)
+and the `ABinMap` file map (module name to `.ba` path; `SimFileUtils.isStale`
+internal-errors "unknown package" for a module absent from it). Everything
+downstream keys on `sp_name`/`getModuleName`: `name_map` in
+`simMakeCBlocks`, the C++ class `MOD_<sb_name>`, the `<name>.cxx`/`.h`/
+`_backing` files, the VCD/FST scope's module type. The step:
 
-1. For every `AVInst` in every loaded package whose module's `.ba` has a
-   non-empty `apkg_size_params`, read the parameter binding from the
-   instance: `getInstArgs` zips `vArgs` with `avi_iargs`, and the `Param
-   "width"` entry must be an `ASInt` literal (Bluesim already requires
-   constant instantiation arguments, `EBSimDynamicArg`; a non-literal here
-   is that error).
-2. Key = (module name, [(parameter, value)]); name = module name followed
-   by `__<param><value>` per parameter in declaration order
-   (`FIFO2__width32`, `SizedFIFO__width8__depth16`), a legal C++ and file
-   identifier. Instantiate once per distinct key: copy the APackage,
-   substitute `SEVar width` by `SELit 32` in every `AType` and `ASParam
-   width` by `ASInt 32` in every expression (including `avi_iargs` of
-   nested instances, `avi_meth_types`, `avi_port_types`, interface and
-   rule types; write the substitution as one generic ASyntax traversal in
-   `SimExpand` or `ASyntaxUtil`), fold the residual Integer arithmetic and
-   any `APrim` over now-literal operands with the existing expression
-   folder, re-run `aDropUndet` so no `ASAny` of now-concrete width remains,
-   drop the substituted parameters from `apkg_size_params` and the
-   parameter list, and set `apkg_name` to the mangled name. Value
+1. Walk the loaded packages top-down from the root (the Bluesim top has
+   no parameters, `EBSimTopLevelArgOrParam`, so a parent's own `ASParam`s
+   are literals by the time its children are visited). For every `AVInst`
+   whose module's `ABinModInfo` has a non-empty `apkg_size_params`, recover
+   the binding with `getInstArgs`/`getParams`/`getVArgInfoName` and evaluate
+   each value with `APrims.evalAExprToInteger` (after `simExpandParams` an
+   argument is constant but not necessarily an `ASInt`: `isConstAExpr`
+   admits `APrim` over constants and `ASParam`); a non-constant is
+   `EBSimDynamicArg`, which `checkInstArgs` already raises.
+2. Key = (module name, [(parameter, value)] in `apkg_size_params` order);
+   name = module name followed by `__<param><value>` per parameter
+   (`FIFO2__width32`, `SizedFIFO__width8__depth16`; the pattern of
+   `ForeignFunctions.mkDPIMonoName`). There is no sanitizer on `sp_name`
+   (the C++ class and file names use it verbatim), so restrict to
+   `[A-Za-z0-9_]`, and the name must not collide with a `primBlocks`
+   `sb_name`. Instantiate once per distinct key.
+3. Instantiation of the `ABinModInfo` copy: (a) a new type pass, because
+   no `AType` traversal exists (`mapAExprs` never rewrites `ae_type`,
+   `aSubst` never touches types): substitute `SEVar width` by `SELit 32`
+   in `apkg_inputs` (`AAI_Port`), `apkg_external_wire_types` and
+   `avi_port_types` (these are `IType`: `ITNum`), `avi_type`,
+   `avi_meth_types`, `avi_vmi`, every `adef_type`, `aif_inputs`,
+   `ataskact_value_type`, and the types inside expressions; set
+   `apkg_size_params = []` and drop the size parameters from the parameter
+   inputs. (b) `aSubst` with `width ↦ ASInt (ATBit 32) 32` over the
+   package (`aSubst` already substitutes `ASParam` leaves by id and
+   `SimPackage`/`APackage` have `AExprs` instances); size-parameter leaves
+   carry `ATBit 32` in the `.ba` (AState's and `SimExpand`'s canonical form
+   for `Integer` parameters), so residual Integer arithmetic folds in
+   32-bit arithmetic, which is adequate for sizes. (c) A bottom-up fold of
+   every `APrim` whose arguments are now literals, using
+   `evalAExprToInteger` (`Prim.evalPrimToInt`); `AOpt.aPrim` does not fold
+   `PrimAdd`/`PrimSub`/`PrimMul`, so this fold is new, and it is mandatory
+   rather than an optimization because the primitive naming functions
+   (`sizedType`, `regType`, `memType` in `SimPrimitiveModules.hs`)
+   pattern-match an `ASInt` size argument and internal-error otherwise.
+   Write the substitution and fold as plain bottom-up recursion, not as an
+   `exprMap` callback (`exprMap` applies the callback to the unprocessed
+   node and skips the children when it returns `Just`). (d) `aDropUndet
+   errh abmi_flags` (the `.ba` may carry `ASAny t Nothing` of now-concrete
+   width; `SimPackageOpt.convertASAny` would also handle it, but the
+   recommended-value form needs concrete sizes). (e) `simCheckPackage errh
+   True` on the copy; (f) `ACheck.aMCheck` as an assertion. Value
    parameters (`guarded`, `init`) stay parameters and keep flowing as
-   constructor arguments as today.
-3. Rewrite the parent's `AVInst` to the mangled module name and remove the
-   size-parameter arguments from its `avi_iargs`/`vArgs`; register the
-   instantiated package in the module map under the mangled name so
-   `SimPackage` construction, `simMakeCBlocks` and the C++ class naming
-   (`MOD_FIFO2__width32`) see an ordinary monomorphic module.
-4. Reuse the stored schedule and path information unchanged: the module
-   was scheduled with every payload-dependent condition treated as an
-   unknown (3.7, scheduling), so the stored `VSchedInfo`/`VPathInfo` hold
-   at every width; the instantiation must not re-schedule.
-5. Nested parameterized modules (`SizedFIFO` instantiating `RegFile` with
-   `.addr_width($clog2(depth))`) are instantiated recursively after
-   substitution turns their arguments into literals; detect and reject
-   cycles.
-6. Per-module object reuse and the `-c` byte-identity harness
-   (`check_block_codegen_modules`) key on module names: an instantiated
-   module is a derived module whose C++ must be byte-identical across links
-   for the same key (deterministic naming and traversal order), and the
-   `-c` mode must generate it from the parameterized `.ba` plus the key.
-   VCD scopes use the instance name and the mangled module name; Bluetcl
-   `sim ls`/`cd` are unaffected.
+   constructor arguments (`PARAM_` members) as today.
+4. Rewrite the parent's `AVInst`: `vName (avi_vmi)` to the mangled name
+   (the hierarchy and `mkState` resolve instance to module through it),
+   remove the size-parameter entries from `vArgs` and `avi_iargs`. Append
+   the copy to `modinfos_used_by_name` under the mangled name, add it to
+   the `HierMap` with its own children and re-point the parent's `(inst,
+   mod)` pair, recompute the `InstModMap`, and register the copy in the
+   file map pointing at the template's `.ba` (its timestamp source) so
+   object reuse works; alternatively skip reuse analysis for derived
+   modules. Nested parameterized modules (`SizedFIFO` instantiating a
+   memory with `.addr_width($clog2(depth))`) are instantiated by the same
+   walk after substitution turns their arguments into literals; detect and
+   reject cycles.
+5. Reuse the stored schedule and path information unchanged: Bluesim
+   reads only `asi_sched_graph`, `asi_schedule`, `asi_exclusive_rules_db`
+   and `asi_rule_relation_db`, relations over rule and method ids with no
+   widths in them, and the module was scheduled with every
+   payload-dependent condition treated as unknown (3.7), so the stored
+   schedule is valid, if possibly conservative, at every width; a concrete
+   width could only remove conflicts, never add one. Do not re-schedule.
+   The use maps and `abmi_method_dump` may stay symbolic in the copy;
+   Bluesim does not read them.
+6. The `-c` byte-identity harness (`check_block_codegen_modules`) and
+   per-module object reuse key on module names. A derived module's C++
+   must be byte-identical across links for the same key: deterministic
+   name, deterministic traversal, and the existing name-sorting discipline
+   for ids (`DEVELOP.md`, `-c` section). `-c` today emits only the root's
+   files; make `-c <parent>` also emit its instantiated children, or let
+   `-c` take a parameter binding for a template. Decide and document which.
+7. Visibility: the FST writer records the mangled name as the scope's
+   module type (`fstWriterSetScope`), VCD ignores it; Bluetcl `sim ls`
+   shows kinds only; `bluetcl module submodules` re-walks the `.ba`s and
+   reports the template name `FIFO2`. Accept the mismatch and document it,
+   or strip the `__...` suffix in the FST module type.
 
 This is the mechanism that replaces a Bluesim primitive: once a reference
 core ships `FIFO2.ba` and `FIFO2.v` with the same import name and
